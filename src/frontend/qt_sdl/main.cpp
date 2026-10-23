@@ -55,6 +55,7 @@
 #include "Config.h"
 
 #include "EmuInstance.h"
+#include "workbench/WBHost.h"
 #include "ArchiveUtil.h"
 #include "CameraManager.h"
 #include "MPInterface.h"
@@ -395,6 +396,26 @@ int main(int argc, char** argv)
     NetInit();
 
     createEmuInstance();
+
+    {
+        // decomp workbench: settings and command line
+        WBHost* wb = emuInstances[0]->getWorkbench();
+        if (options->knowledgeStore) wb->Settings().KnowledgeStoreOverride = *options->knowledgeStore;
+        bool api = options->api || wb->Settings().ApiEnabled;
+        if (api)
+            wb->StartApi(options->apiPort ? options->apiPort : wb->Settings().ApiPort,
+                         options->apiMemoryWrite || wb->Settings().ApiMemoryWrite);
+        // Recording, write history and data origin are on from boot. --record keeps its old meaning
+        // (recording only). --no-record turns all three off; the other --no-* flags turn one off.
+        if (!options->noRecord)
+        {
+            if (options->record)
+                wb->RecordOnBoot(options->writeHistory && !options->noWriteHistory, options->dataOrigin && !options->noDataOrigin);
+            else
+                wb->RecordOnBoot(!options->noWriteHistory, !options->noDataOrigin);
+        }
+        if (options->workbench) wb->ShowWindow();
+    }
 
     {
         MainWindow* win = emuInstances[0]->getMainWindow();

@@ -35,6 +35,7 @@
 #include "ArchiveUtil.h"
 #endif
 #include "EmuInstance.h"
+#include "workbench/WBHost.h"
 #include "Config.h"
 #include "Platform.h"
 #include "Net.h"
@@ -132,6 +133,7 @@ EmuInstance::EmuInstance(int inst) : deleting(false),
     net.RegisterInstance(instanceID);
 
     emuThread = new EmuThread(this);
+    wbHost = new WBHost(this);
 
     numWindows = 0;
     mainWindow = nullptr;
@@ -156,10 +158,14 @@ EmuInstance::EmuInstance(int inst) : deleting(false),
 EmuInstance::~EmuInstance()
 {
     deleting = true;
+    // save the running recording session while the emulation thread can still serve it
+    wbHost->Shutdown();
     deleteAllWindows();
 
     emuThread->emuExit();
     emuThread->wait();
+    delete wbHost;
+    wbHost = nullptr;
     delete emuThread;
     emuThread = nullptr;
 
@@ -185,6 +191,18 @@ std::string EmuInstance::instanceFileSuffix()
     return suffix;
 }
 
+MainWindow* EmuInstance::createEmbeddedWindow(QWidget* host)
+{
+    int id = -1;
+    for (int i = 1; i < kMaxWindows; i++)
+        if (!windowList[i]) { id = i; break; }
+    if (id < 0) return nullptr;
+    EmbedHost = host;
+    createWindow(id);
+    EmbedHost = nullptr;
+    return windowList[id];
+}
+
 void EmuInstance::createWindow(int id)
 {
     if (numWindows >= kMaxWindows)
@@ -208,7 +226,8 @@ void EmuInstance::createWindow(int id)
     if (windowList[id])
         return;
 
-    MainWindow* win = new MainWindow(id, this, mainWindow ? mainWindow : topWindow);
+    MainWindow* win = EmbedHost ? new MainWindow(id, this, EmbedHost, true)
+                                : new MainWindow(id, this, mainWindow ? mainWindow : topWindow);
     if (!topWindow) topWindow = win;
     if (!mainWindow) mainWindow = win;
     windowList[id] = win;
@@ -250,10 +269,9 @@ void EmuInstance::deleteWindow(int id, bool close)
 
     if (deleting) return;
 
-    if (numWindows == 0)
+    // the primary window is the application: an embedded game screen or the workbench must not keep it alive
+    if (id == 0 || numWindows == 0)
     {
-        // if we closed the last window, delete the instance
-        // if the main window is closed, Qt will take care of closing any secondary windows
         deleteEmuInstance(instanceID);
     }
     else
@@ -765,6 +783,7 @@ bool EmuInstance::loadState(const std::string& filename)
 
     // The backup was made and the state was loaded, so we can store the backup now.
     backupState = std::move(backup); // This will clean up any existing backup
+    wbHost->OnStateLoaded();
     assert(backup == nullptr);
 
     savestateLoaded = true;
@@ -1341,6 +1360,7 @@ bool EmuInstance::updateConsole() noexcept
         if (nds)
         {
             saveRTCData();
+            wbHost->AttachNDS(nullptr);
             delete nds;
         }
 
@@ -1348,6 +1368,7 @@ bool EmuInstance::updateConsole() noexcept
             nds = new DSi(std::move(dsiargs.value()), this);
         else
             nds = new NDS(std::move(ndsargs), this);
+        wbHost->AttachNDS(nds);
 
         nds->Reset();
         loadRTCData();
@@ -1952,6 +1973,7 @@ bool EmuInstance::loadROM(QStringList filepath, bool reset, QString& errorstr)
 
         setBatteryLevels();
         setDateTime();
+        wbHost->OnRomLoaded(filepath.join('|'), filelen);
     }
     else
     {
@@ -1959,6 +1981,7 @@ bool EmuInstance::loadROM(QStringList filepath, bool reset, QString& errorstr)
         {
             nds->SetNDSCart(std::move(cart));
             loadCheats();
+            wbHost->OnRomLoaded(filepath.join('|'), filelen);
         }
         else
         {

@@ -27,7 +27,9 @@
 #include <string>
 #include <algorithm>
 
+#include <QPointer>
 #include <QProcess>
+#include <QStatusBar>
 #include <QApplication>
 #include <QMessageBox>
 #include <QMenuBar>
@@ -73,6 +75,8 @@
 #include "ArchiveUtil.h"
 #include "CameraManager.h"
 #include "Window.h"
+#include "workbench/WBHost.h"
+#include "workbench/WBStatusWidget.h"
 #include "AboutDialog.h"
 
 using namespace melonDS;
@@ -207,8 +211,8 @@ static bool FileIsSupportedFiletype(const QString& filename, bool insideArchive 
 
 
 
-MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
-    QMainWindow(parent),
+MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded) :
+    QMainWindow(parent, embedded ? Qt::WindowFlags(Qt::Widget) : Qt::WindowFlags()),
     windowID(id),
     emuInstance(inst),
     globalCfg(inst->globalCfg),
@@ -218,6 +222,9 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     enabledSaved(false),
     focused(true)
 {
+    this->embedded = embedded;
+    // QMainWindow always makes itself a window: an embedded one becomes a plain child widget again
+    if (embedded) setWindowFlags(Qt::Widget);
 
     showOSD = windowCfg.GetBool("ShowOSD");
 
@@ -404,6 +411,15 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
 
                 actRAMInfo = menu->addAction("RAM search");
                 connect(actRAMInfo, &QAction::triggered, this, &MainWindow::onRAMInfo);
+
+                menu->addSeparator();
+                actWorkbench = menu->addAction("Decomp workbench...");
+                actWorkbench->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_W));
+                connect(actWorkbench, &QAction::triggered, this, [this]() { emuInstance->getWorkbench()->ShowWindow(); });
+                actRecording = menu->addAction("Recording");
+                actRecording->setCheckable(true);
+                actRecording->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R));
+                connect(actRecording, &QAction::triggered, this, [this](bool on) { emuInstance->getWorkbench()->SetRecording(on); });
 
                 actTitleManager = menu->addAction("Manage DSi titles");
                 connect(actTitleManager, &QAction::triggered, this, &MainWindow::onOpenTitleManager);
@@ -647,7 +663,7 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     move(frameGeo.topLeft());
 #endif
 
-    std::string geom = windowCfg.GetString("Geometry");
+    std::string geom = embedded ? std::string() : windowCfg.GetString("Geometry");
     if (!geom.empty())
     {
         QByteArray raw = QByteArray::fromStdString(geom);
@@ -661,6 +677,30 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
 
     panel = nullptr;
     createScreenPanel();
+
+    // recording indicator (status bar shown while recording)
+    if (WBHost* wb = emuInstance->getWorkbench())
+    {
+        wbStatus = new WBStatusWidget(wb, this);
+        statusBar()->addWidget(wbStatus, 1);
+        statusBar()->setVisible(false);
+        // statusChanged comes from the emulation thread, queued: one can still be waiting when the
+        // instance has deleted its host (quitting with recording on)
+        QPointer<WBHost> host = wb;
+        connect(wb, &WBHost::statusChanged, this, [this, host]()
+        {
+            if (!host) return;
+            WBStatus s = host->Status();
+            bool show = s.Recording;
+            if (statusBar()->isVisible() != show) statusBar()->setVisible(show);
+            if (hasMenu && actRecording)
+            {
+                actRecording->setChecked(s.Recording);
+                actRecording->setEnabled(s.Available && s.EmuState != WBStatus::NoGame);
+            }
+            wbStatus->refresh();
+        });
+    }
 
     if (hasMenu)
     {
@@ -774,6 +814,8 @@ void MainWindow::osdAddMessage(unsigned int color, const char* msg)
 void MainWindow::saveEnabled(bool enabled)
 {
     if (enabledSaved) return;
+    // an embedded window lives in the workbench, which recreates it: never reopen it on its own
+    if (embedded) enabled = false;
     windowCfg.SetBool("Enabled", enabled);
     enabledSaved = true;
 }
@@ -795,9 +837,12 @@ void MainWindow::closeEvent(QCloseEvent* event)
 
     if (!emuInstance) return;
 
-    QByteArray geom = saveGeometry();
-    QByteArray enc = geom.toBase64(QByteArray::Base64Encoding);
-    windowCfg.SetString("Geometry", enc.toStdString());
+    if (!embedded)
+    {
+        QByteArray geom = saveGeometry();
+        QByteArray enc = geom.toBase64(QByteArray::Base64Encoding);
+        windowCfg.SetString("Geometry", enc.toStdString());
+    }
     Config::Save();
 
     emuInstance->deleteWindow(windowID, false);
@@ -1037,6 +1082,10 @@ void MainWindow::onFocusOut()
 
 void MainWindow::onAppStateChanged(Qt::ApplicationState state)
 {
+    // closed: the instance and its emulation thread may be gone, while another window (the workbench)
+    // still changes the application state
+    if (!emuInstance) return;
+
     if (state == Qt::ApplicationInactive)
     {
         emuInstance->keyReleaseAll();
@@ -1526,12 +1575,12 @@ void MainWindow::onSaveState()
     else
     {
         // TODO: specific 'last directory' for savestate files?
-        emuThread->emuPause();
+        beginSettingsDialog();
         filename = QFileDialog::getSaveFileName(this,
                                                          "Save state",
                                                          globalCfg.GetQString("LastROMFolder"),
                                                          "melonDS savestates (*.mln);;Any file (*.*)");
-        emuThread->emuUnpause();
+        endSettingsDialog();
         if (filename.isEmpty())
             return;
     }
@@ -1561,12 +1610,12 @@ void MainWindow::onLoadState()
     else
     {
         // TODO: specific 'last directory' for savestate files?
-        emuThread->emuPause();
+        beginSettingsDialog();
         filename = QFileDialog::getOpenFileName(this,
                                                          "Load state",
                                                          globalCfg.GetQString("LastROMFolder"),
                                                          "melonDS savestates (*.ml*);;Any file (*.*)");
-        emuThread->emuUnpause();
+        endSettingsDialog();
         if (filename.isEmpty())
             return;
     }
@@ -1708,7 +1757,7 @@ void MainWindow::onEnableCheats(bool checked)
 
 void MainWindow::onSetupCheats()
 {
-    emuThread->emuPause();
+    beginSettingsDialog();
 
     CheatsDialog* dlg = CheatsDialog::openDlg(this);
     connect(dlg, &CheatsDialog::finished, this, &MainWindow::onCheatsDialogFinished);
@@ -1716,7 +1765,7 @@ void MainWindow::onSetupCheats()
 
 void MainWindow::onCheatsDialogFinished(int res)
 {
-    emuThread->emuUnpause();
+    endSettingsDialog();
 }
 
 void MainWindow::onROMInfo()
@@ -1804,9 +1853,27 @@ bool MainWindow::lanWarning(bool host)
     return true;
 }
 
+void MainWindow::beginSettingsDialog()
+{
+    if (emuThread->emuIsRunning())
+    {
+        emuThread->emuPause();
+        settingsPauseDepth++;
+    }
+}
+
+void MainWindow::endSettingsDialog()
+{
+    if (settingsPauseDepth > 0)
+    {
+        settingsPauseDepth--;
+        emuThread->emuUnpause();
+    }
+}
+
 void MainWindow::onOpenEmuSettings()
 {
-    emuThread->emuPause();
+    beginSettingsDialog();
 
     EmuSettingsDialog* dlg = EmuSettingsDialog::openDlg(this);
     connect(dlg, &EmuSettingsDialog::finished, this, &MainWindow::onEmuSettingsDialogFinished);
@@ -1837,12 +1904,12 @@ void MainWindow::onEmuSettingsDialogFinished(int res)
     if (!emuThread->emuIsActive())
         actTitleManager->setEnabled(!globalCfg.GetString("DSi.NANDPath").empty());
 
-    emuThread->emuUnpause();
+    endSettingsDialog();
 }
 
 void MainWindow::onOpenInputConfig()
 {
-    emuThread->emuPause();
+    beginSettingsDialog();
 
     InputConfigDialog* dlg = InputConfigDialog::openDlg(this);
     connect(dlg, &InputConfigDialog::finished, this, &MainWindow::onInputConfigFinished);
@@ -1850,7 +1917,7 @@ void MainWindow::onOpenInputConfig()
 
 void MainWindow::onInputConfigFinished(int res)
 {
-    emuThread->emuUnpause();
+    endSettingsDialog();
 }
 
 void MainWindow::onOpenVideoSettings()
@@ -1861,7 +1928,7 @@ void MainWindow::onOpenVideoSettings()
 
 void MainWindow::onOpenCameraSettings()
 {
-    emuThread->emuPause();
+    beginSettingsDialog();
 
     camStarted[0] = camManager[0]->isStarted();
     camStarted[1] = camManager[1]->isStarted();
@@ -1877,7 +1944,7 @@ void MainWindow::onCameraSettingsFinished(int res)
     if (camStarted[0]) camManager[0]->start();
     if (camStarted[1]) camManager[1]->start();
 
-    emuThread->emuUnpause();
+    endSettingsDialog();
 }
 
 void MainWindow::onOpenAudioSettings()
@@ -1892,7 +1959,7 @@ void MainWindow::onOpenAudioSettings()
 
 void MainWindow::onOpenFirmwareSettings()
 {
-    emuThread->emuPause();
+    beginSettingsDialog();
 
     FirmwareSettingsDialog* dlg = FirmwareSettingsDialog::openDlg(this);
     connect(dlg, &FirmwareSettingsDialog::finished, this, &MainWindow::onFirmwareSettingsFinished);
@@ -1903,12 +1970,12 @@ void MainWindow::onFirmwareSettingsFinished(int res)
     if (FirmwareSettingsDialog::needsReset)
         onReset();
 
-    emuThread->emuUnpause();
+    endSettingsDialog();
 }
 
 void MainWindow::onOpenPathSettings()
 {
-    emuThread->emuPause();
+    beginSettingsDialog();
 
     PathSettingsDialog* dlg = PathSettingsDialog::openDlg(this);
     connect(dlg, &PathSettingsDialog::finished, this, &MainWindow::onPathSettingsFinished);
@@ -1919,7 +1986,7 @@ void MainWindow::onPathSettingsFinished(int res)
     if (PathSettingsDialog::needsReset)
         onReset();
 
-    emuThread->emuUnpause();
+    endSettingsDialog();
 }
 
 void MainWindow::onUpdateAudioVolume(int vol, int dsisync)
@@ -1950,7 +2017,7 @@ void MainWindow::onAudioSettingsFinished(int res)
 
 void MainWindow::onOpenMPSettings()
 {
-    emuThread->emuPause();
+    beginSettingsDialog();
 
     MPSettingsDialog* dlg = MPSettingsDialog::openDlg(this);
     connect(dlg, &MPSettingsDialog::finished, this, &MainWindow::onMPSettingsFinished);
@@ -1962,12 +2029,12 @@ void MainWindow::onMPSettingsFinished(int res)
     emuInstance->updateAudioMuteByWindowFocus();
     MPInterface::Get().SetRecvTimeout(globalCfg.GetInt("MP.RecvTimeout"));
 
-    emuThread->emuUnpause();
+    endSettingsDialog();
 }
 
 void MainWindow::onOpenWifiSettings()
 {
-    emuThread->emuPause();
+    beginSettingsDialog();
 
     WifiSettingsDialog* dlg = WifiSettingsDialog::openDlg(this);
     connect(dlg, &WifiSettingsDialog::finished, this, &MainWindow::onWifiSettingsFinished);
@@ -1978,12 +2045,12 @@ void MainWindow::onWifiSettingsFinished(int res)
     if (WifiSettingsDialog::needsReset)
         onReset();
 
-    emuThread->emuUnpause();
+    endSettingsDialog();
 }
 
 void MainWindow::onOpenInterfaceSettings()
 {
-    emuThread->emuPause();
+    beginSettingsDialog();
     InterfaceSettingsDialog* dlg = InterfaceSettingsDialog::openDlg(this);
     connect(dlg, &InterfaceSettingsDialog::finished, this, &MainWindow::onInterfaceSettingsFinished);
     connect(dlg, &InterfaceSettingsDialog::updateInterfaceSettings, this, &MainWindow::onUpdateInterfaceSettings);
@@ -2001,7 +2068,7 @@ void MainWindow::onUpdateInterfaceSettings()
 
 void MainWindow::onInterfaceSettingsFinished(int res)
 {
-    emuThread->emuUnpause();
+    endSettingsDialog();
 }
 
 void MainWindow::onChangeScreenSize()
@@ -2150,7 +2217,18 @@ void MainWindow::onTitleUpdate(QString title)
         title = prefix + title;
     }
 
+    if (WBHost* wb = emuInstance->getWorkbench())
+    {
+        QString p = wb->TitlePrefix();
+        if (!p.isEmpty() && !title.startsWith(p)) title = p + title;
+    }
+
     setWindowTitle(title);
+}
+
+void MainWindow::onWorkbenchBooted()
+{
+    updateCartInserted(false);
 }
 
 void MainWindow::toggleFullscreen()
@@ -2275,7 +2353,7 @@ void MainWindow::onUpdateVideoSettings(bool glchange)
     bool hadOGL = hasOGL;
     if (glchange)
     {
-        emuThread->emuPause();
+        beginSettingsDialog();
         if (hadOGL)
         {
             emuThread->deinitContext(windowID);
@@ -2318,6 +2396,6 @@ void MainWindow::onUpdateVideoSettings(bool glchange)
 
     if (glchange)
     {
-        emuThread->emuUnpause();
+        endSettingsDialog();
     }
 }

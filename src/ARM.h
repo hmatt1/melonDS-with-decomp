@@ -47,6 +47,7 @@ enum class CPUExecuteMode : u32
 {
     Interpreter,
     InterpreterGDB,
+    InterpreterWB,   // decomp workbench: recording, breakpoints, stepping
 #ifdef JIT_ENABLED
     JIT
 #endif

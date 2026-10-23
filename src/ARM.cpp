@@ -28,6 +28,7 @@
 #include "Platform.h"
 #include "GPU.h"
 #include "ARMJIT_Memory.h"
+#include "workbench/WBHooks.h"
 
 namespace melonDS
 {
@@ -661,6 +662,8 @@ void ARMv5::Execute()
             {
                 if constexpr (mode == CPUExecuteMode::InterpreterGDB)
                     GdbCheckC();
+                if constexpr (mode == CPUExecuteMode::InterpreterWB)
+                    NDS.WB->PreExec(this, R[15] - 2, NextInstr[0], true);
 
                 // prefetch
                 R[15] += 2;
@@ -677,6 +680,8 @@ void ARMv5::Execute()
             {
                 if constexpr (mode == CPUExecuteMode::InterpreterGDB)
                     GdbCheckC();
+                if constexpr (mode == CPUExecuteMode::InterpreterWB)
+                    NDS.WB->PreExec(this, R[15] - 4, NextInstr[0], false);
 
                 // prefetch
                 R[15] += 4;
@@ -697,6 +702,9 @@ void ARMv5::Execute()
                 else
                     AddCycles_C();
             }
+
+            if constexpr (mode == CPUExecuteMode::InterpreterWB)
+                NDS.WB->PostExec(this);
 
             // TODO optimize this shit!!!
             if (Halted)
@@ -725,6 +733,7 @@ void ARMv5::Execute()
 }
 template void ARMv5::Execute<CPUExecuteMode::Interpreter>();
 template void ARMv5::Execute<CPUExecuteMode::InterpreterGDB>();
+template void ARMv5::Execute<CPUExecuteMode::InterpreterWB>();
 #ifdef JIT_ENABLED
 template void ARMv5::Execute<CPUExecuteMode::JIT>();
 #endif
@@ -800,6 +809,8 @@ void ARMv4::Execute()
             {
                 if constexpr (mode == CPUExecuteMode::InterpreterGDB)
                     GdbCheckC();
+                if constexpr (mode == CPUExecuteMode::InterpreterWB)
+                    NDS.WB->PreExec(this, R[15] - 2, NextInstr[0], true);
 
                 // prefetch
                 R[15] += 2;
@@ -815,6 +826,8 @@ void ARMv4::Execute()
             {
                 if constexpr (mode == CPUExecuteMode::InterpreterGDB)
                     GdbCheckC();
+                if constexpr (mode == CPUExecuteMode::InterpreterWB)
+                    NDS.WB->PreExec(this, R[15] - 4, NextInstr[0], false);
 
                 // prefetch
                 R[15] += 4;
@@ -831,6 +844,9 @@ void ARMv4::Execute()
                 else
                     AddCycles_C();
             }
+
+            if constexpr (mode == CPUExecuteMode::InterpreterWB)
+                NDS.WB->PostExec(this);
 
             // TODO optimize this shit!!!
             if (Halted)
@@ -867,6 +883,7 @@ void ARMv4::Execute()
 
 template void ARMv4::Execute<CPUExecuteMode::Interpreter>();
 template void ARMv4::Execute<CPUExecuteMode::InterpreterGDB>();
+template void ARMv4::Execute<CPUExecuteMode::InterpreterWB>();
 #ifdef JIT_ENABLED
 template void ARMv4::Execute<CPUExecuteMode::JIT>();
 #endif
@@ -1121,6 +1138,7 @@ u32 ARMv5::ReadMem(u32 addr, int size)
 
 void ARMv4::DataRead8(u32 addr, u32* val)
 {
+    WB_READ_HOOK(1, addr & ~0u, 1, val);
     *val = BusRead8(addr);
     DataRegion = addr;
     DataCycles = NDS.ARM7MemTimings[addr >> 15][0];
@@ -1128,6 +1146,7 @@ void ARMv4::DataRead8(u32 addr, u32* val)
 
 void ARMv4::DataRead16(u32 addr, u32* val)
 {
+    WB_READ_HOOK(1, addr & ~1u, 2, val);
     addr &= ~1;
 
     *val = BusRead16(addr);
@@ -1137,6 +1156,7 @@ void ARMv4::DataRead16(u32 addr, u32* val)
 
 void ARMv4::DataRead32(u32 addr, u32* val)
 {
+    WB_READ_HOOK(1, addr & ~3u, 4, val);
     addr &= ~3;
 
     *val = BusRead32(addr);
@@ -1146,6 +1166,7 @@ void ARMv4::DataRead32(u32 addr, u32* val)
 
 void ARMv4::DataRead32S(u32 addr, u32* val)
 {
+    WB_READ_HOOK(1, addr & ~3u, 4, val);
     addr &= ~3;
 
     *val = BusRead32(addr);
@@ -1154,6 +1175,7 @@ void ARMv4::DataRead32S(u32 addr, u32* val)
 
 void ARMv4::DataWrite8(u32 addr, u8 val)
 {
+    WB_WRITE_HOOK(1, addr, 1, val);
     BusWrite8(addr, val);
     DataRegion = addr;
     DataCycles = NDS.ARM7MemTimings[addr >> 15][0];
@@ -1161,6 +1183,7 @@ void ARMv4::DataWrite8(u32 addr, u8 val)
 
 void ARMv4::DataWrite16(u32 addr, u16 val)
 {
+    WB_WRITE_HOOK(1, addr, 2, val);
     addr &= ~1;
 
     BusWrite16(addr, val);
@@ -1170,6 +1193,7 @@ void ARMv4::DataWrite16(u32 addr, u16 val)
 
 void ARMv4::DataWrite32(u32 addr, u32 val)
 {
+    WB_WRITE_HOOK(1, addr, 4, val);
     addr &= ~3;
 
     BusWrite32(addr, val);
@@ -1179,6 +1203,7 @@ void ARMv4::DataWrite32(u32 addr, u32 val)
 
 void ARMv4::DataWrite32S(u32 addr, u32 val)
 {
+    WB_WRITE_HOOK(1, addr, 4, val);
     addr &= ~3;
 
     BusWrite32(addr, val);

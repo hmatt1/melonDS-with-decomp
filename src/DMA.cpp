@@ -17,6 +17,7 @@
 */
 
 #include <stdio.h>
+#include "workbench/Workbench.h"
 #include "NDS.h"
 #include "DSi.h"
 #include "DMA.h"
@@ -569,6 +570,13 @@ void DMA::Run9()
             NDS.ARM9Timestamp += (UnitTimings9_16(burststart) << NDS.ARM9ClockShift);
             burststart = false;
 
+            if (NDS.WBMemHooks) [[unlikely]]
+            {
+                u16 v = NDS.ARM9Read16(CurSrcAddr);
+                NDS.WB->DMAUnit(0, Num, CurSrcAddr, CurDstAddr, 2, v);
+                NDS.ARM9Write16(CurDstAddr, v);
+            }
+            else
             NDS.ARM9Write16(CurDstAddr, NDS.ARM9Read16(CurSrcAddr));
 
             CurSrcAddr += SrcAddrInc<<1;
@@ -586,6 +594,13 @@ void DMA::Run9()
             NDS.ARM9Timestamp += (UnitTimings9_32(burststart) << NDS.ARM9ClockShift);
             burststart = false;
 
+            if (NDS.WBMemHooks) [[unlikely]]
+            {
+                u32 v = NDS.ARM9Read32(CurSrcAddr);
+                NDS.WB->DMAUnit(0, Num, CurSrcAddr, CurDstAddr, 4, v);
+                NDS.ARM9Write32(CurDstAddr, v);
+            }
+            else
             NDS.ARM9Write32(CurDstAddr, NDS.ARM9Read32(CurSrcAddr));
 
             CurSrcAddr += SrcAddrInc<<2;
@@ -645,6 +660,13 @@ void DMA::Run7()
             NDS.ARM7Timestamp += UnitTimings7_16(burststart);
             burststart = false;
 
+            if (NDS.WBMemHooks) [[unlikely]]
+            {
+                u16 v = NDS.ARM7Read16(CurSrcAddr);
+                NDS.WB->DMAUnit(1, Num, CurSrcAddr, CurDstAddr, 2, v);
+                NDS.ARM7Write16(CurDstAddr, v);
+            }
+            else
             NDS.ARM7Write16(CurDstAddr, NDS.ARM7Read16(CurSrcAddr));
 
             CurSrcAddr += SrcAddrInc<<1;
@@ -662,6 +684,13 @@ void DMA::Run7()
             NDS.ARM7Timestamp += UnitTimings7_32(burststart);
             burststart = false;
 
+            if (NDS.WBMemHooks) [[unlikely]]
+            {
+                u32 v = NDS.ARM7Read32(CurSrcAddr);
+                NDS.WB->DMAUnit(1, Num, CurSrcAddr, CurDstAddr, 4, v);
+                NDS.ARM7Write32(CurDstAddr, v);
+            }
+            else
             NDS.ARM7Write32(CurDstAddr, NDS.ARM7Read32(CurSrcAddr));
 
             CurSrcAddr += SrcAddrInc<<2;

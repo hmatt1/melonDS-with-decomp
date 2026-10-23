@@ -54,6 +54,7 @@
 #include "Savestate.h"
 
 #include "EmuInstance.h"
+#include "workbench/WBHost.h"
 
 using namespace melonDS;
 
@@ -135,6 +136,7 @@ void EmuThread::run()
     videoSettingsDirty = true;
 
     u32 nframes = 0;
+    double lastFps = 0;
     double perfCountsSec = 1.0 / SDL_GetPerformanceFrequency();
     double lastTime = SDL_GetPerformanceCounter() * perfCountsSec;
     double frameLimitError = 0.0;
@@ -251,13 +253,20 @@ void EmuThread::run()
                 emuInstance->renderLock.unlock();
             }
 
-            // process input and hotkeys
-            emuInstance->nds->SetKeyMask(emuInstance->inputMask);
+            // process input and hotkeys (an agent's input applies only while the person is not giving any)
+            {
+                u32 keymask = emuInstance->inputMask;
+                bool touching = emuInstance->isTouching;
+                u16 tx = emuInstance->touchX, ty = emuInstance->touchY;
+                bool lid = false;
+                emuInstance->wbHost->ApplyInput(keymask, touching, tx, ty, lid);
+                emuInstance->nds->SetKeyMask(keymask);
 
-            if (emuInstance->isTouching)
-                emuInstance->nds->TouchScreen(emuInstance->touchX, emuInstance->touchY);
-            else
-                emuInstance->nds->ReleaseScreen();
+                if (touching)
+                    emuInstance->nds->TouchScreen(tx, ty);
+                else
+                    emuInstance->nds->ReleaseScreen();
+            }
 
             if (emuInstance->hotkeyPressed(HK_Lid))
             {
@@ -325,6 +334,16 @@ void EmuThread::run()
 #ifdef MELONCAP
             MelonCap::Update();
 #endif // MELONCAP
+
+            if (emuInstance->wbHost->AfterFrame() && emuStatus == emuStatus_Running)
+            {
+                // an agent asked for N frames (or input on a paused game): pause again
+                emuStatus = emuStatus_Paused;
+                emuPauseStack = emuPauseStackPauseThreshold;
+                prevEmuStatus = emuStatus_Running;
+                emuInstance->audioDisable();
+                emit windowEmuPause(true);
+            }
 
             winUpdateCount++;
             if (winUpdateCount >= winUpdateFreq && !useOpenGL)
@@ -423,11 +442,37 @@ void EmuThread::run()
                 double actualfps = (59.8261 * 263.0) / nlines;
                 snprintf(melontitle, sizeof(melontitle), "[%d/%.0f] melonDS " MELONDS_VERSION, fps, actualfps);
                 changeWindowTitle(melontitle);
+                lastFps = fps;
             }
+            emuInstance->wbHost->UpdateStatus(lastFps);
         }
         else
         {
-            // paused
+            // paused: accept pause/unpause and workbench jobs before drawing, so a settings
+            // dialog can open and apply while the game stays paused
+            handleMessages();
+            if (useOpenGL)
+                emuInstance->makeCurrentGL();
+            // no game yet: leave the flag set so the running path applies it after boot
+            if (videoSettingsDirty && emuInstance->nds)
+            {
+                emuInstance->renderLock.lock();
+                if (useOpenGL)
+                {
+                    emuInstance->setVSyncGL(true);
+                    videoRenderer = globalCfg.GetInt("3D.Renderer");
+                }
+#ifdef OGLRENDERER_ENABLED
+                else
+#endif
+                {
+                    videoRenderer = 0;
+                }
+                updateRenderer();
+                videoSettingsDirty = false;
+                emuInstance->renderLock.unlock();
+            }
+
             nframes = 0;
             lastTime = SDL_GetPerformanceCounter() * perfCountsSec;
             lastMeasureTime = lastTime;
@@ -436,8 +481,10 @@ void EmuThread::run()
 
             snprintf(melontitle, sizeof(melontitle), "melonDS " MELONDS_VERSION);
             changeWindowTitle(melontitle);
+            emuInstance->wbHost->UpdateStatus(0);
 
-            SDL_Delay(75);
+            // serves workbench queries while paused (returns early when one arrives)
+            emuInstance->wbHost->IdleWait(75);
 
             emuInstance->drawScreen();
         }
@@ -477,6 +524,7 @@ void EmuThread::handleMessages()
         switch (msg.type)
         {
         case msg_Exit:
+            emuInstance->wbHost->OnGameClosing();
             emuStatus = emuStatus_Exit;
             emuPauseStack = emuPauseStackRunning;
 
@@ -525,6 +573,7 @@ void EmuThread::handleMessages()
             break;
 
         case msg_EmuStop:
+            emuInstance->wbHost->OnGameClosing();
             if (msg.param.value<bool>())
                 emuInstance->nds->Stop();
             emuStatus = emuStatus_Paused;
@@ -567,6 +616,7 @@ void EmuThread::handleMessages()
             break;
 
         case msg_BootROM:
+            emuInstance->wbHost->OnGameClosing();
             msgResult = 0;
             if (!emuInstance->loadROM(msg.param.value<QStringList>(), true, msgError))
                 break;
@@ -577,6 +627,7 @@ void EmuThread::handleMessages()
             break;
 
         case msg_BootFirmware:
+            emuInstance->wbHost->OnGameClosing();
             msgResult = 0;
             if (!emuInstance->bootToMenu(msgError))
                 break;
@@ -595,6 +646,7 @@ void EmuThread::handleMessages()
             break;
 
         case msg_EjectCart:
+            emuInstance->wbHost->OnGameClosing();
             emuInstance->ejectCart();
             break;
 
@@ -668,7 +720,64 @@ void EmuThread::handleMessages()
 
 void EmuThread::changeWindowTitle(char* title)
 {
-    emit windowTitleChange(QString(title));
+    emit windowTitleChange(emuInstance->wbHost->TitlePrefix() + QString(title));
+}
+
+bool EmuThread::serviceMessagesInBreak()
+{
+    msgMutex.lock();
+    while (!msgQueue.empty())
+    {
+        Message& msg = msgQueue.head();
+        if (msg.type == msg_EmuPause)
+        {
+            emuPauseStack++;
+            if (emuPauseStack <= emuPauseStackPauseThreshold)
+            {
+                prevEmuStatus = emuStatus;
+                emuStatus = emuStatus_Paused;
+                if (prevEmuStatus != emuStatus_Paused)
+                {
+                    emuInstance->audioDisable();
+                    emit windowEmuPause(true);
+                }
+            }
+        }
+        else if (msg.type == msg_EmuUnpause)
+        {
+            if (emuPauseStack >= emuPauseStackPauseThreshold)
+            {
+                emuPauseStack--;
+                if (emuPauseStack < emuPauseStackPauseThreshold)
+                {
+                    emuStatus = prevEmuStatus;
+                    if (emuStatus != emuStatus_Paused)
+                    {
+                        emuInstance->audioEnable();
+                        emit windowEmuPause(false);
+                    }
+                }
+            }
+        }
+        else if (msg.type == msg_EmuRun)
+        {
+            emuStatus = emuStatus_Running;
+            emuPauseStack = emuPauseStackRunning;
+            emuActive = true;
+            emuInstance->audioEnable();
+            emit windowEmuStart();
+        }
+        else
+        {
+            // needs the emulation thread at a frame boundary
+            msgMutex.unlock();
+            return true;
+        }
+        msgQueue.dequeue();
+        msgSemaphore.release();
+    }
+    msgMutex.unlock();
+    return false;
 }
 
 void EmuThread::initContext(int win)

@@ -48,7 +48,10 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 
 public:
-    explicit MainWindow(int id, EmuInstance* inst, QWidget* parent = nullptr);
+    // embedded: a plain child widget of parent (the decomp workbench's Game screen panel), never
+    // restored as a separate window
+    explicit MainWindow(int id, EmuInstance* inst, QWidget* parent = nullptr, bool embedded = false);
+    bool isEmbedded() const { return embedded; }
     ~MainWindow();
 
     EmuInstance* getEmuInstance() { return emuInstance; }
@@ -72,6 +75,7 @@ public:
     void drawScreen();
 
     bool preloadROMs(QStringList file, QStringList gbafile, bool boot);
+    void onWorkbenchBooted();
     QStringList splitArchivePath(const QString& filename, bool useMemberSyntax);
 
     void onAppStateChanged(Qt::ApplicationState state);
@@ -209,6 +213,9 @@ private:
 
     bool pauseOnLostFocus;
     bool pausedManually;
+    int settingsPauseDepth = 0;
+    void beginSettingsDialog();
+    void endSettingsDialog();
 
     int windowID;
     bool enabledSaved;
@@ -226,6 +233,7 @@ public:
     ScreenPanel* panel;
 
     bool hasMenu;
+    bool embedded = false;
 
     QAction* actOpenROM;
     QAction* actBootFirmware;
@@ -252,6 +260,9 @@ public:
     QAction* actEnableCheats;
     QAction* actSetupCheats;
     QAction* actROMInfo;
+    QAction* actWorkbench;
+    QAction* actRecording;
+    class WBStatusWidget* wbStatus = nullptr;
     QAction* actRAMInfo;
     QAction* actTitleManager;
     QAction* actMPNewInstance;

@@ -1,0 +1,7 @@
+<RCC>
+    <qresource prefix="/wb">
+        <file alias="detach.svg">icons/detach.svg</file>
+        <file alias="tabs-menu.svg">icons/tabs-menu.svg</file>
+        <file alias="pin.svg">icons/pin.svg</file>
+    </qresource>
+</RCC>

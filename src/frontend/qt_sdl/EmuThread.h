@@ -130,6 +130,11 @@ public:
     bool emuIsRunning();
     bool emuIsActive();
 
+    // decomp workbench: called by the emulation thread while it is stopped at a
+    // breakpoint. Handles pause/unpause requests in place and returns true when
+    // other messages need the thread back (stop, reset, load state, quit...).
+    bool serviceMessagesInBreak();
+
     void initContext(int win);
     void deinitContext(int win);
     void borrowGL();

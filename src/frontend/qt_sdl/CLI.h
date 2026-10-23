@@ -34,6 +34,15 @@ struct CommandLineOptions
     std::optional<QString> gbaRomArchivePath;
     bool fullscreen;
     bool boot;
+    // decomp workbench
+    bool workbench = false;
+    bool api = false;
+    int apiPort = 0;
+    bool apiMemoryWrite = false;
+    bool record = false;
+    bool writeHistory = false, dataOrigin = false;   // imply record
+    bool noRecord = false, noWriteHistory = false, noDataOrigin = false;
+    std::optional<QString> knowledgeStore;
 };
 
 extern CommandLineOptions* ManageArgs(QApplication& melon);

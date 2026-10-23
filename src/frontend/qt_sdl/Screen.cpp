@@ -888,7 +888,9 @@ bool ScreenPanelGL::createContext()
     // if our parent window is parented to another window, we will
     // share our OpenGL context with that window
     MainWindow* ourwin = (MainWindow*)parentWidget();
-    MainWindow* parentwin = (MainWindow*)parentWidget()->parentWidget();
+    // share with the instance's main window: a secondary window's parent widget is usually that window,
+    // but an embedded one (the decomp workbench's game screen) sits in another widget
+    MainWindow* parentwin = emuInstance->getMainWindow();
     //if (parentwin)
     if (ourwin->getWindowID() != 0)
     {

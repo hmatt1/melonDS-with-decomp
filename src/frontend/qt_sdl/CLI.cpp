@@ -49,11 +49,34 @@ CommandLineOptions* ManageArgs(QApplication& melon)
     parser.addOption(QCommandLineOption({"A", "archive-file-gba"}, "Specify file to load inside an archive given (GBA)", "rom"));
 #endif
 
+    parser.addOption(QCommandLineOption({"w", "workbench"}, "Open the decomp workbench window on startup"));
+    parser.addOption(QCommandLineOption("api", "Enable the workbench control and query API on 127.0.0.1"));
+    parser.addOption(QCommandLineOption("api-port", "Port of the API read endpoint (the control endpoint uses port+1)", "port"));
+    parser.addOption(QCommandLineOption("api-memory-write", "Allow memory.write through the API"));
+    parser.addOption(QCommandLineOption("record", "Turn recording on once the game boots (write history and data origin stay off unless their own flags are set)"));
+    parser.addOption(QCommandLineOption("write-history", "Turn recording and write history on once the game boots"));
+    parser.addOption(QCommandLineOption("data-origin", "Turn recording and data origin on once the game boots"));
+    parser.addOption(QCommandLineOption("no-record", "Leave recording, write history and data origin off"));
+    parser.addOption(QCommandLineOption("no-write-history", "Leave write history off"));
+    parser.addOption(QCommandLineOption("no-data-origin", "Leave data origin off"));
+    parser.addOption(QCommandLineOption("kb", "Knowledge store (SQLite) to use", "path"));
+
     parser.process(melon);
 
     CommandLineOptions* options = new CommandLineOptions;
 
     options->fullscreen = parser.isSet("fullscreen");
+    options->workbench = parser.isSet("workbench");
+    options->api = parser.isSet("api");
+    options->apiPort = parser.isSet("api-port") ? parser.value("api-port").toInt() : 0;
+    options->apiMemoryWrite = parser.isSet("api-memory-write");
+    options->writeHistory = parser.isSet("write-history");
+    options->dataOrigin = parser.isSet("data-origin");
+    options->record = parser.isSet("record") || options->writeHistory || options->dataOrigin;
+    options->noRecord = parser.isSet("no-record");
+    options->noWriteHistory = parser.isSet("no-write-history");
+    options->noDataOrigin = parser.isSet("no-data-origin");
+    if (parser.isSet("kb")) options->knowledgeStore = parser.value("kb");
 
     QStringList posargs = parser.positionalArguments();
     switch (posargs.size())
