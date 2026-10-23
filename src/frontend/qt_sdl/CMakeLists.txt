@@ -263,6 +263,8 @@ if (BUILD_STATIC)
     qt_import_plugins(melonDS INCLUDE Qt::QSvgPlugin)
     if (WIN32 AND USE_QT6)
         qt_import_plugins(melonDS INCLUDE Qt::QModernWindowsStylePlugin)
+        # The TIFF plugin pulls jbig, lerc and libdeflate, which melonDS never decodes.
+        qt_import_plugins(melonDS EXCLUDE Qt::QTiffPlugin)
     endif()
     if (USE_VCPKG AND UNIX AND NOT APPLE)
         pkg_check_modules(ALSA REQUIRED IMPORTED_TARGET alsa)
@@ -287,6 +289,12 @@ target_link_libraries(melonDS PRIVATE PkgConfig::SDL2 PkgConfig::LibArchive PkgC
 find_package(qtadvanceddocking-qt6 REQUIRED)
 target_link_libraries(melonDS PRIVATE ads::qtadvanceddocking-qt6)
 target_link_libraries(melonDS PRIVATE ${QT_LINK_LIBS} ${CMAKE_DL_LIBS})
+if (BUILD_STATIC AND MINGW)
+    # FreeType, HarfBuzz and their static dependencies refer to each other. One more
+    # pass, in pkg-config's static order, closes the references Qt left open.
+    pkg_check_modules(FONT_STATIC REQUIRED IMPORTED_TARGET freetype2)
+    target_link_libraries(melonDS PRIVATE PkgConfig::FONT_STATIC)
+endif()
 target_link_libraries(wbtests PRIVATE PkgConfig::SQLite3 ZLIB::ZLIB ${QT_LINK_LIBS})
 enable_testing()
 add_test(NAME workbench_unit COMMAND wbtests)
