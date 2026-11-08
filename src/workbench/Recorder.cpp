@@ -1651,6 +1651,7 @@ void Workbench::TcmChanged()
 void Workbench::FrameEnd()
 {
     Rec.OnFrameEnd();
+    if (Taint.Enabled()) Taint.FrameEndSeeds();
     Dbg.FrameEnd();
     Dbg.ServiceJobs();
 }
