@@ -285,6 +285,13 @@ int main(int argc, char** argv)
 
     qputenv("QT_SCALE_FACTOR", "1");
 
+#if defined(__linux__)
+    // Wayland doesn't let apps position their own windows, so saved window
+    // positions are ignored. Default to X11 (XWayland) unless the user chose.
+    if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM"))
+        qputenv("QT_QPA_PLATFORM", "xcb");
+#endif
+
 #if defined(_WIN32)
 #if QT_VERSION_MAJOR == 6
     // Allow using the system dark theme palette on Windows

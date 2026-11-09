@@ -33,6 +33,24 @@
 #include <QApplication>
 #include <QMessageBox>
 #include <QMenuBar>
+#include <QToolBar>
+#include <QRadioButton>
+#include <QCheckBox>
+#include <QSpinBox>
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QLineEdit>
+#include <QComboBox>
+#include <QButtonGroup>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QVBoxLayout>
+#include <QSignalBlocker>
+#include <QGridLayout>
+#include <QSlider>
+#include <QPushButton>
+#include <QActionGroup>
 #include <QMimeDatabase>
 #include <QFileDialog>
 #include <QInputDialog>
@@ -467,6 +485,7 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
                     int data = i + 1;
                     actScreenSize[i] = submenu->addAction(QString("%1x").arg(data));
                     actScreenSize[i]->setData(QVariant(data));
+                    actScreenSize[i]->setShortcut(QKeySequence(Qt::AltModifier | (Qt::Key_1 + i)));
                     connect(actScreenSize[i], &QAction::triggered, this, &MainWindow::onChangeScreenSize);
                 }
             }
@@ -489,9 +508,9 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
                 QMenu * submenu = menu->addMenu("Screen gap");
                 grpScreenGap = new QActionGroup(submenu);
 
-                const int screengap[] = {0, 1, 8, 64, 90, 128};
+                const int screengap[] = {0, 1, 8, 32, 64, 90, 128};
 
-                for (int i = 0; i < 6; i++)
+                for (int i = 0; i < 7; i++)
                 {
                     int data = screengap[i];
                     actScreenGap[i] = submenu->addAction(QString("%1 px").arg(data));
@@ -585,11 +604,14 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
             actNewWindow = menu->addAction("Open new window");
             connect(actNewWindow, &QAction::triggered, this, &MainWindow::onOpenNewWindow);
 
+            actHelloWindow = menu->addAction("Pixel grid settings...");
+
             menu->addSeparator();
 
-            actScreenFiltering = menu->addAction("Screen filtering");
-            actScreenFiltering->setCheckable(true);
-            connect(actScreenFiltering, &QAction::triggered, this, &MainWindow::onChangeScreenFiltering);
+            actPixelGrid = menu->addAction("Pixel grid");
+            actPixelGrid->setCheckable(true);
+            actPixelGrid->setShortcut(QKeySequence(Qt::AltModifier | Qt::Key_F));
+            connect(actPixelGrid, &QAction::triggered, this, &MainWindow::onChangePixelGrid);
 
             actShowOSD = menu->addAction("Show OSD");
             actShowOSD->setCheckable(true);
@@ -656,6 +678,227 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
 
         setMenuBar(menubar);
 
+        helloWindow = new HelloWindow(this);
+        helloWindow->setWindowTitle("Pixel grid settings");
+        {
+            // one slider per shader float; changes apply on the next frame
+            auto* grid = new QGridLayout(helloWindow);
+            for (int i = 0; i < kNumGridParams; i++)
+            {
+                const GridParamDef& def = kGridParams[i];
+                const int steps = gridParamSteps(def);
+                float val = (float)windowCfg.GetDouble(def.key);
+
+                auto* name = new QLabel(def.name, helloWindow);
+                name->setToolTip(def.tip);
+                auto* slider = new QSlider(Qt::Horizontal, helloWindow);
+                auto* num = new QLabel(helloWindow);
+                slider->setRange(0, steps);
+                slider->setValue(qRound((val - def.min) / (def.max - def.min) * steps));
+                num->setMinimumWidth(48);
+                num->setText(QString::number(val, 'f', def.integer ? 0 : 3));
+
+                connect(slider, &QSlider::valueChanged, this, [this, i, num](int v)
+                {
+                    const GridParamDef& def = kGridParams[i];
+                    float f = def.min + (def.max - def.min) * v / (float)gridParamSteps(def);
+                    num->setText(QString::number(f, 'f', def.integer ? 0 : 3));
+                    windowCfg.SetDouble(def.key, f);
+                    if (panel) panel->gridParam[i] = f;
+                });
+
+                grid->addWidget(name, i, 0);
+                grid->addWidget(slider, i, 1);
+                grid->addWidget(num, i, 2);
+
+                // the blur rows also get their reach, in DS pixels
+                int axis = !strcmp(def.key, "BlurStrengthX") ? 0 : !strcmp(def.key, "BlurStrengthY") ? 1 : -1;
+                if (axis >= 0)
+                {
+                    const char* rkey = axis ? "BlurReachY" : "BlurReachX";
+                    auto* reach = new QSpinBox(helloWindow);
+                    reach->setRange(0, 3);
+                    reach->setSuffix(" px");
+                    reach->setToolTip("How many DS pixels away, in this direction, the blur takes colour from (0 to 3).\n"
+                                      "At 1 only the nearest neighbour on each side counts; at 3, three on each side.\n"
+                                      "At 0 this direction isn't blurred, whatever the slider says.");
+                    reach->setValue(windowCfg.GetInt(rkey));
+                    connect(reach, &QSpinBox::valueChanged, this, [this, axis, rkey](int v)
+                    {
+                        windowCfg.SetInt(rkey, v);
+                        if (panel) panel->blurReach[axis] = v;
+                    });
+                    grid->addWidget(reach, i, 3);
+                }
+            }
+
+            // LED stripe layout of the console being imitated
+            auto* layoutRow = new QHBoxLayout();
+            auto* layoutLabel = new QLabel("Subpixels", helloWindow);
+            layoutLabel->setToolTip("Which console's LED stripes to imitate. Each DS pixel is lit by three thin\n"
+                                    "stripes, one per colour, and their order differs between models:\n\n"
+                                    "DS Lite and DSi: blue, green, red, left to right, on both screens.\n"
+                                    "DSi XL: blue, green, red on the top screen, but red, green, blue on the bottom.\n\n"
+                                    "None turns the stripes off. Subpixel strength sets how visible they are.");
+            layoutRow->addWidget(layoutLabel);
+            auto* layoutGroup = new QButtonGroup(helloWindow);
+            const char* layouts[] = {"None", "DS Lite", "DSi", "DSi XL"};
+            for (int i = 0; i < 4; i++)
+            {
+                auto* rb = new QRadioButton(layouts[i], helloWindow);
+                rb->setChecked(windowCfg.GetInt("SubpixelLayout") == i);
+                layoutGroup->addButton(rb, i);
+                layoutRow->addWidget(rb);
+            }
+            layoutRow->addStretch();
+            connect(layoutGroup, &QButtonGroup::idClicked, this, [this](int id)
+            {
+                windowCfg.SetInt("SubpixelLayout", id);
+                if (panel) panel->subpixelLayout = id;
+            });
+            grid->addLayout(layoutRow, kNumGridParams, 0, 1, 4);
+
+            auto* subBox = new QCheckBox("Subpixel sampling (needs 3x or more internal resolution)", helloWindow);
+            subBox->setObjectName("subpixelSample");
+            subBox->setToolTip("Lets each LED stripe show what's actually under it, the way ClearType does with text.\n\n"
+                               "With the OpenGL renderer at 3x or more internal resolution, the 3D picture has at\n"
+                               "least three samples across each DS pixel. Each stripe then takes its own colour from\n"
+                               "the spot where that stripe sits: blue from the left third, green from the middle,\n"
+                               "red from the right (in the order chosen under Subpixels). That gives about three times\n"
+                               "the horizontal detail in 3D scenes, with faint coloured fringes on hard edges.\n\n"
+                               "Has no effect on 2D graphics, below 3x, or with Subpixels set to None.");
+            subBox->setChecked(windowCfg.GetBool("SubpixelSample"));
+            connect(subBox, &QCheckBox::toggled, this, [this](bool on)
+            {
+                windowCfg.SetBool("SubpixelSample", on);
+                if (panel) panel->subpixelSample = on;
+            });
+            grid->addWidget(subBox, kNumGridParams + 1, 0, 1, 4);
+
+            // presets: "Default" is the built-in values and can't be deleted;
+            // the rest live in pixelgrid-presets.json next to melonDS.toml
+            auto* presetRow = new QHBoxLayout();
+            auto* presetPick = new QComboBox(helloWindow);
+            auto* presetName = new QLineEdit(helloWindow);
+            auto* presetSave = new QPushButton("Save", helloWindow);
+            auto* presetDelete = new QPushButton("Delete", helloWindow);
+            presetPick->setToolTip("Apply a saved set of these settings");
+            presetName->setPlaceholderText("Preset name");
+            presetSave->setToolTip("Save the current settings under the name in the box");
+            presetDelete->setToolTip("Delete the selected preset (not Default)");
+            presetRow->addWidget(presetPick, 1);
+            presetRow->addWidget(presetName, 1);
+            presetRow->addWidget(presetSave);
+            presetRow->addWidget(presetDelete);
+            grid->addLayout(presetRow, kNumGridParams + 2, 0, 1, 4);
+
+            QString presetFile = QString::fromStdString(Platform::GetLocalFilePath("pixelgrid-presets.json"));
+            auto loadPresets = [presetFile]()
+            {
+                QFile f(presetFile);
+                if (!f.open(QIODevice::ReadOnly)) return QJsonObject();
+                return QJsonDocument::fromJson(f.readAll()).object();
+            };
+            auto refill = [presetPick, loadPresets](const QString& select)
+            {
+                QSignalBlocker b(presetPick);
+                presetPick->clear();
+                presetPick->addItem("Default");
+                for (const QString& n : loadPresets().keys()) presetPick->addItem(n);
+                int i = presetPick->findText(select);
+                presetPick->setCurrentIndex(i < 0 ? 0 : i);
+            };
+            refill(QString());
+
+            QWidget* hw = helloWindow;
+            auto current = [hw]()
+            {
+                QJsonObject o;
+                auto sliders = hw->findChildren<QSlider*>();
+                for (int i = 0; i < kNumGridParams && i < sliders.size(); i++)
+                {
+                    const GridParamDef& def = kGridParams[i];
+                    o[def.key] = def.min + (def.max - def.min) * sliders[i]->value() / (double)gridParamSteps(def);
+                }
+                auto reach = hw->findChildren<QSpinBox*>();
+                if (reach.size() >= 2) { o["BlurReachX"] = reach[0]->value(); o["BlurReachY"] = reach[1]->value(); }
+                if (auto* g = hw->findChild<QButtonGroup*>()) o["SubpixelLayout"] = g->checkedId();
+                if (auto* c = hw->findChild<QCheckBox*>("subpixelSample")) o["SubpixelSample"] = c->isChecked();
+                return o;
+            };
+            auto apply = [hw](const QJsonObject& o)
+            {
+                auto sliders = hw->findChildren<QSlider*>();
+                for (int i = 0; i < kNumGridParams && i < sliders.size(); i++)
+                {
+                    const GridParamDef& def = kGridParams[i];
+                    double v = o.value(def.key).toDouble(def.def);
+                    sliders[i]->setValue(qRound((v - def.min) / (def.max - def.min) * gridParamSteps(def)));
+                }
+                auto reach = hw->findChildren<QSpinBox*>();
+                if (reach.size() >= 2)
+                {
+                    reach[0]->setValue(o.value("BlurReachX").toInt(1));
+                    reach[1]->setValue(o.value("BlurReachY").toInt(1));
+                }
+                if (auto* g = hw->findChild<QButtonGroup*>())
+                    if (auto* b = g->button(o.value("SubpixelLayout").toInt(3))) b->click();
+                if (auto* c = hw->findChild<QCheckBox*>("subpixelSample")) c->setChecked(o.value("SubpixelSample").toBool(false));
+            };
+
+            // activated, not currentTextChanged: picking the entry already shown
+            // (say Default, after moving a slider) applies it again
+            connect(presetPick, &QComboBox::activated, this, [=](int idx)
+            {
+                QString n = presetPick->itemText(idx);
+                presetDelete->setEnabled(n != "Default");
+                presetName->setText(n == "Default" ? QString() : n);
+                apply(n == "Default" ? QJsonObject() : loadPresets().value(n).toObject());
+            });
+            presetDelete->setEnabled(false);
+            connect(presetSave, &QPushButton::clicked, this, [=]()
+            {
+                QString n = presetName->text().trimmed();
+                if (n.isEmpty() || n.compare("Default", Qt::CaseInsensitive) == 0)
+                {
+                    QMessageBox::information(hw, "Pixel grid settings", "Type a name other than Default to save a preset.");
+                    return;
+                }
+                QJsonObject all = loadPresets();
+                all[n] = current();
+                QFile f(presetFile);
+                if (f.open(QIODevice::WriteOnly)) f.write(QJsonDocument(all).toJson());
+                refill(n);
+                presetDelete->setEnabled(true);
+            });
+            connect(presetDelete, &QPushButton::clicked, this, [=]()
+            {
+                QString n = presetPick->currentText();
+                if (n == "Default") return;
+                QJsonObject all = loadPresets();
+                all.remove(n);
+                QFile f(presetFile);
+                if (f.open(QIODevice::WriteOnly)) f.write(QJsonDocument(all).toJson());
+                refill(QString());
+                presetName->clear();
+                presetDelete->setEnabled(false);
+            });
+            grid->setColumnStretch(1, 1);
+        }
+        helloWindow->resize(480, 360);
+
+        connect(actHelloWindow, &QAction::triggered, this, [this]()
+        {
+            helloWindow->show();
+            helloWindow->raise();
+            helloWindow->activateWindow();
+        });
+        helloWindow->onClosed = [this]()
+        {
+            saveHelloWindowState();
+            windowCfg.SetBool("HelloVisible", false);
+        };
+
         if (localCfg.GetString("Firmware.Username") == "Arisotura")
             actMPNewInstance->setText("Fart");
     }
@@ -678,6 +921,15 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
         setWindowState(windowState() & ~Qt::WindowFullScreen);
     }
     show();
+
+    if (helloWindow)
+    {
+        std::string hgeom = windowCfg.GetString("HelloGeometry");
+        if (!hgeom.empty())
+            helloWindow->restoreGeometry(QByteArray::fromBase64(QByteArray::fromStdString(hgeom)));
+        if (windowCfg.GetBool("HelloVisible"))
+            helloWindow->show();
+    }
 
     panel = nullptr;
     createScreenPanel();
@@ -746,7 +998,7 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
         actScreenRotation[windowCfg.GetInt("ScreenRotation")]->setChecked(true);
 
         int screenGap = windowCfg.GetInt("ScreenGap");
-        for (int i = 0; i < 6; i++)
+        for (int i = 0; i < 7; i++)
         {
             if (actScreenGap[i]->data().toInt() == screenGap)
             {
@@ -771,7 +1023,7 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
                 actScreenAspectBot[i]->setChecked(true);
         }
 
-        actScreenFiltering->setChecked(windowCfg.GetBool("ScreenFilter"));
+        actPixelGrid->setChecked(windowCfg.GetBool("PixelGrid"));
         actShowOSD->setChecked(showOSD);
 
         actLimitFramerate->setChecked(emuInstance->doLimitFPS);
@@ -824,6 +1076,12 @@ void MainWindow::saveEnabled(bool enabled)
     enabledSaved = true;
 }
 
+void MainWindow::saveHelloWindowState()
+{
+    QByteArray enc = helloWindow->saveGeometry().toBase64();
+    windowCfg.SetString("HelloGeometry", enc.toStdString());
+}
+
 void MainWindow::closeEvent(QCloseEvent* event)
 {
     if (emuInstance)
@@ -846,6 +1104,11 @@ void MainWindow::closeEvent(QCloseEvent* event)
         QByteArray geom = saveGeometry();
         QByteArray enc = geom.toBase64(QByteArray::Base64Encoding);
         windowCfg.SetString("Geometry", enc.toStdString());
+    }
+    if (helloWindow)
+    {
+        windowCfg.SetBool("HelloVisible", helloWindow->isVisible());
+        saveHelloWindowState();
     }
     Config::Save();
 
@@ -903,8 +1166,6 @@ void MainWindow::createScreenPanel()
     }
     setCentralWidget(panel);
 
-    if (hasMenu)
-        actScreenFiltering->setEnabled(hasOGL);
     panel->osdSetEnabled(showOSD);
 
     connect(emuThread, SIGNAL(windowUpdate()), panel, SLOT(repaint()));
@@ -2168,6 +2429,12 @@ void MainWindow::onOpenNewWindow()
     emuInstance->createWindow();
 }
 
+void MainWindow::onChangePixelGrid(bool checked)
+{
+    windowCfg.SetBool("PixelGrid", checked);
+    panel->setPixelGrid(checked);
+}
+
 void MainWindow::onChangeScreenFiltering(bool checked)
 {
     windowCfg.SetBool("ScreenFilter", checked);
@@ -2241,7 +2508,10 @@ void MainWindow::toggleFullscreen()
     {
         showFullScreen();
         if (hasMenu)
+        {
             menuBar()->setFixedHeight(0); // Don't use hide() as menubar actions stop working
+            if (toolbar) toolbar->hide();
+        }
     }
     else
     {
@@ -2250,6 +2520,7 @@ void MainWindow::toggleFullscreen()
         {
             int menuBarHeight = menuBar()->sizeHint().height();
             menuBar()->setFixedHeight(menuBarHeight);
+            if (toolbar) toolbar->show();
         }
     }
 }

@@ -26,6 +26,8 @@
 #include <QWidget>
 #include <QWindow>
 #include <QMainWindow>
+#include <QToolBar>
+#include <functional>
 #include <QImage>
 #include <QActionGroup>
 #include <QTimer>
@@ -39,6 +41,20 @@
 
 
 class EmuInstance;
+
+// simple secondary window; tells its owner when the user closes it
+class HelloWindow : public QWidget
+{
+public:
+    explicit HelloWindow(QWidget* parent) : QWidget(parent, Qt::Window) {}
+    std::function<void()> onClosed;
+protected:
+    void closeEvent(QCloseEvent* event) override
+    {
+        if (onClosed) onClosed();
+        QWidget::closeEvent(event);
+    }
+};
 class EmuThread;
 
 const int kMaxRecentROMs = 10;
@@ -173,6 +189,7 @@ private slots:
     void onChangeIntegerScaling(bool checked);
     void onOpenNewWindow();
     void onChangeScreenFiltering(bool checked);
+    void onChangePixelGrid(bool checked);
     void onChangeShowOSD(bool checked);
     void onChangeLimitFramerate(bool checked);
     void onChangeAudioSync(bool checked);
@@ -286,10 +303,14 @@ public:
     QAction* actPathSettings;
     QAction* actInterfaceSettings;
     QAction* actScreenSize[4];
+    QToolBar* toolbar = nullptr;
+    HelloWindow* helloWindow = nullptr;
+    QAction* actHelloWindow = nullptr;
+    void saveHelloWindowState();
     QActionGroup* grpScreenRotation;
     QAction* actScreenRotation[screenRot_MAX];
     QActionGroup* grpScreenGap;
-    QAction* actScreenGap[6];
+    QAction* actScreenGap[7];
     QActionGroup* grpScreenLayout;
     QAction* actScreenLayout[screenLayout_MAX];
     QAction* actScreenSwap;
@@ -302,6 +323,7 @@ public:
     QAction** actScreenAspectBot;
     QAction* actNewWindow;
     QAction* actScreenFiltering;
+    QAction* actPixelGrid;
     QAction* actShowOSD;
     QAction* actLimitFramerate;
     QAction* actAudioSync;

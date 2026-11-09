@@ -85,7 +85,14 @@ ScreenPanel::ScreenPanel(QWidget* parent) : QWidget(parent)
     osdID = 1;
     
     loadConfig();
-    setFilter(mainWindow->getWindowConfig().GetBool("ScreenFilter"));
+    setFilter(false);   // blur is the pixel grid shader's, in DS pixels
+    setPixelGrid(mainWindow->getWindowConfig().GetBool("PixelGrid"));
+    for (int i = 0; i < kNumGridParams; i++)
+        gridParam[i] = (float)mainWindow->getWindowConfig().GetDouble(kGridParams[i].key);
+    subpixelLayout = mainWindow->getWindowConfig().GetInt("SubpixelLayout");
+    subpixelSample = mainWindow->getWindowConfig().GetBool("SubpixelSample");
+    blurReach[0] = mainWindow->getWindowConfig().GetInt("BlurReachX");
+    blurReach[1] = mainWindow->getWindowConfig().GetInt("BlurReachY");
 
     splashLogo = QPixmap(":/melon-logo");
 
@@ -134,6 +141,11 @@ void ScreenPanel::loadConfig()
 void ScreenPanel::setFilter(bool filter)
 {
     this->filter = filter;
+}
+
+void ScreenPanel::setPixelGrid(bool enable)
+{
+    this->pixelGrid = enable;
 }
 
 void ScreenPanel::setMouseHide(bool enable, int delay)
@@ -936,6 +948,12 @@ void ScreenPanelGL::initOpenGL()
     glUniform1i(glGetUniformLocation(screenShaderProgram, "BottomScreenTex"), 1);
 
     screenShaderScreenSizeULoc = glGetUniformLocation(screenShaderProgram, "uScreenSize");
+    screenShaderGridULoc = glGetUniformLocation(screenShaderProgram, "uGrid");
+    screenShaderSubpixelULoc = glGetUniformLocation(screenShaderProgram, "uSubpixel");
+    screenShaderSubSampleULoc = glGetUniformLocation(screenShaderProgram, "uSubSample");
+    screenShaderBlurReachULoc = glGetUniformLocation(screenShaderProgram, "uBlurReach");
+    for (int i = 0; i < kNumGridParams; i++)
+        screenShaderGridParamULoc[i] = glGetUniformLocation(screenShaderProgram, kGridParams[i].uniform);
     screenShaderTransformULoc = glGetUniformLocation(screenShaderProgram, "uTransform");
 
     const float vertices[] =
@@ -1132,6 +1150,12 @@ void ScreenPanelGL::drawScreen()
 
         glUseProgram(screenShaderProgram);
         glUniform2f(screenShaderScreenSizeULoc, w / factor, h / factor);
+        glUniform1i(screenShaderGridULoc, pixelGrid ? 1 : 0);
+        for (int i = 0; i < kNumGridParams; i++)
+            glUniform1f(screenShaderGridParamULoc[i], gridParam[i]);
+        glUniform1i(screenShaderSubpixelULoc, subpixelLayout);
+        glUniform1i(screenShaderSubSampleULoc, subpixelSample ? 1 : 0);
+        glUniform2i(screenShaderBlurReachULoc, blurReach[0], blurReach[1]);
 
         void* topbuf; void* bottombuf;
         if (nds->GPU.GetFramebuffers(&topbuf, &bottombuf))
