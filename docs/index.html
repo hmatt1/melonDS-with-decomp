@@ -63,7 +63,7 @@
 
       <figure class="shot">
         <div class="frame" data-pending="the workbench window in its default layout, next to the running game">
-          <img src="img/default-layout.png" alt="The workbench window: functions on the left, disassembly and memory in the middle, registers and the inspector on the right, and a group of tabs at the bottom" width="1600" height="1000">
+          <img src="img/default-layout.png" alt="The workbench window: functions on the left, disassembly and memory in the middle, registers and the inspector on the right, and a group of tabs at the bottom" width="1600" height="1198">
         </div>
       </figure>
 
@@ -255,10 +255,11 @@ cmake --build build -j$(sysctl -n hw.logicalcpu)</code></pre>
           in the source.</p>
         <div class="note info">
           <span class="note-title">About the pictures</span>
-          <p>The screenshots are from Air Traffic Chaos (<code>atc.nds</code>), save state 2 (a running
-            game). <code>gUnkCtl</code>, <code>UnkCtl_Update</code> and <code>struct UnkCtl</code> are
-            made-up names given while writing this, as the steps below show; nothing about them is known
-            yet. Orange numbers were added afterwards and match the numbers in the captions.</p>
+          <p>The screenshots are of the workbench running its own test ROM,
+            <code>tools/workbench/testrom/wbtest.nds</code>, which is in the source and free to show. Its
+            code is known, but the use cases treat it as a game you know nothing about:
+            <code>gUnkCar</code> and <code>struct UnkCar</code> are names given while working through
+            them, as the steps show. <code>docs/tools/capture.py</code> takes every picture again.</p>
         </div>
       </section>
 
@@ -282,7 +283,7 @@ cmake --build build -j$(sysctl -n hw.logicalcpu)</code></pre>
 
         <ol class="steps">
           <li>Start melonDS with the workbench window open:
-<pre><code>melonDS -w ~/roms/atc.nds</code></pre>
+<pre><code>melonDS -w path/to/game.nds</code></pre>
             Add <code>--api</code> if a script or an agent should drive it (<a href="#uc9">use case 9</a>).
             From a running melonDS: <span class="menu">System &gt; Decomp workbench...</span>
             (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd>).</li>
@@ -315,7 +316,15 @@ cmake --build build -j$(sysctl -n hw.logicalcpu)</code></pre>
 
         <figure class="shot" id="fig-default-layout">
           <div class="frame" data-pending="the default layout, with the eight areas numbered">
-            <img src="img/default-layout.png" alt="The default layout of the workbench window" width="1600" height="1000">
+            <img src="img/default-layout.png" alt="The default layout of the workbench window" width="1600" height="1198">
+            <span class="callout" style="--x:6.6%;--y:5.7%">1</span>
+            <span class="callout" style="--x:27%;--y:5.8%">2</span>
+            <span class="callout" style="--x:26%;--y:51.9%">3</span>
+            <span class="callout" style="--x:55.6%;--y:72.2%">4</span>
+            <span class="callout" style="--x:82%;--y:5.8%">5</span>
+            <span class="callout" style="--x:82%;--y:41.3%">6</span>
+            <span class="callout" style="--x:41%;--y:3.9%">7</span>
+            <span class="callout" style="--x:21.5%;--y:97.4%">8</span>
           </div>
           <figcaption>The default layout. <span class="n">1</span> Functions, <span class="n">2</span> Disassembly,
             <span class="n">3</span> Memory, <span class="n">4</span> the bottom tab group (Call stack,
@@ -350,47 +359,43 @@ cmake --build build -j$(sysctl -n hw.logicalcpu)</code></pre>
         <p>You have a struct in RAM full of <code>unk</code> fields and want to know, for each field, which
           code writes it, how wide the write is and what values it gets. The address comes from the code you
           are decompiling, or from a value scan (<a href="#uc3">use case 3</a>). The example below starts
-          with a guess at where the struct begins; <a href="#uc2">use case 2</a> shows how to check that
-          guess.</p>
+          with a guess at where the struct begins, <code>020267c0</code>; <a href="#uc2">use case 2</a> shows
+          how to check that guess.</p>
 
         <figure class="shot">
-          <div class="frame" data-pending="the Inspector on gUnkCtl, with its writers and recent writes">
-            <img src="img/inspector-unkctl.png" alt="The Inspector panel describing gUnkCtl" width="700" height="760">
+          <div class="frame" data-pending="the Inspector on one of gUnkCar's fields">
+            <img src="img/inspector.png" alt="The Inspector panel describing gUnkCar.unk0c" width="402" height="425">
           </div>
-          <figcaption>The Inspector for <code>gUnkCtl</code>. <span class="n">1</span> The last writer and
-            readers this session. <span class="n">2</span> The most recent writes: frame, CPU, writer and
-            function, old and new value.</figcaption>
+          <figcaption>The Inspector on <code>gUnkCar.unk0c</code>: its value in every width, how often it
+            was read and written this session, the last writer and reader, and the most recent writes with
+            their frame, CPU, writer, and old and new value.</figcaption>
         </figure>
 
         <ol class="steps">
           <li><strong>Go to the struct.</strong> Press <kbd>G</kbd> and type its address, here
-            <code>02078d30</code>.</li>
+            <code>020267c0</code>.</li>
           <li><strong>Give it a type.</strong> <span class="menu">Edit &gt; Types...</span> opens the type
             editor. Write the struct as C, with the fields you can guess and padding for the rest, and press
             <span class="ui">Save</span>:
-<pre><code>struct UnkCtl {
-    u32 unk00; u32 unk04; u32 unk08;
-    u16 unk0c; u16 unk0e; u32 unk10;
-    u8  pad14[0x24];
-    u32 unk38; u32 unk3c;
-    u8  pad40[8];
-    u32 unk48;
+<pre><code>struct UnkCar {
+    u32 unk00; u32 unk04; u32 unk08; u32 unk0c; u32 unk10;
+    u32 unk14; u32 unk18; u32 unk1c; u32 unk20; u32 unk24;
 };</code></pre></li>
           <li><strong>Place it.</strong> Select the struct's bytes in the Memory view (drag from the first byte
-            to the last, here <code>0x4c</code> bytes), press <kbd>D</kbd> (<span class="menu">Edit &gt; Define
-            data...</span>), choose <code>UnkCtl</code> as the type and give it a name, here
-            <code>gUnkCtl</code>. The dialog fills in the address and the size (<code>0x4c</code>) from the
+            to the last, here <code>0x28</code> bytes), press <kbd>D</kbd> (<span class="menu">Edit &gt; Define
+            data...</span>), choose <code>UnkCar</code> as the type and give it a name, here
+            <code>gUnkCar</code>. The dialog fills in the address and the size (<code>0x28</code>) from the
             selection. Its Type box is narrow: your struct is in the list but shown cut short, above the plain
             types. The Memory view now underlines each field and lists their names beside the row, and the
-            Disassembly names each field (<code>; gUnkCtl.unk0c</code>).</li>
+            Disassembly names each field (<code>; gUnkCar.unk0c</code>).</li>
         </ol>
 
         <figure class="shot">
           <div class="frame" data-pending="the Memory view after Define data: fields underlined and named">
-            <img src="img/memory-define-data.png" alt="The Memory view with the struct's fields underlined and named" width="1000" height="420">
+            <img src="img/memory-define-data.png" alt="The Memory view with the struct's fields underlined and named" width="937" height="231">
           </div>
-          <figcaption>The Memory view after Define data. <span class="n">1</span> The struct's bytes, each field
-            underlined. <span class="n">2</span> The field names for each row.</figcaption>
+          <figcaption>The Memory view after Define data: the struct's bytes, from <code>020267c0</code>, each
+            field underlined, and the field names of each row beside it.</figcaption>
         </figure>
 
         <ol class="steps" start="4" style="counter-reset: step 3">
@@ -403,27 +408,27 @@ cmake --build build -j$(sysctl -n hw.logicalcpu)</code></pre>
 
         <figure class="shot">
           <div class="frame" data-pending="Write history for the struct's bytes">
-            <img src="img/write-history.png" alt="The Write history panel listing writes into gUnkCtl" width="1200" height="420">
+            <img src="img/write-history.png" alt="The Write history panel listing writes into gUnkCar" width="937" height="308">
           </div>
-          <figcaption>Write history for the selection. <span class="n">1</span> Which code wrote it, by function.
-            <span class="n">2</span> The field, the width of the write and the values.</figcaption>
+          <figcaption>Write history for the selection. In the lower table, each write's frame, CPU, the code that
+            wrote it and its function, the field, the width of the write and the old and new values.</figcaption>
         </figure>
 
-        <p>Among these newest writes, <code>unk0c</code> (<code>02078d3c</code>) is written 2 bytes wide by
-          <code>sub_02061fd0</code>, and <code>unk10</code> (<code>02078d40</code>) both 2 and 4 bytes wide, by
-          two functions. The table shows only the latest writes; Cross-references (<a href="#uc5">use case 5</a>)
-          counts every writer over the session, and there <code>sub_02061960</code> writes <code>unk0c</code>
-          far more often. A field written at two widths is often a union or two <code>u16</code>s; a field
-          written at one width by many functions is usually a real field of that type.</p>
+        <p>Among these newest writes, <code>unk0c</code> (<code>020267cc</code>) and <code>unk1c</code>
+          (<code>020267dc</code>) are written every frame, 4 bytes wide, by <code>sub_02001540</code>, and
+          <code>unk0c</code> goes up by one each time (<code>184</code> to <code>185</code>): it looks like a
+          frame counter. The table shows only the latest writes; Cross-references (<a href="#uc5">use case 5</a>)
+          counts every writer over the session. A field written at two widths is often a union or two
+          <code>u16</code>s; a field written at one width by many functions is usually a real field of that
+          type.</p>
 
         <ol class="steps" start="5" style="counter-reset: step 4">
           <li><strong>Name what you learn.</strong> Change the field names in
             <span class="menu">Edit &gt; Types...</span> and save; every view picks them up
             (<a href="#uc6">use case 6</a>).</li>
           <li><strong>Who reads it.</strong> Press <kbd>X</kbd> in the struct: Cross-references lists the
-            readers as well as the writers (<a href="#uc5">use case 5</a>). Inside a data object, <kbd>X</kbd>
-            lists the references to the whole object (<em>References to 02078d30 &lt;gUnkCtl&gt;</em>), not to
-            the one field.</li>
+            readers as well as the writers (<a href="#uc5">use case 5</a>). With a field selected, it lists the
+            references to that field (<em>References to 020267cc &lt;gUnkCar.unk0c&gt;</em>).</li>
         </ol>
 
         <div class="note tip">
@@ -445,61 +450,67 @@ cmake --build build -j$(sysctl -n hw.logicalcpu)</code></pre>
 
         <figure class="shot">
           <div class="frame" data-pending="the Memory view's right-click menu, with Add watchpoint open">
-            <img src="img/memory-context-menu.png" alt="The Memory view's right-click menu with the Add watchpoint submenu" width="640" height="460">
+            <img src="img/memory-context-menu.png" alt="The Memory view's right-click menu with the Add watchpoint submenu" width="337" height="460">
           </div>
-          <figcaption>Right-click on the selection in the Memory view. <span class="n">1</span>
-            <span class="ui">Add watchpoint &gt; On write</span>. <span class="n">2</span>
-            <span class="ui">Define data...</span>, used in <a href="#uc1">use case 1</a>.</figcaption>
+          <figcaption>Right-click on the selection in the Memory view: <span class="ui">Add watchpoint (4 bytes)
+            &gt; On write</span>. The menu's other commands are the menu bar's, with their keys:
+            <span class="ui">Define data...</span> (<kbd>D</kbd>) was used in <a href="#uc1">use case 1</a>.</figcaption>
         </figure>
 
         <ol class="steps">
-          <li>In the Memory view, select the field's bytes (here the two bytes of <code>unk0c</code>).</li>
-          <li>Right-click and choose <span class="ui">Add watchpoint (2 bytes) &gt; On write</span>. It appears in
+          <li>In the Memory view, select the field's bytes (here the four bytes of <code>unk0c</code>).</li>
+          <li>Right-click and choose <span class="ui">Add watchpoint (4 bytes) &gt; On write</span>. It appears in
             the Breakpoints tab.</li>
           <li>If the game is paused, continue it (<kbd>Ctrl</kbd>+<kbd>F5</kbd>). The game stops at the next
-            write to those bytes, and the status bar says <code>BREAK: watchpoint</code> in red. Several
-            functions write this field, so the first break may be another store, for example
-            <code>str r0, [r6, #0x38]</code> in <code>sub_0205ee78</code>. Press <kbd>Ctrl</kbd>+<kbd>F5</kbd>
-            again to go on to the next writer.<br>
-            The picture shows the break in <code>sub_02061960</code>. The <code>&gt;</code> marker is on the
-            instruction after the store; the store itself is at <span class="n-inline">1</span>,
-            <code>strh r0, [r4, #0x38]</code>: a 16-bit write.</li>
+            write to those bytes, and the status bar says <code>BREAK: watchpoint</code> in red. When several
+            functions write a field, the first break may come from any of them: press
+            <kbd>Ctrl</kbd>+<kbd>F5</kbd> again to go on to the next writer.<br>
+            The picture shows the break in <code>sub_02001540</code>. The <code>&gt;</code> marker is on the
+            instruction after the store; the store itself is the line above it,
+            <code>str r5, [r6, #0xC]</code> at <code>02001b14</code>: a 32-bit write.</li>
           <li>Press <kbd>G</kbd> and type <code>pc</code>. The store that triggered the break is the instruction
             just above the PC marker: the watchpoint fires after the write has happened.</li>
         </ol>
 
         <figure class="shot">
           <div class="frame" data-pending="the Disassembly stopped at the watchpoint, the store marked">
-            <img src="img/break-disasm.png" alt="The Disassembly stopped after the store that wrote the field" width="1000" height="420">
+            <img src="img/break-disasm.png" alt="The Disassembly stopped after the store that wrote the field" width="937" height="559">
           </div>
-          <figcaption>Stopped at the watchpoint. <span class="n">1</span> The store that wrote the field, just
-            above the PC marker.</figcaption>
+          <figcaption>Stopped at the watchpoint: the PC marker <code>&gt;</code> is at <code>02001b16</code>,
+            just after the store <code>str r5, [r6, #0xC]</code> that wrote the field.</figcaption>
         </figure>
 
         <ol class="steps" start="5" style="counter-reset: step 4">
           <li>The <span class="ui">Call stack</span> tab shows how the game got there. Double-click a row's
             <em>Called from</em> cell to go to the call; double-clicking the <em>Function</em> cell goes to the
-            function's start. The Registers panel names the function each register points into
-            (<code>lr -&gt; sub_02062318+0x90</code>).</li>
+            function's start. The Registers panel names what each register points into: here
+            <code>r6 -&gt; gUnkCar</code>.</li>
         </ol>
 
         <figure class="shot">
           <div class="frame" data-pending="the Call stack at the break">
-            <img src="img/callstack.png" alt="The Call stack panel at the watchpoint" width="1000" height="300">
+            <img src="img/callstack.png" alt="The Call stack panel at the watchpoint" width="937" height="308">
           </div>
-          <figcaption>The call stack at the break: <code>sub_02061960</code>, where the store is, and the six
-            functions that led to it. In <a href="#uc5">use case 5</a> it has been renamed
-            <code>UnkCtl_Update</code>.</figcaption>
+          <figcaption>The call stack at the break: <code>sub_02001540</code>, where the store is, called from
+            <code>02001d24</code>. The test ROM runs its whole main loop in this one function.</figcaption>
+        </figure>
+
+        <figure class="shot">
+          <div class="frame" data-pending="the Registers panel at the break">
+            <img src="img/registers.png" alt="The Registers panel at the break, r6 pointing at gUnkCar" width="402" height="424">
+          </div>
+          <figcaption>The Registers panel at the break: <code>r6 = 020267c0</code>, which the panel names
+            <code>gUnkCar</code>.</figcaption>
         </figure>
 
         <div class="note warn">
           <span class="note-title">Where does the struct start?</span>
-          <p>The store is <code>[r4, #0x38]</code>, and the Registers panel shows <code>r4 = 02078d04</code>.
-            <code>02078d04 + 0x38 = 02078d3c</code>: the code treats <code>02078d04</code> as the struct's base,
-            so the field called <code>unk0c</code> above is really at offset <code>0x38</code> of a struct that
-            begins 44 bytes earlier than guessed. A store's base register and offset are the best evidence for
-            where a struct begins. Move the data object (select from the new base, <kbd>D</kbd>) and renumber
-            the fields.</p>
+          <p>The store is <code>[r6, #0xC]</code>, and the Registers panel shows <code>r6 = 020267c0</code>.
+            <code>020267c0 + 0xC = 020267cc</code>: the code treats <code>020267c0</code> as the struct's base,
+            so the guess in <a href="#uc1">use case 1</a> was right, and <code>unk0c</code> is at offset
+            <code>0xC</code>. A store's base register and offset are the best evidence for where a struct begins.
+            Had the base been another address, you would move the data object (select from the new base,
+            <kbd>D</kbd>) and renumber the fields.</p>
         </div>
 
         <ol class="steps" start="6" style="counter-reset: step 5">
@@ -512,10 +523,10 @@ cmake --build build -j$(sysctl -n hw.logicalcpu)</code></pre>
 
         <figure class="shot">
           <div class="frame" data-pending="the Breakpoints tab with the watchpoint, hit once">
-            <img src="img/breakpoints.png" alt="The Breakpoints panel listing the watchpoint" width="1000" height="260">
+            <img src="img/breakpoints.png" alt="The Breakpoints panel listing the watchpoint" width="937" height="308">
           </div>
-          <figcaption>The Breakpoints tab, with the watchpoint on <code>gUnkCtl.unk0c</code>, 2 bytes, hit
-            once.</figcaption>
+          <figcaption>The Breakpoints tab, with the write watchpoint on <code>gUnkCar.unk0c</code>, 4 bytes,
+            hit once.</figcaption>
         </figure>
       </section>
 
@@ -541,12 +552,12 @@ cmake --build build -j$(sysctl -n hw.logicalcpu)</code></pre>
 
         <figure class="shot">
           <div class="frame" data-pending="a value scan narrowed to a few candidates">
-            <img src="img/value-scan.png" alt="The Search panel's Value scan tab with a short list of results" width="1000" height="420">
+            <img src="img/value-scan.png" alt="The Search panel's Value scan tab with five results" width="937" height="308">
           </div>
-          <figcaption>A value scan. <span class="n">1</span> The condition. <span class="n">2</span>
-            <span class="ui">Next scan</span> narrows the list. <span class="n">3</span> What is left, with
-            addresses and current values. Here <em>increased</em> three times, 30 frames apart: 13
-            candidates.</figcaption>
+          <figcaption>A value scan for a value with no number to type: <em>unknown</em>, then
+            <em>increased</em> three times, 30 frames apart. Five candidates are left, among them
+            <code>020267cc</code>, <code>gUnkCar.unk0c</code> from <a href="#uc1">use case 1</a>, the frame
+            counter.</figcaption>
         </figure>
 
         <p>The <span class="ui">Bytes</span> tab finds a byte pattern (<code>12 34 ?? 56</code>) with
@@ -572,11 +583,12 @@ cmake --build build -j$(sysctl -n hw.logicalcpu)</code></pre>
 
         <figure class="shot">
           <div class="frame" data-pending="Data origin for 32 bytes loaded from a graphics file">
-            <img src="img/data-origin.png" alt="The Data origin panel tracing bytes back to a ROM file" width="1000" height="420">
+            <img src="img/data-origin.png" alt="The Data origin panel tracing a field back to a ROM file" width="937" height="308">
           </div>
-          <figcaption>Data origin for 32 bytes at <code>02216a00</code>. <span class="n">1</span> They were read
-            from the card from <code>/data/title/title_up_bg.NCGR</code> by code at <code>0204c41c</code>.
-            <span class="n">2</span> Where that file was loaded, and when.</figcaption>
+          <figcaption>Data origin for the 4 bytes of <code>gUnkCar.unk04</code> at <code>020267c4</code>:
+            computed by code at <code>020016f6</code> in <code>sub_02001540</code>, from data of the ROM file
+            <code>/packed.lz</code>, which code at <code>0200bfa0</code> read from the card to
+            <code>020272e0</code> in frame 0. On the right, the ROM files tracked as sources.</figcaption>
         </figure>
 
         <div class="note warn">
@@ -597,14 +609,15 @@ cmake --build build -j$(sysctl -n hw.logicalcpu)</code></pre>
 
         <p>The Memory view's <span class="menu">Layers &gt; File structure</span> marks the parts of a known
           graphics file in RAM (header, palette, tiles, map), and the Graphics panel draws such files: pick the
-          file from the panel's own list (its filter box takes part of a name, such as <code>title</code>).</p>
+          file from the panel's own list (its filter box takes part of a name, such as <code>ncgr</code>).</p>
 
         <figure class="shot">
           <div class="frame" data-pending="the File structure layer over the graphics file loaded above">
-            <img src="img/file-structure.png" alt="The Memory view with the File structure layer naming the parts of an NCGR file" width="1000" height="420">
+            <img src="img/file-structure.png" alt="The Memory view with the File structure layer naming the parts of graphics files" width="937" height="231">
           </div>
-          <figcaption>The File structure layer on the NCGR loaded above: the tooltip and the side labels name
-            each part.</figcaption>
+          <figcaption>The File structure layer on two graphics files in RAM: the side labels name each part,
+            here an NSCR's headers and map, then an NCGR's headers and its 8 tiles. Hovering a byte names its
+            part too.</figcaption>
         </figure>
       </section>
 
@@ -617,28 +630,28 @@ cmake --build build -j$(sysctl -n hw.logicalcpu)</code></pre>
             <kbd>X</kbd>. The Cross-references tab lists every instruction seen calling, reading or writing it,
             with counts. These are observed at run time, so they include accesses through pointers that static
             analysis can't see.</li>
-          <li>With the cursor on an instruction inside a function, the <span class="ui">Call graph</span> panel
-            (<span class="menu">View &gt; Call graph</span>) shows its callers and callees. Going to the
-            function with <kbd>G</kbd> is not enough: click an instruction in it, then the panel fills. Expand a
-            row to go further up or down.</li>
+          <li>Open the <span class="ui">Call graph</span> panel (<span class="menu">View &gt; Call graph</span>)
+            and put the cursor in a function: the panel shows its callers and callees. It follows the cursor only
+            while it is showing, so open it first. Expand a row to go further up or down.</li>
           <li>The Functions panel on the left lists every function that has run, with its size, mode (ARM or
             Thumb) and how often it ran. Type in its filter box to find one.</li>
         </ol>
 
         <div class="fig-row">
           <figure class="shot">
-            <div class="frame" data-pending="Cross-references to gUnkCtl.unk0c">
-              <img src="img/xrefs.png" alt="The Cross-references panel for gUnkCtl.unk0c" width="800" height="420">
+            <div class="frame" data-pending="Cross-references to gUnkCar.unk0c">
+              <img src="img/xrefs.png" alt="The Cross-references panel for gUnkCar.unk0c" width="937" height="308">
             </div>
-            <figcaption>Cross-references to <code>gUnkCtl.unk0c</code>: every instruction that wrote or read it
-              this session, and how often. Framed: the writes from one function.</figcaption>
+            <figcaption>Cross-references to <code>gUnkCar.unk0c</code>: the store in <code>sub_02001540</code>
+              that writes it every frame, and the code in <code>sub_02001254</code> that read it.</figcaption>
           </figure>
           <figure class="shot">
-            <div class="frame" data-pending="the call graph for UnkCtl_Update">
-              <img src="img/callgraph.png" alt="The Call graph panel for UnkCtl_Update" width="800" height="420">
+            <div class="frame" data-pending="the call graph for sub_02002160">
+              <img src="img/callgraph.png" alt="The Call graph panel for sub_02002160" width="937" height="308">
             </div>
-            <figcaption>The call graph for <code>UnkCtl_Update</code>: its callers and callees, with call counts
-              and call sites.</figcaption>
+            <figcaption>The call graph for <code>sub_02002160</code>: one caller, the main loop
+              <code>sub_02001540</code>, which called it 391 times from <code>02001aca</code>, and no
+              callees.</figcaption>
           </figure>
         </div>
 
@@ -705,10 +718,11 @@ cmake --build build -j$(sysctl -n hw.logicalcpu)</code></pre>
 
         <figure class="shot">
           <div class="frame" data-pending="the Coverage map of main RAM, showing executed code">
-            <img src="img/coverage.png" alt="The Coverage map of main RAM" width="1000" height="560">
+            <img src="img/coverage.png" alt="The Coverage map of main RAM" width="937" height="308">
           </div>
-          <figcaption>The Coverage map of main RAM, showing executed code. <kbd>Ctrl</kbd>+wheel zooms down to
-            single bytes; <span class="ui">Fit</span> shows the whole region.</figcaption>
+          <figcaption>The Coverage map of main RAM, showing executed code: the test ROM's code is the few
+            marked cells at the top. <kbd>Ctrl</kbd>+wheel zooms down to single bytes;
+            <span class="ui">Fit</span> shows the whole region.</figcaption>
         </figure>
       </section>
 
@@ -760,12 +774,12 @@ from dswb.client import Client
 # api.json is in the workbench folder of melonDS's settings folder
 c = Client.connect(agent="me", info_file=os.path.expanduser("~/.config/melonDS/workbench/api.json"))
 
-r = c.writes_list(addr=0x02078d30, size=0x4c)
+r = c.writes_list(addr=0x020267c0, size=0x28)
 print(r.total, "writes")
 for w in r.entries[:10]:
     print(hex(w.addr), w.size, hex(w.pc), w.new_value)
 
-c.breakpoint_set(kind="write", addr=0x02078d3c, size=2)
+c.breakpoint_set(kind="write", addr=0x020267cc, size=4)
 c.execution_control("resume")</code></pre>
 
         <p>Other useful calls: <code>search_scan</code> (<a href="#uc3">use case 3</a>), <code>origin_get</code>
@@ -790,11 +804,11 @@ c.execution_control("resume")</code></pre>
 
         <figure class="shot">
           <div class="frame" data-pending="the Recording panel">
-            <img src="img/recording-panel.png" alt="The Recording panel" width="1000" height="460">
+            <img src="img/recording-panel.png" alt="The Recording panel" width="937" height="308">
           </div>
-          <figcaption>The Recording panel (<span class="menu">View &gt; Recording</span>).
-            <span class="n">1</span> <span class="ui">Stop recording</span>, which also saves the session.
-            <span class="n">2</span> The write history filters, and where history is kept.</figcaption>
+          <figcaption>The Recording panel (<span class="menu">View &gt; Recording</span>):
+            <span class="ui">Stop recording</span>, which also saves the session; the switches; and the write
+            history filters, with where history is kept (<em>In memory</em>).</figcaption>
         </figure>
 
         <ol class="steps">
