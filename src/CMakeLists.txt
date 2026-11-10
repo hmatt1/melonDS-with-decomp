@@ -83,7 +83,33 @@ add_library(core STATIC
     tiny-AES-c/aes.c
     xxhash/xxhash.c
 
-    blip-buf/blip_buf.c)
+    blip-buf/blip_buf.c
+
+    workbench/Workbench.h
+    workbench/WBHooks.h
+    workbench/NitroROM.cpp
+    workbench/InstrOps.cpp
+    workbench/Recorder.cpp
+    workbench/Origin.cpp
+    workbench/Debugger.cpp
+    workbench/Expr.cpp
+    workbench/Session.cpp
+    workbench/Disasm.cpp
+    workbench/FlowDisasm.cpp
+    workbench/Explain.cpp)
+
+# DS Decomp Workbench: record layouts are generated from the shared schema
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+set(WB_SCHEMA "${CMAKE_CURRENT_SOURCE_DIR}/workbench/schema/workbench.schema.json")
+set(WB_GENERATOR "${CMAKE_CURRENT_SOURCE_DIR}/../tools/workbench/wbgen.py")
+set(WB_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/wbgen")
+add_custom_command(
+    OUTPUT "${WB_GEN_DIR}/WBRecords.h"
+    COMMAND Python3::Interpreter "${WB_GENERATOR}" --schema "${WB_SCHEMA}" --cpp-records "${WB_GEN_DIR}"
+    DEPENDS "${WB_SCHEMA}" "${WB_GENERATOR}"
+    COMMENT "Generating workbench record layouts")
+target_sources(core PRIVATE "${WB_GEN_DIR}/WBRecords.h")
+target_include_directories(core PUBLIC "${WB_GEN_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/workbench")
 
 if (ENABLE_GDBSTUB)
     message(NOTICE "Enabling GDB stub")

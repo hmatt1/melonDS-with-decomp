@@ -17,6 +17,7 @@
 */
 
 #include <stdio.h>
+#include "workbench/WBHooks.h"
 #include <string.h>
 #include "NDS.h"
 #include "DSi.h"
@@ -128,6 +129,7 @@ void ARMv5::UpdateDTCMSetting()
         NDS.JIT.Memory.RemapDTCM(newDTCMBase, newDTCMSize);
         DTCMBase = newDTCMBase;
         DTCMMask = newDTCMMask;
+        if (NDS.WB) NDS.WB->TcmChanged();
     }
 }
 
@@ -144,6 +146,8 @@ void ARMv5::UpdateITCMSetting()
     {
         ITCMSize = 0;
     }
+
+    if (NDS.WB) NDS.WB->TcmChanged();
 }
 
 
@@ -817,6 +821,7 @@ u32 ARMv5::CodeRead32(u32 addr, bool branch)
 
 void ARMv5::DataRead8(u32 addr, u32* val)
 {
+    WB_READ_HOOK(0, addr & ~0u, 1, val);
     if (!(PU_Map[addr>>12] & 0x01))
     {
         DataAbort();
@@ -844,6 +849,7 @@ void ARMv5::DataRead8(u32 addr, u32* val)
 
 void ARMv5::DataRead16(u32 addr, u32* val)
 {
+    WB_READ_HOOK(0, addr & ~1u, 2, val);
     if (!(PU_Map[addr>>12] & 0x01))
     {
         DataAbort();
@@ -873,6 +879,7 @@ void ARMv5::DataRead16(u32 addr, u32* val)
 
 void ARMv5::DataRead32(u32 addr, u32* val)
 {
+    WB_READ_HOOK(0, addr & ~3u, 4, val);
     if (!(PU_Map[addr>>12] & 0x01))
     {
         DataAbort();
@@ -902,6 +909,7 @@ void ARMv5::DataRead32(u32 addr, u32* val)
 
 void ARMv5::DataRead32S(u32 addr, u32* val)
 {
+    WB_READ_HOOK(0, addr & ~3u, 4, val);
     addr &= ~3;
 
     if (addr < ITCMSize)
@@ -923,6 +931,7 @@ void ARMv5::DataRead32S(u32 addr, u32* val)
 
 void ARMv5::DataWrite8(u32 addr, u8 val)
 {
+    WB_WRITE_HOOK(0, addr, 1, val);
     if (!(PU_Map[addr>>12] & 0x02))
     {
         DataAbort();
@@ -951,6 +960,7 @@ void ARMv5::DataWrite8(u32 addr, u8 val)
 
 void ARMv5::DataWrite16(u32 addr, u16 val)
 {
+    WB_WRITE_HOOK(0, addr, 2, val);
     if (!(PU_Map[addr>>12] & 0x02))
     {
         DataAbort();
@@ -981,6 +991,7 @@ void ARMv5::DataWrite16(u32 addr, u16 val)
 
 void ARMv5::DataWrite32(u32 addr, u32 val)
 {
+    WB_WRITE_HOOK(0, addr, 4, val);
     if (!(PU_Map[addr>>12] & 0x02))
     {
         DataAbort();
@@ -1011,6 +1022,7 @@ void ARMv5::DataWrite32(u32 addr, u32 val)
 
 void ARMv5::DataWrite32S(u32 addr, u32 val)
 {
+    WB_WRITE_HOOK(0, addr, 4, val);
     addr &= ~3;
 
     if (addr < ITCMSize)

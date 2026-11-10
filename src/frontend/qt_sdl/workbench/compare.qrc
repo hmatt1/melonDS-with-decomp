@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/compare">
+        <file alias="compare.py">../../../../tools/workbench/compare/compare.py</file>
+    </qresource>
+</RCC>

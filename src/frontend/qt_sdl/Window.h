@@ -26,6 +26,8 @@
 #include <QWidget>
 #include <QWindow>
 #include <QMainWindow>
+#include <QToolBar>
+#include <functional>
 #include <QImage>
 #include <QActionGroup>
 #include <QTimer>
@@ -39,6 +41,20 @@
 
 
 class EmuInstance;
+
+// simple secondary window; tells its owner when the user closes it
+class HelloWindow : public QWidget
+{
+public:
+    explicit HelloWindow(QWidget* parent) : QWidget(parent, Qt::Window) {}
+    std::function<void()> onClosed;
+protected:
+    void closeEvent(QCloseEvent* event) override
+    {
+        if (onClosed) onClosed();
+        QWidget::closeEvent(event);
+    }
+};
 class EmuThread;
 
 const int kMaxRecentROMs = 10;
@@ -48,7 +64,10 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 
 public:
-    explicit MainWindow(int id, EmuInstance* inst, QWidget* parent = nullptr);
+    // embedded: a plain child widget of parent (the decomp workbench's Game screen panel), never
+    // restored as a separate window
+    explicit MainWindow(int id, EmuInstance* inst, QWidget* parent = nullptr, bool embedded = false);
+    bool isEmbedded() const { return embedded; }
     ~MainWindow();
 
     EmuInstance* getEmuInstance() { return emuInstance; }
@@ -72,6 +91,7 @@ public:
     void drawScreen();
 
     bool preloadROMs(QStringList file, QStringList gbafile, bool boot);
+    void onWorkbenchBooted();
     QStringList splitArchivePath(const QString& filename, bool useMemberSyntax);
 
     void onAppStateChanged(Qt::ApplicationState state);
@@ -169,6 +189,8 @@ private slots:
     void onChangeIntegerScaling(bool checked);
     void onOpenNewWindow();
     void onChangeScreenFiltering(bool checked);
+    void onChangePixelGrid(bool checked);
+    void updatePixelGridMenu();
     void onChangeShowOSD(bool checked);
     void onChangeLimitFramerate(bool checked);
     void onChangeAudioSync(bool checked);
@@ -209,6 +231,9 @@ private:
 
     bool pauseOnLostFocus;
     bool pausedManually;
+    int settingsPauseDepth = 0;
+    void beginSettingsDialog();
+    void endSettingsDialog();
 
     int windowID;
     bool enabledSaved;
@@ -226,6 +251,7 @@ public:
     ScreenPanel* panel;
 
     bool hasMenu;
+    bool embedded = false;
 
     QAction* actOpenROM;
     QAction* actBootFirmware;
@@ -252,6 +278,9 @@ public:
     QAction* actEnableCheats;
     QAction* actSetupCheats;
     QAction* actROMInfo;
+    QAction* actWorkbench;
+    QAction* actRecording;
+    class WBStatusWidget* wbStatus = nullptr;
     QAction* actRAMInfo;
     QAction* actTitleManager;
     QAction* actMPNewInstance;
@@ -275,10 +304,14 @@ public:
     QAction* actPathSettings;
     QAction* actInterfaceSettings;
     QAction* actScreenSize[4];
+    QToolBar* toolbar = nullptr;
+    HelloWindow* helloWindow = nullptr;
+    QAction* actHelloWindow = nullptr;
+    void saveHelloWindowState();
     QActionGroup* grpScreenRotation;
     QAction* actScreenRotation[screenRot_MAX];
     QActionGroup* grpScreenGap;
-    QAction* actScreenGap[6];
+    QAction* actScreenGap[7];
     QActionGroup* grpScreenLayout;
     QAction* actScreenLayout[screenLayout_MAX];
     QAction* actScreenSwap;
@@ -291,6 +324,7 @@ public:
     QAction** actScreenAspectBot;
     QAction* actNewWindow;
     QAction* actScreenFiltering;
+    QAction* actPixelGrid = nullptr;   // null without a menu bar (hasMenu false)
     QAction* actShowOSD;
     QAction* actLimitFramerate;
     QAction* actAudioSync;

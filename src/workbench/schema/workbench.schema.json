@@ -1,0 +1,1078 @@
+{
+  "$comment": "DS Decomp Workbench schema. Single source of truth for recording record layouts, session file layout and the control/query API. C++ (src/workbench + frontend API) and Python (tools/workbench/python/dswb) are generated from this file by tools/workbench/wbgen.py. Do not edit generated files.",
+  "schema_version": 1,
+  "api_version": "1.1",
+
+  "enums": {
+    "Region": {
+      "type": "u16",
+      "doc": "Physical memory region. Records are keyed by (region, offset). Overlay regions are OverlayARM9Base + overlay id / OverlayARM7Base + overlay id.",
+      "values": {
+        "Unmapped": 0, "MainRAM": 1, "SharedWRAM": 2, "ARM7WRAM": 3, "ITCM": 4, "DTCM": 5,
+        "VRAM": 6, "Palette": 7, "OAM": 8, "BIOS9": 9, "BIOS7": 10, "IO9": 11, "IO7": 12,
+        "GBASlot": 13, "WifiRAM": 14,
+        "OverlayARM9Base": 256, "OverlayARM7Base": 512, "RegionMax": 768
+      }
+    },
+    "Cpu": { "type": "u8", "values": { "ARM9": 0, "ARM7": 1, "DMA9": 2, "DMA7": 3, "Card": 4, "Boot": 5 } },
+    "ByteFlag": {
+      "type": "u16", "flags": true,
+      "doc": "Bits of ByteRecord.flags",
+      "values": {
+        "Exec9": 1, "Exec7": 2, "Thumb": 4, "Arm": 8, "InstrStart": 16,
+        "Read9": 32, "Read7": 64, "Write9": 128, "Write7": 256,
+        "DmaRead": 512, "DmaWrite": 1024, "CardLoaded": 2048, "Decompressed": 4096,
+        "LiteralPool": 8192, "LastWriteDMA": 16384, "Tainted": 32768
+      }
+    },
+    "MemClass": { "type": "u8", "values": { "Untouched": 0, "Code": 1, "Data": 2, "CodeAndData": 3, "IO": 4 } },
+    "ProvenanceKind": { "type": "u8", "values": { "CardRead": 0, "Decompress": 1, "DMA": 2, "BootLoad": 3, "CpuCopy": 4 } },
+    "RecEventKind": {
+      "type": "u16",
+      "values": {
+        "RecordingOn": 1, "RecordingOff": 2, "HistoryOn": 3, "HistoryOff": 4, "OriginOn": 5, "OriginOff": 6,
+        "OverlayLoad": 7, "SourceAdded": 8, "SourceRemoved": 9, "SessionSaved": 10, "Reset": 11, "StateLoaded": 12
+      }
+    },
+    "CallKind": { "type": "u8", "values": { "Call": 0, "Exception": 1, "Interrupt": 2, "TailCall": 3 } },
+    "BreakKind": { "type": "u8", "values": { "Exec": 0, "Read": 1, "Write": 2, "Access": 3 } },
+    "EmuState": { "type": "u8", "values": { "NoGame": 0, "Running": 1, "Paused": 2, "Break": 3 } },
+    "SourceKind": { "type": "u8", "values": { "RomFile": 0, "Range": 1, "Register": 2, "Keypad": 3, "Touch": 4, "RTC": 5, "CodeConstant": 6 } },
+    "SessionSection": {
+      "type": "u32",
+      "values": {
+        "ByteRecords": 1, "WriteHistory": 2, "CallEdges": 3, "Provenance": 4, "Labels": 5, "LabelPages": 6,
+        "OverlayEvents": 7, "TcmEvents": 8, "RecEvents": 9, "Sources": 10, "BlockFrames": 11, "Modules": 12, "Readers": 13,
+        "FirstRun": 14, "FirstFrames": 16, "LabelMerges": 17
+      }
+    }
+  },
+
+  "records": {
+    "ByteRecord": {
+      "size": 32,
+      "doc": "Per-byte runtime record, allocated sparsely in 4KB pages on first touch.",
+      "fields": [
+        ["exec_count", "u32", "times an instruction covering this byte was executed"],
+        ["read_count", "u32", "CPU data reads"],
+        ["write_count", "u32", "CPU data writes"],
+        ["dma_read_count", "u32", "DMA reads (source)"],
+        ["dma_write_count", "u32", "DMA writes (destination)"],
+        ["last_writer_pc", "u32", "PC of the last CPU instruction that wrote this byte (DMA: source address)"],
+        ["last_write_frame", "u32", "frame number of the last write"],
+        ["flags", "u16", "ByteFlag bits"],
+        ["mem_class", "u8", "MemClass"],
+        ["last_writer_cpu", "u8", "Cpu of the last writer"]
+      ]
+    },
+    "WriteHistoryEntry": {
+      "size": 32,
+      "fields": [
+        ["timestamp", "u64", "system cycle counter"],
+        ["frame", "u32", ""],
+        ["pc", "u32", "writer PC (DMA: source address)"],
+        ["addr", "u32", "virtual address written"],
+        ["old_value", "u32", ""],
+        ["new_value", "u32", ""],
+        ["cpu", "u8", "Cpu"],
+        ["size", "u8", "1, 2 or 4"],
+        ["region", "u16", "Region of the written byte"]
+      ]
+    },
+    "CallEdge": {
+      "size": 28,
+      "fields": [
+        ["cpu", "u8", ""],
+        ["kind", "u8", "CallKind"],
+        ["thumb", "u8", "callee entered in Thumb mode"],
+        ["pad", "u8", ""],
+        ["call_site", "u32", "address of the calling instruction"],
+        ["callee", "u32", "entry address of the callee"],
+        ["caller_func", "u32", "entry of the function containing call_site, from the shadow stack (0 if unknown)"],
+        ["count", "u32", ""],
+        ["first_frame", "u32", ""],
+        ["last_frame", "u32", ""]
+      ]
+    },
+    "LabelMergeEntry": {
+      "size": 24,
+      "doc": "Where a data origin label that names several sources was first made: the two labels it joined, and the instruction that joined them.",
+      "fields": [
+        ["label", "u32", ""],
+        ["a", "u32", "the labels it joined"],
+        ["b", "u32", ""],
+        ["pc", "u32", "instruction being executed (a DMA or BIOS copy: the code that started it)"],
+        ["frame", "u32", ""],
+        ["cpu", "u8", ""],
+        ["op", "u8", "MergeOp"],
+        ["pad", "u16", ""]
+      ]
+    },
+    "FirstRunEntry": {
+      "size": 12,
+      "doc": "The function on the shadow call stack when an instruction first ran (names code reached only through branches).",
+      "fields": [
+        ["pc", "u32", "instruction address"],
+        ["func", "u32", "function entry"],
+        ["cpu", "u8", ""],
+        ["pad", "u8", ""],
+        ["pad2", "u16", ""]
+      ]
+    },
+    "ShadowFrame": {
+      "size": 20,
+      "fields": [
+        ["callee", "u32", "function entry"],
+        ["call_site", "u32", ""],
+        ["return_addr", "u32", ""],
+        ["sp", "u32", "stack pointer at call"],
+        ["kind", "u8", "CallKind"],
+        ["thumb", "u8", ""],
+        ["pad", "u16", ""]
+      ]
+    },
+    "ProvenanceEvent": {
+      "size": 48,
+      "fields": [
+        ["kind", "u8", "ProvenanceKind"],
+        ["cpu", "u8", ""],
+        ["channel", "u8", "DMA channel or SWI number"],
+        ["pad", "u8", ""],
+        ["frame", "u32", ""],
+        ["pc", "u32", "code that triggered the transfer"],
+        ["src_addr", "u32", "source virtual address (CardRead: ROM offset)"],
+        ["src_size", "u32", ""],
+        ["dst_addr", "u32", ""],
+        ["dst_size", "u32", ""],
+        ["rom_offset", "u32", "ROM offset of the first byte, 0xFFFFFFFF if not from ROM"],
+        ["file_id", "u32", "NitroFS file id, 0xFFFFFFFF if none"],
+        ["aux", "u32", "kind specific (decompression: SWI type)"],
+        ["timestamp", "u64", ""]
+      ]
+    },
+    "OverlayEvent": {
+      "size": 24,
+      "fields": [
+        ["frame", "u32", ""],
+        ["cpu", "u8", ""],
+        ["kind", "u8", "0 = loaded (card read into its range), 1 = evicted, 2 = loaded (its code ran after the range was rewritten)"],
+        ["overlay_id", "u16", ""],
+        ["ram_start", "u32", ""],
+        ["ram_end", "u32", ""],
+        ["timestamp", "u64", ""]
+      ]
+    },
+    "TcmEvent": {
+      "size": 24,
+      "fields": [
+        ["frame", "u32", ""],
+        ["itcm_size", "u32", ""],
+        ["dtcm_base", "u32", ""],
+        ["dtcm_size", "u32", ""],
+        ["timestamp", "u64", ""]
+      ]
+    },
+    "RecEvent": {
+      "size": 16,
+      "fields": [
+        ["frame", "u32", ""],
+        ["kind", "u16", "RecEventKind"],
+        ["value", "u16", ""],
+        ["timestamp", "u64", ""]
+      ]
+    },
+    "SessionHeader": {
+      "size": 96,
+      "fields": [
+        ["magic", "char[8]", "DSWBSESS"],
+        ["version", "u32", "schema_version"],
+        ["header_size", "u32", ""],
+        ["rom_sha1", "u8[20]", ""],
+        ["section_count", "u32", ""],
+        ["frame_start", "u32", ""],
+        ["frame_end", "u32", ""],
+        ["start_time", "u64", "unix seconds"],
+        ["end_time", "u64", "unix seconds"],
+        ["flags", "u32", "bit0 write history, bit1 data origin"],
+        ["melonds_version", "char[20]", ""],
+        ["reserved", "u8[8]", ""]
+      ]
+    },
+    "SessionSectionHeader": {
+      "size": 16,
+      "fields": [
+        ["id", "u32", "SessionSection"],
+        ["count", "u32", "number of entries"],
+        ["size", "u64", "payload size in bytes"]
+      ]
+    },
+    "PageHeader": {
+      "size": 8,
+      "doc": "Precedes each 4KB page of ByteRecords or taint labels in a session file",
+      "fields": [
+        ["region", "u16", ""],
+        ["pad", "u16", ""],
+        ["page", "u32", "offset >> 12"]
+      ]
+    }
+  },
+
+  "api": {
+    "transport": "JSON-RPC 2.0, one JSON object per line, over TCP on 127.0.0.1. Two listeners: the read endpoint and the control endpoint. The first request on each connection must be 'auth' with the per-launch token.",
+    "types": {
+      "RegisterSet": {
+        "fields": [
+          ["cpu", "string", "arm9 or arm7"],
+          ["r", "u32[]", "r0-r15 (r15 = address of the executing instruction)"],
+          ["cpsr", "u32", ""],
+          ["mode", "string", "usr, fiq, irq, svc, abt, und, sys"],
+          ["thumb", "bool", ""],
+          ["flags", "string", "NZCVQ flags as letters, '-' when clear"],
+          ["spsr", "u32", "0 in usr/sys"]
+        ]
+      },
+      "TcmLayout": {
+        "fields": [ ["itcm_size", "u32", ""], ["dtcm_base", "u32", ""], ["dtcm_size", "u32", ""] ]
+      },
+      "RecordingState": {
+        "fields": [
+          ["enabled", "bool", ""],
+          ["write_history", "bool", ""],
+          ["data_origin", "bool", ""],
+          ["available", "bool", "false when the JIT is on"],
+          ["unavailable_reason", "string", ""],
+          ["session_frame_start", "u32", ""],
+          ["frames_recorded", "u32", ""],
+          ["history_entries", "u64", ""],
+          ["history_skipped", "u64", "writes the history filter left out"],
+          ["history_bulk_threshold", "u32", ""],
+          ["history_skip_stack", "bool", ""],
+          ["history_skip_unchanged", "bool", ""],
+          ["history_wrapped", "bool", "history is full and its oldest writes are being dropped"],
+          ["history_oldest_frame", "u32", "frame of the oldest write still kept"],
+          ["history_file_mb", "u32", "size of the history file, 0 = in memory"],
+          ["history_keep_mb", "u32", "disk budget for saved sessions' history files"],
+          ["history_cap", "u64", ""],
+          ["pages_allocated", "u32", ""],
+          ["source_count", "u32", ""],
+          ["origin_follow_addresses", "bool", "loads take the labels of their address registers (table lookups)"],
+          ["origin_seeded_files", "u32", "archived files labelled by content once unpacked (data origin)"]
+        ]
+      },
+      "BreakInfo": {
+        "fields": [
+          ["cpu", "string", ""],
+          ["pc", "u32", ""],
+          ["reason", "string", "breakpoint, watchpoint, step, pause"],
+          ["breakpoint_id", "i32", "-1 if none"],
+          ["access_addr", "u32", ""],
+          ["access_value", "u32", ""],
+          ["access_size", "u32", ""],
+          ["frame", "u32", ""]
+        ]
+      },
+      "Status": {
+        "fields": [
+          ["api_version", "string", ""],
+          ["state", "string", "no_game, running, paused, break"],
+          ["frame", "u32", ""],
+          ["rom_sha1", "string", "hex, empty without a game"],
+          ["rom_title", "string", ""],
+          ["rom_gamecode", "string", ""],
+          ["recording", "RecordingState", ""],
+          ["registers", "RegisterSet[]", "ARM9 then ARM7"],
+          ["tcm", "TcmLayout", ""],
+          ["break_info", "BreakInfo?", "present in the break state"],
+          ["fps", "f64", "current emulation speed in frames per second"],
+          ["jit_enabled", "bool", ""],
+          ["memory_write_enabled", "bool", ""]
+        ]
+      },
+      "MemoryReadParams": {
+        "fields": [
+          ["addr", "addr", "virtual address"],
+          ["size", "u32", "bytes, max 1048576", 256],
+          ["cpu", "string", "arm9 or arm7", "arm9"],
+          ["decode", "string", "hex, u8, u16, u32, s8, s16, s32, fx32 (20.12), fx16 (4.12), ascii, sjis", "hex"]
+        ]
+      },
+      "MemoryReadResult": {
+        "fields": [
+          ["addr", "u32", ""],
+          ["size", "u32", ""],
+          ["region", "string", "region name of the first byte"],
+          ["hex", "string", "raw bytes as hex"],
+          ["values", "json[]", "decoded values when decode is not hex"]
+        ]
+      },
+      "MetadataParams": {
+        "fields": [
+          ["addr", "addr", ""],
+          ["size", "u32", "", 4],
+          ["cpu", "string", "", "arm9"],
+          ["group", "string", "byte, instruction (one entry per instruction start), block (one entry per block_size bytes)", "block"],
+          ["block_size", "u32", "", 4],
+          ["scope", "string", "session (current recording) or all (merged with saved sessions)", "session"]
+        ]
+      },
+      "MetadataEntry": {
+        "fields": [
+          ["addr", "u32", ""],
+          ["size", "u32", ""],
+          ["region", "string", ""],
+          ["exec", "u32", ""],
+          ["read", "u32", ""],
+          ["write", "u32", ""],
+          ["dma_read", "u32", ""],
+          ["dma_write", "u32", ""],
+          ["flags", "string[]", "ByteFlag names set on any byte"],
+          ["mem_class", "string", "untouched, code, data, code_and_data, io"],
+          ["mode", "string", "arm, thumb, mixed or empty"],
+          ["classification", "string", "arm, thumb, mixed, data or unknown (UI_REQUIREMENTS CD-1)"],
+          ["confidence", "string", "confirmed (recorded), override (set in the knowledge store), defined (a data object), inferred (inside a function, never executed) or none"],
+          ["last_writer_pc", "u32", ""],
+          ["last_writer_cpu", "string", ""],
+          ["last_write_frame", "u32", ""],
+          ["first_frame", "u32", "first frame any byte of the range was touched, this session only (frames don't line up across sessions); 0 with first_seen false"],
+          ["first_seen", "bool", "the range was touched this session"],
+          ["first_exec", "u32", "first frame a byte of the range was executed (with first_kinds)"],
+          ["first_read", "u32", ""], ["first_write", "u32", ""], ["first_dma", "u32", "first DMA read or write"],
+          ["first_kinds", "string[]", "which of exec, read, write, dma happened, so a first frame of 0 is told from never"],
+          ["overlay", "i32", "overlay id owning the bytes, -1 for static"]
+        ]
+      },
+      "MetadataResult": { "fields": [ ["entries", "MetadataEntry[]", "at most 65536 per call"], ["truncated", "bool", "the range continues past the last entry"],
+                                      ["next_addr", "u32", "where to continue when truncated"] ] },
+      "WritesListParams": {
+        "fields": [
+          ["addr", "addr", ""],
+          ["size", "u32", "bytes from addr; 0 = all memory (use with a writer range)", 1],
+          ["frame_from", "u32", "", 0],
+          ["frame_to", "u32", "", 4294967295],
+          ["cpu", "string", "any, arm9, arm7, dma", "any"],
+          ["limit", "u32", "", 200],
+          ["skip", "u32", "paging: leave out this many of the newest matches (the page is the next `limit` older ones)", 0],
+          ["writer_from", "addr", "only writes by code in [writer_from, writer_to): which addresses does a function write?", 0],
+          ["writer_to", "addr", "", 4294967295],
+          ["session", "string", "a saved session's history instead of the running recording's: a file name from sessions.list (or a path)", ""]
+        ]
+      },
+      "WriteEntry": {
+        "fields": [
+          ["frame", "u32", ""], ["timestamp", "u64", ""], ["cpu", "string", ""], ["pc", "u32", ""],
+          ["addr", "u32", ""], ["size", "u32", ""], ["old_value", "u32", ""], ["new_value", "u32", ""]
+        ]
+      },
+      "WritesListResult": {
+        "fields": [ ["entries", "WriteEntry[]", "oldest first; at most 100000 per call"], ["truncated", "bool", "older matches exist beyond this page (query again with skip += len(entries))"],
+                    ["total", "u64", "matching writes in all of history"], ["history_enabled", "bool", ""],
+                    ["history_wrapped", "bool", "history dropped its oldest writes: entries before oldest_frame are missing"],
+                    ["oldest_frame", "u32", "frame of the oldest write history still has"],
+                    ["last_writer_pc", "u32", "from byte records, always available while recording"], ["last_writer_cpu", "string", ""],
+                    ["last_write_frame", "u32", "frame of the last write, from byte records"],
+                    ["history_source", "string", "live (the running recording), history_file (all of a saved session's history) or session_file (the newest writes a session file keeps)"] ]
+      },
+      "SessionInfo": {
+        "fields": [
+          ["file", "string", "session file name in the project's sessions folder; pass it to writes.list as session"],
+          ["path", "string", ""],
+          ["saved", "string", "when it was saved, yyyy-MM-dd HH:mm:ss"],
+          ["frame_start", "u32", ""], ["frame_end", "u32", ""],
+          ["bytes", "u64", "size of the session file"],
+          ["history_file", "bool", "all of its write history is kept in a .dswbh file next to it"],
+          ["history_entries", "u64", "writes in that history file (0 without one: the session file keeps the newest 4 million)"],
+          ["history_wrapped", "bool", "the history file dropped the session's oldest writes"],
+          ["history_bytes", "u64", "size of the history file"]
+        ]
+      },
+      "SessionListResult": { "fields": [ ["sessions", "SessionInfo[]", "newest first"], ["dir", "string", ""], ["history_keep_mb", "u32", "disk budget for history files"] ] },
+      "CoverageParams": {
+        "fields": [
+          ["addr", "addr", "start address, 0 = whole region given by 'region'", 0],
+          ["size", "u32", "", 0],
+          ["region", "string", "main_ram, itcm, dtcm, shared_wram, arm7_wram, all", "all"],
+          ["kind", "string", "exec, read, write, dma", "exec"],
+          ["unknown_only", "bool", "only ranges outside functions known to the knowledge store", false],
+          ["scope", "string", "session or all", "session"],
+          ["limit", "u32", "", 1000],
+          ["writer_from", "addr", "kind write: only bytes whose last CPU writer is in [writer_from, writer_to) - what a function wrote, without write history", 0],
+          ["writer_to", "addr", "", 4294967295]
+        ]
+      },
+      "CoverageRange": {
+        "fields": [ ["start", "u32", ""], ["end", "u32", "exclusive"], ["count", "u64", "sum of counters"], ["mode", "string", "arm, thumb, mixed (exec only)"], ["overlay", "i32", ""] ]
+      },
+      "CoverageResult": { "fields": [ ["ranges", "CoverageRange[]", ""], ["total_bytes", "u64", ""], ["truncated", "bool", ""],
+                                      ["next_addr", "u32", "when truncated: query again from here"] ] },
+      "CallsParams": { "fields": [ ["addr", "addr", "function entry or any address inside it"], ["cpu", "string", "", "arm9"], ["limit", "u32", "", 100] ] },
+      "CallEdgeInfo": {
+        "fields": [ ["call_site", "u32", ""], ["callee", "u32", ""], ["caller_func", "u32", ""], ["count", "u32", ""], ["kind", "string", ""], ["first_frame", "u32", ""], ["last_frame", "u32", ""] ]
+      },
+      "CallsResult": { "fields": [ ["function", "u32", "resolved function entry"], ["callers", "CallEdgeInfo[]", ""], ["callees", "CallEdgeInfo[]", ""] ] },
+      "CallStackParams": { "fields": [ ["cpu", "string", "", "arm9"] ] },
+      "StackFrameInfo": { "fields": [ ["callee", "u32", ""], ["call_site", "u32", ""], ["return_addr", "u32", ""], ["sp", "u32", ""], ["kind", "string", ""], ["name", "string", "name from the knowledge store"] ] },
+      "CallStackResult": { "fields": [ ["cpu", "string", ""], ["frames", "StackFrameInfo[]", "innermost last"] ] },
+      "OriginParams": { "fields": [ ["addr", "addr", ""], ["size", "u32", "", 4], ["cpu", "string", "", "arm9"] ] },
+      "OriginRangesParams": {
+        "fields": [
+          ["source", "string", "a data origin source by name, or the end of its name after a '/' or ':' ('Scripts/config/vehicles.luac'); empty: any labelled byte", ""],
+          ["region", "string", "main_ram, itcm, dtcm, shared_wram, arm7_wram, vram, all", "main_ram"],
+          ["addr", "addr", "start address, 0 = whole region", 0],
+          ["size", "u32", "", 0],
+          ["limit", "u32", "", 1000]
+        ]
+      },
+      "OriginRange": { "fields": [ ["start", "u32", ""], ["end", "u32", "exclusive"] ] },
+      "OriginRangesResult": { "fields": [ ["ranges", "OriginRange[]", "runs of bytes whose label includes a matching source"], ["sources", "string[]", "the sources that matched"],
+                                          ["total_bytes", "u64", ""], ["truncated", "bool", ""], ["next_addr", "u32", "when truncated: query again from here"] ] },
+      "ProvenanceInfo": {
+        "fields": [ ["kind", "string", ""], ["frame", "u32", ""], ["pc", "u32", ""], ["src_addr", "u32", ""], ["src_size", "u32", ""],
+                    ["dst_addr", "u32", ""], ["dst_size", "u32", ""], ["rom_offset", "u32", ""], ["file_id", "i32", ""], ["file_name", "string", ""], ["detail", "string", ""],
+                    ["archive_member", "string", "for reads of a detected archive (TrackMania's vfs.zip) or of a NARC or SDAT container: the file inside and part read, e.g. 'Graphics/x.nsbmd, compressed data +0x200' or '0003.ncgr, stored data +0x10'"] ]
+      },
+      "TaintInfo": { "fields": [ ["addr", "u32", ""], ["size", "u32", ""], ["label", "u32", ""], ["sources", "string[]", "content files (NitroFS data) first, then code and file-system tables"],
+                                 ["how", "string", "how the label was first made when it names several sources: computed, table_lookup, mixed_bytes, math_unit, copy or source_added ('' for one source). origin.label gives the whole tree"],
+                                 ["how_pc", "u32", "the instruction that made it"], ["how_cpu", "string", ""], ["how_frame", "u32", "the frame it was made in"],
+                                 ["how_steps", "u32", "1, or how many times that instruction added to its own result (a running total), from how_frame_first"],
+                                 ["how_frame_first", "u32", ""] ] },
+      "LabelNode": {
+        "fields": [
+          ["label", "u32", ""],
+          ["sources", "string[]", "a label naming one source: that source; otherwise the first 8"],
+          ["source_count", "u32", ""],
+          ["how", "string", "source (names one source), computed, table_lookup, mixed_bytes, math_unit, copy or source_added"],
+          ["pc", "u32", "the instruction that joined the parts (a DMA or BIOS copy: the code that started it)"],
+          ["cpu", "string", ""],
+          ["frame", "u32", "the frame the label was first made in"],
+          ["steps", "u32", "merges this node stands for: more than 1 when the same instruction kept adding a part to its own result (a running total)"],
+          ["frame_first", "u32", "frame of the first of those steps"],
+          ["parts", "u32[]", "indexes into nodes: what was joined, oldest first"],
+          ["parts_more", "u32", "parts left out of the list"]
+        ]
+      },
+      "OriginLabelParams": { "fields": [ ["label", "u32", "a label id from origin.get"], ["max_nodes", "u32", "", 256] ] },
+      "OriginLabelResult": { "fields": [ ["nodes", "LabelNode[]", "nodes[0] is the label; parts point at later nodes"], ["truncated", "bool", "max_nodes was reached"] ] },
+      "ArchiveMemberInfo": {
+        "fields": [
+          ["index", "u32", "file index: ZIP central directory order, also the index the game uses"],
+          ["path", "string", "path inside the archive"],
+          ["vfs_entry", "i32", "record in the VFS index file (vfs.bin), -1 if none"],
+          ["size", "u32", ""], ["packed_size", "u32", ""],
+          ["method", "string", "stored or deflate"],
+          ["rom_offset", "u32", "ROM offset of the member's compressed data"],
+          ["header_rom_offset", "u32", "ROM offset of the member's local header"],
+          ["crc", "u32", ""],
+          ["readable", "bool", "content unpacked and the CRC matched"],
+          ["duplicate_of", "string", "path of an earlier member with identical content, empty if none"]
+        ]
+      },
+      "ArchiveSegment": {
+        "fields": [
+          ["addr", "u32", "RAM start of a run of bytes equal to an archived file's content"],
+          ["size", "u32", ""],
+          ["path", "string", "archived file"],
+          ["member_index", "u32", ""],
+          ["member_offset", "u32", "offset of addr within the unpacked file"],
+          ["member_size", "u32", ""],
+          ["alternatives", "string[]", "other archived files with the same bytes there"],
+          ["best_match", "string", "archive.locate: the archived file that matches the most bytes at this place; differs from path when the copy belongs to a similar file"],
+          ["writer_pc", "u32", "code that last wrote these RAM bytes (the unpacker or a copy loop), 0 if not recorded"],
+          ["loads", "ProvenanceInfo[]", "card reads of this file's bytes in the archive, newest first: their pc is the loader"]
+        ]
+      },
+      "OriginResult": { "fields": [ ["chain", "ProvenanceInfo[]", "from the ROM towards the queried bytes; a 'computed' step names code that produced bytes rather than copying them"], ["taint", "TaintInfo[]", "runs of equal labels"], ["file_reads", "ProvenanceInfo[]", "card reads of the ROM files named by the labels, with the code that loaded them (newest first)"], ["origin_enabled", "bool", ""],
+                                       ["state_loaded_frame", "u32", "a savestate was loaded at this frame: labels were rebuilt from content then, so memory not recognised has no origin; 0 = none"],
+                                    ["archive", "ArchiveSegment[]", "runs of the queried bytes equal to files of a detected ROM archive, by content (works without recording); at most 256, in address order"],
+                                    ["archive_truncated", "bool", "more runs follow: query again from the end of the last one"],
+                                    ["archive_status", "string", "none (no archive detected), indexing, ready or failed: <reason>"],
+                                    ["containers", "ArchiveSegment[]", "runs of the queried bytes equal to files inside NARC or SDAT containers, by content (works without recording); at most 256, in address order. Their paths are '/file.narc:member'"],
+                                    ["containers_truncated", "bool", "more runs follow: query again from the end of the last one"],
+                                    ["containers_status", "string", "none (no NARC or SDAT files), indexing or ready"] ] },
+      "ArchiveListParams": { "fields": [ ["filter", "string", "case-insensitive substring of the path", ""], ["offset", "u32", "", 0], ["limit", "u32", "", 200] ] },
+      "ArchiveListResult": {
+        "fields": [
+          ["status", "string", "none, indexing, ready or failed: <reason>"],
+          ["kind", "string", "octane_vfs"],
+          ["archive_file", "string", "NitroFS path of the archive"],
+          ["index_file", "string", "NitroFS path of the index (vfs.bin)"],
+          ["summary", "string", ""],
+          ["member_count", "u32", ""],
+          ["matched", "u32", "members passing the filter"],
+          ["members", "ArchiveMemberInfo[]", ""]
+        ]
+      },
+      "ArchiveLocateParams": { "fields": [ ["path", "string", "archived file path (case-insensitive), or empty to use index", ""], ["index", "i32", "", -1] ] },
+      "ArchiveLocateResult": {
+        "fields": [
+          ["status", "string", ""],
+          ["member", "ArchiveMemberInfo", ""],
+          ["ram", "ArchiveSegment[]", "where the file's unpacked content is in main RAM now, largest first"],
+          ["loads", "ProvenanceInfo[]", "card reads of the file's bytes in the archive, newest first"]
+        ]
+      },
+      "ContainerInfo": {
+        "fields": [
+          ["path", "string", "NitroFS path of the container file"], ["file_id", "u32", ""],
+          ["format", "string", "narc or sdat"],
+          ["packed", "string", "empty, or the BIOS compression the whole file is packed in (lz10, lz11, huffman, rle): its files then have no ROM offset of their own"],
+          ["rom_offset", "u32", ""], ["rom_size", "u32", ""], ["size", "u32", "as unpacked"],
+          ["member_count", "u32", "files inside, nested ones included"], ["nested_count", "u32", "files inside nested containers"]
+        ]
+      },
+      "ContainerMemberInfo": {
+        "fields": [
+          ["index", "u32", "position in its container's list, nested files included"],
+          ["name", "string", "path inside the container: the name table's names, symbol names (SDAT) or the index with an extension from the data (0003.ncgr); nested files as 'sub.narc/0001.ncgr'"],
+          ["path", "string", "'/file.narc:name', as data origin labels name it"],
+          ["kind", "string", "from the data's magic: NCGR, BMD0, SSEQ ... (empty when it has none)"],
+          ["form", "string", "stored, or the BIOS compression the file is packed in on its own"],
+          ["size", "u32", "as unpacked"], ["stored_size", "u32", "as stored in its container"],
+          ["rom_offset", "u32", "ROM offset of its stored bytes; 0xFFFFFFFF inside a container packed whole"],
+          ["depth", "u32", "0 for the container's own files, 1 inside a nested container, ..."],
+          ["nested_in", "string", "name of the container file it is nested in, empty if none"],
+          ["readable", "bool", "content available; files over 16 MB are listed but not searched for by content"],
+          ["duplicate_of", "string", "path of an earlier file with identical content, empty if none"]
+        ]
+      },
+      "ContainerListParams": { "fields": [ ["container", "string", "only this container (NitroFS path, case-insensitive); empty for all", ""],
+                                           ["filter", "string", "case-insensitive substring of the files' paths ('/file.narc:name')", ""],
+                                           ["offset", "u32", "", 0], ["limit", "u32", "", 200] ] },
+      "ContainerListResult": {
+        "fields": [
+          ["status", "string", "none, indexing or ready"],
+          ["summary", "string", ""],
+          ["containers", "ContainerInfo[]", "every container, or the one asked for"],
+          ["member_count", "u32", "files in those containers"],
+          ["matched", "u32", "files passing the filter"],
+          ["members", "ContainerMemberInfo[]", ""]
+        ]
+      },
+      "ContainerLocateParams": { "fields": [ ["path", "string", "'/file.narc:name' (case-insensitive)", ""] ] },
+      "ContainerLocateResult": {
+        "fields": [
+          ["status", "string", ""],
+          ["container", "ContainerInfo", ""],
+          ["member", "ContainerMemberInfo", ""],
+          ["ram", "ArchiveSegment[]", "where the file's unpacked content is in main RAM now, largest first"],
+          ["loads", "ProvenanceInfo[]", "card reads of the file's bytes (of the whole container when it is packed whole), newest first"]
+        ]
+      },
+      "ScreenParams": { "fields": [ ["screen", "string", "both, top, bottom", "both"] ] },
+      "ScreenResult": { "fields": [ ["frame", "u32", ""], ["top_png", "string", "base64"], ["bottom_png", "string", "base64"] ] },
+      "DisasmParams": { "fields": [ ["addr", "addr", ""], ["count", "u32", "", 32], ["cpu", "string", "", "arm9"], ["mode", "string", "auto (recorded Thumb flag), arm, thumb", "auto"],
+                                    ["overlay", "i32", "view this overlay's code (an overlay epoch) where another one is loaded: its own recorded records, and its bytes from the ROM (unpacked when compressed); -1 = what is in memory now", -1] ] },
+      "DisasmLine": { "fields": [ ["addr", "u32", ""], ["bytes", "string", ""], ["text", "string", ""], ["thumb", "bool", ""], ["executed", "bool", ""], ["target", "u32", "branch target or referenced address, 0 if none"],
+                                  ["classification", "string", "arm, thumb, mixed, data or unknown (UI_REQUIREMENTS CD-1)"],
+                                  ["confidence", "string", "confirmed (recorded), override (set in the knowledge store), defined (a data object), inferred (inside a function, never executed) or none"],
+                                  ["conflict", "bool", "an override disagrees with what was recorded"], ["why", "string", "the evidence, in one line"] ] },
+      "DisasmResult": { "fields": [ ["lines", "DisasmLine[]", ""],
+                                    ["overlay_loaded", "bool", "with overlay: that overlay is loaded now, so the lines show memory as it is"] ] },
+      "XrefsParams": { "fields": [ ["addr", "addr", ""], ["cpu", "string", "", "arm9"], ["overlay", "i32", "overlay whose imported references and names apply in overlay code; -1 = the overlay loaded now. Observed references are by address, whichever overlay was loaded", -1],
+                                   ["limit", "u32", "", 1000] ] },
+      "XrefInfo": {
+        "fields": [ ["kind", "string", "call, jump, read, write or data_ref (imported), call, write, read or literal (observed: a literal pool word holding the address, from the code that loads it)"],
+                    ["from_addr", "u32", "the referencing instruction (a write: its PC)"],
+                    ["function", "u32", "entry of the function containing from_addr, 0 if none is known"], ["function_name", "string", ""],
+                    ["source", "string", "static (imported from a static analysis export) or runtime (recorded)"],
+                    ["count", "u64", "observed calls or writes, 0 when not counted"] ]
+      },
+      "XrefsResult": { "fields": [ ["addr", "u32", ""], ["name", "string", "knowledge-store name of addr"], ["refs", "XrefInfo[]", "imported first, then calls, writes, reads and literal-pool loads"],
+                                   ["truncated", "bool", ""] ] },
+      "OverlaysParams": { "fields": [ ["events", "u32", "newest load events to return", 1000] ] },
+      "OverlayTableEntry": {
+        "fields": [ ["id", "u32", ""], ["cpu", "string", ""], ["ram_start", "u32", ""], ["ram_end", "u32", "exclusive, including the BSS"], ["ram_size", "u32", ""], ["bss_size", "u32", ""],
+                    ["file", "string", "NitroFS path of its file"], ["file_id", "u32", ""], ["compressed", "bool", "compressed in the ROM (backward LZ)"],
+                    ["module", "string", "knowledge-store module name"],
+                    ["loaded", "bool", "in RAM now, by the recording's overlay tracking (main RAM overlays)"] ]
+      },
+      "OverlayEventInfo": { "fields": [ ["frame", "u32", ""], ["kind", "string", "load (card read into its range), load_ran (its code ran after the range was rewritten) or evicted"],
+                                        ["cpu", "string", ""], ["overlay_id", "u32", ""], ["ram_start", "u32", ""], ["ram_end", "u32", ""] ] },
+      "OverlaysResult": { "fields": [ ["overlays", "OverlayTableEntry[]", "ARM9 then ARM7, in table order"], ["events", "OverlayEventInfo[]", "newest first"],
+                                      ["events_total", "u32", "events recorded this session"] ] },
+      "SearchBytesParams": { "fields": [ ["pattern", "string", "hex bytes, ?? for any byte: '12 34 ?? 56' or '1234??56'"],
+                                         ["region", "string", "main_ram, or all (main RAM, shared WRAM, DTCM and ITCM)", "all"], ["limit", "u32", "at most 100000", 2000] ] },
+      "SearchStringParams": { "fields": [ ["text", "string", ""], ["encoding", "string", "ascii (Latin-1), sjis (Shift-JIS) or utf16le", "ascii"],
+                                          ["region", "string", "main_ram or all", "all"], ["limit", "u32", "at most 100000", 2000] ] },
+      "SearchMatch": { "fields": [ ["addr", "u32", ""], ["preview", "string", "the 16 bytes there as ASCII, '.' for others"], ["name", "string", "knowledge-store name with offset"] ] },
+      "SearchResult": { "fields": [ ["matches", "SearchMatch[]", "in address order"], ["truncated", "bool", "more matches follow"], ["size", "u32", "bytes searched for"] ] },
+      "SearchScanParams": {
+        "fields": [
+          ["scan_id", "u32", "0 = a first scan; otherwise narrow down that scan (scans belong to the connection, which keeps the newest 8)", 0],
+          ["type", "string", "first scan: u8, u16, u32, s32 or fx32 (20.12); next scans keep the first scan's", "u32"],
+          ["condition", "string", "equal, not_equal, greater or less (with value); unknown (first scan: every value); changed, unchanged, increased or decreased (next scans: against the previous scan)", "equal"],
+          ["value", "json?", "a number, or a string: decimal, 0x hex, or a decimal such as 1.5 for fx32; within the type's range (u32: 0 to 0xFFFFFFFF, so scan as s32 for negative values)"],
+          ["region", "string", "first scan: main_ram or all (main RAM, shared WRAM, DTCM and ITCM)", "main_ram"],
+          ["limit", "u32", "candidates to return, at most 100000", 2000]
+        ]
+      },
+      "ScanMatch": { "fields": [ ["addr", "u32", ""], ["raw", "u32", "the value as stored"], ["value", "f64", "decoded by the scan's type"], ["name", "string", "knowledge-store name with offset"] ] },
+      "SearchScanResult": { "fields": [ ["scan_id", "u32", "pass it to the next scan"], ["type", "string", ""], ["candidates", "u32", "addresses still matching"],
+                                        ["matches", "ScanMatch[]", "the first limit candidates, in address order"], ["truncated", "bool", ""], ["frame", "u32", "frame the values were read in"] ] },
+      "Empty": { "fields": [] },
+      "Ok": { "fields": [ ["ok", "bool", ""], ["message", "string", ""] ] },
+      "AuthParams": { "fields": [ ["token", "string", ""], ["agent", "string", "agent name: knowledge-store edits made on this connection are attributed to it (empty: 'agent')", ""] ] },
+      "AuthResult": { "fields": [ ["ok", "bool", ""], ["endpoint", "string", "read or control"], ["api_version", "string", ""],
+                                  ["agent_session", "string", "tag of this connection's edits in the change log"] ] },
+      "KbFunctionParams": { "fields": [ ["addr", "addr", "entry address"], ["size", "u32", "bytes; 0 = keep the current size or leave unknown", 0],
+                                        ["mode", "string", "arm, thumb or auto (from the recorded instruction mode)", "auto"], ["name", "string", "", ""],
+                                        ["cpu", "string", "", "arm9"], ["overlay", "i32", "overlay id for overlay code; -1 = the overlay loaded now", -1] ] },
+      "KbNameParams": { "fields": [ ["addr", "addr", ""], ["name", "string", "empty removes the name"], ["cpu", "string", "", "arm9"], ["overlay", "i32", "", -1] ] },
+      "KbDataParams": { "fields": [ ["addr", "addr", ""], ["size", "u32", "0 = size of the type", 0], ["type", "string", "C type, e.g. u32, CarParams, u8[16]", ""],
+                                    ["name", "string", "", ""], ["cpu", "string", "", "arm9"], ["overlay", "i32", "", -1] ] },
+      "KbTypeParams": { "fields": [ ["definition", "string", "C struct, union, enum or typedef"] ] },
+      "KbAnnotationParams": {
+        "fields": [
+          ["id", "u32", "existing annotation to edit; 0 = new", 0],
+          ["target_kind", "string", "address, range, function, data_object, struct_field, type, register, overlay, savestate", "address"],
+          ["addr", "addr", "address (address, range, function, data_object, register targets)", 0],
+          ["end", "addr", "end address, exclusive (range; register: PC range end)", 0],
+          ["cpu", "string", "", "arm9"],
+          ["reg", "string", "r0-r15 (register targets)", ""],
+          ["whole_function", "bool", "register targets: the whole function containing addr instead of a PC range", true],
+          ["type_name", "string", "struct_field and type targets", ""],
+          ["field_name", "string", "struct_field targets", ""],
+          ["overlay_id", "i32", "overlay targets", -1],
+          ["savestate", "string", "savestate targets: path", ""],
+          ["comment", "string", ""],
+          ["tags", "string", "comma separated", ""]
+        ]
+      },
+      "KbIdParams": { "fields": [ ["id", "u32", ""] ] },
+      "KbAddrParams": { "fields": [ ["addr", "addr", ""], ["cpu", "string", "", "arm9"], ["overlay", "i32", "", -1] ] },
+      "KbFunctionUpdateParams": {
+        "fields": [
+          ["addr", "addr", "any address inside the function"], ["cpu", "string", "", "arm9"], ["overlay", "i32", "", -1],
+          ["name", "string?", "omitted fields are left as they are; an empty string clears"],
+          ["signature", "string?", "C prototype"],
+          ["subsystem", "string?", ""],
+          ["source_file", "string?", "path of the function's C source, relative to the source root"]
+        ]
+      },
+      "KbTypeNameParams": { "fields": [ ["name", "string", ""] ] },
+      "KbBuildRecordParams": {
+        "fields": [
+          ["addr", "addr", "any address inside the function"], ["cpu", "string", "", "arm9"], ["overlay", "i32", "", -1],
+          ["compiler", "string", "", ""], ["flags", "string", "", ""], ["score", "f64", "match percentage"],
+          ["matched", "bool", ""], ["diff", "string", "JSON array of {orig, compiled, status}", "[]"],
+          ["commit", "string", "", ""], ["source_file", "string", "", ""]
+        ]
+      },
+      "KbCompareParams": {
+        "fields": [
+          ["addr", "addr", "any address inside the function"], ["cpu", "string", "", "arm9"], ["overlay", "i32", "", -1],
+          ["record", "bool", "record the result as a build result (false: a dry run)", true]
+        ]
+      },
+      "KbCompareResult": {
+        "fields": [
+          ["ok", "bool", "the compare command answered with a result, matched or not"], ["score", "f64", ""], ["matched", "bool", ""],
+          ["compiler", "string", ""], ["flags", "string", ""],
+          ["diff", "string", "JSON array of {orig, compiled, status}; status is match, diff, arg, reloc, insert or delete"],
+          ["recorded", "bool", "the result was recorded as a build result"],
+          ["recorded_by_tool", "bool", "the compare tool recorded the build result itself"],
+          ["stage", "string", "where the compare stopped: compile, extract, diff or done"],
+          ["engine", "string", "the diff engine and its version", ""],
+          ["log", "string", "compiler output, kept short", ""],
+          ["explanation", "string", "a known failure in one sentence, with the next step", ""],
+          ["contract_errors", "string[]", "how the command's output breaks the result contract"],
+          ["message", "string", "the error, when ok is false"]
+        ]
+      },
+      "BuildSetupParams": { "fields": [ ["addr", "addr", "a function whose module's compiler settings to check; 0 for the default", 0], ["cpu", "string", "", "arm9"], ["overlay", "i32", "", -1] ] },
+      "BuildSetupRow": {
+        "fields": [
+          ["id", "string", "python, compiler, objdiff, source_root, settings or self_test"], ["label", "string", ""],
+          ["ok", "bool", ""], ["optional", "bool", ""], ["message", "string", "what is set, or what is wrong and how to fix it"],
+          ["fix", "string", "what the row's button in the Source and diff panel does"]
+        ]
+      },
+      "BuildSetupResult": { "fields": [ ["rows", "BuildSetupRow[]", "the setup checklist, as the Source and diff panel shows it"], ["ready", "bool", "every required row passes"] ] },
+      "AssetListParams": { "fields": [ ["filter", "string", "part of the path or the kind (NCGR, BTX0 ...)", ""], ["limit", "u32", "", 200] ] },
+      "AssetFileInfo": {
+        "fields": [
+          ["path", "string", "a ROM file, a file inside a container (/a.narc:name) or inside the game archive (/vfs.zip:name)"],
+          ["kind", "string", "NCLR, NCGR, NSCR, NCER, BTX0 or BMD0"], ["size", "u32", ""],
+          ["source", "string", "rom_file, container or archive"], ["form", "string", "the compression the ROM file is packed in, or empty"]
+        ]
+      },
+      "AssetListResult": { "fields": [ ["status", "string", "none, indexing or ready"], ["summary", "string", ""], ["matched", "u32", ""], ["files", "AssetFileInfo[]", ""] ] },
+      "AssetParams": {
+        "fields": [
+          ["path", "string", "a graphics file (asset.list's path); empty for RAM", ""],
+          ["addr", "addr", "RAM: an address inside a graphics file's copy (size 0), or the start of a range to read as it is", 0],
+          ["size", "u32", "RAM: bytes to read as they are; 0 for the file whose copy holds addr", 0]
+        ]
+      },
+      "AssetPartInfo": {
+        "fields": [
+          ["offset", "u32", "from the file's start"], ["size", "u32", ""],
+          ["kind", "string", "header, section, palette, tiles, map, cells, oam, texture, texture_4x4, texture_index, tex_palette, dictionary, other"],
+          ["index", "i32", "palette, cell or texture number; -1 for a whole block"], ["label", "string", ""]
+        ]
+      },
+      "AssetTextureInfo": {
+        "fields": [
+          ["name", "string", ""], ["format", "string", "A3I5, 4-colour, 16-colour, 256-colour, 4x4, A5I3 or direct"],
+          ["width", "u32", ""], ["height", "u32", ""], ["offset", "u32", "texel data, from the file's start"], ["size", "u32", ""],
+          ["palette", "string", "the palette it is drawn with by default (same name, else the first)"]
+        ]
+      },
+      "AssetDescribeResult": {
+        "fields": [
+          ["path", "string", "the graphics file, empty for a RAM range that is none"], ["format", "string", "empty when the bytes are no graphics file"],
+          ["size", "u32", ""], ["ram_addr", "u32", "where the bytes were read from RAM, 0 when from the ROM"],
+          ["unreadable_from", "u32", "0 when all of it was understood; else where it stopped making sense"], ["problem", "string", ""],
+          ["parts", "AssetPartInfo[]", "what each range of the file is"],
+          ["palettes", "u32", "NCLR: palettes"], ["colors_per_palette", "u32", "NCLR: 16 or 256"],
+          ["tiles", "u32", "NCGR: tiles"], ["bpp", "u32", "NCGR: 4 or 8"], ["tiles_x", "u32", ""], ["tiles_y", "u32", ""],
+          ["map_width", "u32", "NSCR: pixels"], ["map_height", "u32", ""], ["cells", "u32", "NCER: cells"],
+          ["textures", "AssetTextureInfo[]", "BTX0, BMD0: the TEX0 textures"], ["texture_palettes", "string[]", ""],
+          ["ram_copies", "u32[]", "where the file is in main RAM now (whole or in part)"],
+          ["video_memory", "string[]", "where its tiles, map, palettes or textures are in VRAM and palette RAM now"]
+        ]
+      },
+      "AssetRenderParams": {
+        "fields": [
+          ["path", "string", "as asset.describe", ""], ["addr", "addr", "", 0], ["size", "u32", "", 0],
+          ["part", "string", "palette, tiles, map, cell, texture or raw; empty for the file's own", ""],
+          ["index", "i32", "cell or texture number", 0],
+          ["palette", "i32", "4bpp palette number, or the texture palette; -1 for the default", -1],
+          ["palette_path", "string", "an NCLR to draw with; empty: the same-named one, else palette RAM, else the first", ""],
+          ["bpp", "u32", "raw: 2, 4, 8 or 16", 4], ["tiled", "bool", "raw: 8x8 characters (else linear rows)", true],
+          ["width", "u32", "raw: pixels per row", 256], ["palette_offset", "u32", "raw: first colour", 0],
+          ["scale", "u32", "1 to 8", 1]
+        ]
+      },
+      "AssetRenderResult": {
+        "fields": [
+          ["png", "string", "base64 PNG"], ["width", "u32", ""], ["height", "u32", ""],
+          ["palette", "string", "the palette it was drawn with"], ["tiles", "string", "the NCGR a map or cell was drawn with"]
+        ]
+      },
+      "KbImportParams": { "fields": [ ["path", "string", "static analysis export (JSON: tool, functions, labels, xrefs, decompiled)"] ] },
+      "KbImportResult": { "fields": [ ["ok", "bool", ""], ["count", "u32", "entries imported"] ] },
+      "KbDecodeParams": { "fields": [ ["start", "addr", ""], ["end", "addr", "exclusive"], ["mode", "string", "arm, thumb, data, or clear to remove overrides in the range"],
+                                      ["cpu", "string", "", "arm9"], ["overlay", "i32", "overlay id for overlay code; -1 = the overlay loaded now", -1] ] },
+      "KbBookmarkParams": { "fields": [ ["addr", "addr", ""], ["name", "string", "", ""], ["cpu", "string", "", "arm9"] ] },
+      "KbWriteResult": { "fields": [ ["ok", "bool", ""], ["id", "u32", "row written, when known"], ["message", "string", ""] ] },
+      "KbChangesParams": { "fields": [ ["after_id", "u32", "only changes newer than this change id", 0], ["limit", "u32", "", 100] ] },
+      "KbChange": {
+        "fields": [ ["id", "u32", ""], ["table", "string", ""], ["row_id", "u32", ""], ["action", "string", "insert, update or delete"],
+                    ["author", "string", ""], ["author_kind", "string", "person, agent or system"], ["agent_session", "string", ""],
+                    ["created_at", "string", ""], ["undone", "bool", ""] ]
+      },
+      "KbChangesResult": { "fields": [ ["changes", "KbChange[]", "newest first"] ] },
+      "KbListParams": {
+        "fields": [
+          ["kind", "string", "functions, labels, data_objects, types, annotations, bookmarks, decode_overrides or modules"],
+          ["filter", "string", "case-insensitive substring of the name or the hex address (data objects: also the type; types: the name; annotations: the comment or a tag; decode overrides: the address or mode; modules: the name or ROM file)", ""],
+          ["author", "string", "all, people, agents, or an author's name (not modules)", "all"],
+          ["cpu", "string", "any, arm9 or arm7 (not types)", "any"],
+          ["module", "string", "module name, e.g. arm9, ov9_0003, ram9_main (not types)", ""],
+          ["addr", "addr", "only entries overlapping [addr, end) (not types; annotations without an address or function are left out)", 0],
+          ["end", "addr", "exclusive; 0 with an addr: that address only; both 0: no address filter", 0],
+          ["id", "u32", "only the row with this id (0 = any)", 0],
+          ["status", "string", "functions: not_started, partially_matched or matched", ""],
+          ["target_kind", "string", "annotations: address, range, function, data_object, struct_field, type, register, overlay or savestate", ""],
+          ["tag", "string", "annotations: only those with this tag (case-insensitive)", ""],
+          ["conflicts_only", "bool", "decode_overrides: only those the recording disagrees with (the Annotations panel's decode conflicts)", false],
+          ["offset", "u32", "paging: skip this many matches", 0],
+          ["limit", "u32", "at most 100000; 0 returns only the total", 1000]
+        ]
+      },
+      "KbFunctionInfo": {
+        "fields": [
+          ["id", "u32", ""], ["addr", "u32", "entry address"], ["size", "u32", "bytes, 0 if unknown"], ["mode", "string", "arm or thumb"],
+          ["cpu", "string", ""], ["module", "string", ""], ["overlay", "i32", "overlay id of its module, -1 for static code"],
+          ["name", "string", "empty or sub_<addr>: not yet renamed"], ["signature", "string", "C prototype"], ["subsystem", "string", ""],
+          ["source_file", "string", "as stored: relative to the source root, or absolute"],
+          ["status", "string", "not_started, partially_matched or matched (follows the newest build result)"],
+          ["last_score", "f64", "score of the newest build result, -1 without one"],
+          ["author", "string", ""], ["author_kind", "string", "person, agent or system"],
+          ["exec_count", "u32", "times its entry ran this session (the Functions panel's Calls column); 0 when not recorded"]
+        ]
+      },
+      "KbLabelInfo": {
+        "fields": [ ["id", "u32", ""], ["addr", "u32", ""], ["cpu", "string", ""], ["module", "string", ""], ["overlay", "i32", ""],
+                    ["name", "string", ""], ["author", "string", ""], ["author_kind", "string", ""] ]
+      },
+      "KbDataObjectInfo": {
+        "fields": [ ["id", "u32", ""], ["addr", "u32", ""], ["size", "u32", "bytes (the type's size when none was given)"], ["cpu", "string", "arm9, arm7, or any for data outside the ROM's modules"],
+                    ["module", "string", "empty for data outside the ROM's modules"], ["overlay", "i32", ""], ["region", "string", "memory region of data outside the modules"],
+                    ["name", "string", "empty: unnamed (the window shows data_<addr>)"], ["type", "string", "C type"],
+                    ["owner_function", "u32", "entry of the function it belongs to, 0 if none"], ["author", "string", ""], ["author_kind", "string", ""] ]
+      },
+      "KbTypeField": {
+        "fields": [ ["name", "string", ""], ["ctype", "string", ""], ["offset", "u32", ""], ["size", "u32", "size of one element"], ["count", "u32", "array length, 1 if not an array"],
+                    ["bit_offset", "i32", "bit-fields: first bit, -1 otherwise"], ["bit_width", "u32", ""] ]
+      },
+      "KbTypeInfo": {
+        "fields": [ ["id", "u32", ""], ["name", "string", ""], ["kind", "string", "struct, union, enum or typedef"], ["size", "i32", "-1 when the layout could not be resolved"],
+                    ["definition", "string", "C source"], ["fields", "KbTypeField[]", "the resolved layout, as the Memory panel names struct fields"],
+                    ["author", "string", ""], ["author_kind", "string", ""] ]
+      },
+      "KbAnnotationInfo": {
+        "fields": [
+          ["id", "u32", ""], ["target_kind", "string", ""],
+          ["has_addr", "bool", "addr and end are set (address, range, function and data_object targets, register targets with a PC range)"],
+          ["addr", "u32", ""], ["end", "u32", "exclusive"], ["cpu", "string", "empty for targets without an address or function (types, overlays, savestates)"], ["module", "string", ""],
+          ["function", "u32", "entry of the annotated function (function and register targets), 0 if none"],
+          ["function_id", "u32", ""], ["data_object_id", "u32", ""],
+          ["type_name", "string", "struct_field and type targets"], ["field_name", "string", ""], ["reg", "string", "register targets"],
+          ["overlay_id", "i32", "overlay targets, -1 otherwise"], ["savestate", "string", ""],
+          ["comment", "string", ""], ["tags", "string[]", ""],
+          ["author", "string", ""], ["author_kind", "string", ""], ["created", "string", ""], ["updated", "string", ""]
+        ]
+      },
+      "KbBookmarkInfo": {
+        "fields": [ ["id", "u32", ""], ["addr", "u32", ""], ["cpu", "string", ""], ["name", "string", ""], ["author", "string", ""], ["author_kind", "string", ""] ]
+      },
+      "KbDecodeOverrideInfo": {
+        "fields": [ ["id", "u32", ""], ["start", "u32", ""], ["end", "u32", "exclusive"], ["cpu", "string", ""],
+                    ["module", "string", "the overlay it belongs to; empty: it applies whatever is loaded there"], ["overlay", "i32", ""],
+                    ["mode", "string", "arm, thumb or data"], ["author", "string", ""], ["author_kind", "string", ""],
+                    ["conflict", "string", "what the recording disagrees with, e.g. 'marked data, but executed 12 times'; empty if nothing"] ]
+      },
+      "KbModuleInfo": {
+        "fields": [ ["id", "u32", ""], ["name", "string", ""], ["kind", "string", "static, overlay, autoload or region"], ["cpu", "string", ""],
+                    ["overlay_id", "i32", "-1 if not an overlay"], ["load", "u32", "load address"], ["size", "u32", ""], ["bss", "u32", ""],
+                    ["end", "u32", "load + size + bss"], ["rom_file", "string", ""], ["compressed", "bool", ""] ]
+      },
+      "KbListResult": {
+        "fields": [
+          ["kind", "string", ""],
+          ["total", "u32", "matches before paging"],
+          ["truncated", "bool", "more matches follow: query again with offset = next_offset"],
+          ["next_offset", "u32", ""],
+          ["functions", "KbFunctionInfo[]?", "sorted by address; only the list of the requested kind is present"],
+          ["labels", "KbLabelInfo[]?", "sorted by address"],
+          ["data_objects", "KbDataObjectInfo[]?", "sorted by address"],
+          ["types", "KbTypeInfo[]?", "sorted by name"],
+          ["annotations", "KbAnnotationInfo[]?", "oldest first"],
+          ["bookmarks", "KbBookmarkInfo[]?", "oldest first"],
+          ["decode_overrides", "KbDecodeOverrideInfo[]?", "sorted by CPU and start"],
+          ["modules", "KbModuleInfo[]?", ""]
+        ]
+      },
+      "KbFunctionGetParams": {
+        "fields": [
+          ["addr", "addr", "any address inside the function", 0], ["cpu", "string", "", "arm9"], ["overlay", "i32", "overlay id; -1 = the overlay loaded now", -1],
+          ["id", "u32", "a function id (from kb.list) instead of addr", 0],
+          ["attempts", "u32", "Compare attempts to return, newest first", 50],
+          ["source", "bool", "include the source file's text (only for files inside the source root set in Workbench settings)", true]
+        ]
+      },
+      "KbBuildResultInfo": {
+        "fields": [ ["id", "u32", ""], ["created", "string", ""], ["compiler", "string", ""], ["flags", "string", ""], ["score", "f64", ""], ["matched", "bool", ""],
+                    ["diff", "string", "JSON array of {orig, compiled, status}"], ["commit", "string", ""], ["source_file", "string", ""], ["author", "string", ""] ]
+      },
+      "KbFunctionDetail": {
+        "fields": [
+          ["function", "KbFunctionInfo", ""],
+          ["display_name", "string", "the name the window shows (sub_<addr> when unnamed)"],
+          ["source_path", "string", "source_file resolved against the source root; empty without a source file"],
+          ["source_status", "string", "ok, none (no source file recorded), not_requested, outside_source_root (the text is only given for files inside it), missing, too_large or unreadable"],
+          ["source_text", "string", "the file's text when source_status is ok"],
+          ["attempts", "KbBuildResultInfo[]", "Compare attempts, newest first (the Source and diff panel's list)"],
+          ["decompiler_tool", "string", "tool of the imported decompiler output, empty without one"],
+          ["decompiled", "string", "imported decompiler output as the tool wrote it"],
+          ["decompiled_named", "string", "the same with knowledge-store names in place of the tool's placeholders and addresses, as the Decompiler panel shows it"],
+          ["annotations", "KbAnnotationInfo[]", "annotations on the function, its registers, and addresses and ranges inside it"]
+        ]
+      },
+      "SubscribeParams": { "fields": [ ["events", "string[]", "breakpoint_hit, paused, resumed, recording_changed, frames_done, input_done; empty = all", []] ] },
+      "BootParams": { "fields": [ ["path", "string", "ROM path; empty = reboot the current ROM", ""] ] },
+      "ExecutionParams": {
+        "fields": [
+          ["action", "string", "pause, resume, step, run_frames, break"],
+          ["count", "u32", "frames for run_frames, instructions for step", 1],
+          ["cpu", "string", "cpu to step", "arm9"],
+          ["wait", "bool", "for run_frames and step: reply after completion", true]
+        ]
+      },
+      "ExecutionResult": { "fields": [ ["state", "string", ""], ["frame", "u32", ""], ["pc", "u32", "ARM9 PC, or stepped CPU PC"], ["interrupted", "bool", "the person paused or a breakpoint hit first"] ] },
+      "TouchPoint": { "fields": [ ["x", "u32", ""], ["y", "u32", ""] ] },
+      "InputParams": {
+        "fields": [
+          ["buttons", "string[]", "a, b, x, y, l, r, start, select, up, down, left, right, lid", []],
+          ["touch", "TouchPoint?", "bottom screen touch"],
+          ["frames", "u32", "", 1],
+          ["capture", "bool", "return both screens after the input", true]
+        ]
+      },
+      "InputResult": { "fields": [ ["frame", "u32", ""], ["top_png", "string", ""], ["bottom_png", "string", ""], ["overridden", "bool", "the person's input took precedence at least once"],
+                                     ["interrupted", "bool", "the game was paused (or stopped) before the frames ran out, or newer input replaced this"] ] },
+      "StateParams": { "fields": [ ["path", "string", "file path; empty = use slot", ""], ["slot", "u32", "1-8", 1] ] },
+      "BreakpointParams": {
+        "fields": [
+          ["kind", "string", "exec, read, write, access"],
+          ["addr", "addr", ""],
+          ["size", "u32", "", 1],
+          ["cpu", "string", "arm9, arm7, any", "arm9"],
+          ["condition", "string", "expression, e.g. 'r0 == 0x10 && [sp+4].w > 3'", ""],
+          ["enabled", "bool", "", true],
+          ["temporary", "bool", "delete after the first hit", false]
+        ]
+      },
+      "BreakpointInfo": {
+        "fields": [ ["id", "i32", ""], ["kind", "string", ""], ["addr", "u32", ""], ["size", "u32", ""], ["cpu", "string", ""], ["condition", "string", ""],
+                    ["enabled", "bool", ""], ["temporary", "bool", ""], ["hit_count", "u32", ""] ]
+      },
+      "BreakpointHit": { "fields": [ ["id", "i32", ""], ["cpu", "string", ""], ["pc", "u32", ""], ["frame", "u32", ""], ["access_addr", "u32", ""], ["access_value", "u32", ""], ["access_size", "u32", ""], ["write", "bool", ""] ] },
+      "BreakpointClearParams": { "fields": [ ["id", "i32", "-1 = all", -1] ] },
+      "BreakpointListResult": { "fields": [ ["breakpoints", "BreakpointInfo[]", ""], ["hits", "BreakpointHit[]", "most recent last"] ] },
+      "BreakpointUpdateParams": { "fields": [ ["id", "i32", ""], ["enabled", "bool?", "omitted: left as it is"],
+                                              ["condition", "string?", "expression, e.g. 'r0 == 0x10'; an empty string removes it; omitted: left as it is"] ] },
+      "OriginSourceSpec": {
+        "fields": [
+          ["kind", "string", "rom_file, archive_file (a file inside the game archive), container_file (a file inside a NARC or SDAT), range, register, keypad, touch, rtc"],
+          ["name", "string", "label shown on derived values; default derived from the target", ""],
+          ["file", "string", "NitroFS path, arm9.bin, arm7.bin or overlay_NNNN.bin (rom_file); path inside the archive (archive_file); '/file.narc:name' (container_file)", ""],
+          ["addr", "addr", "range start (range)", 0],
+          ["size", "u32", "range size (range)", 0],
+          ["cpu", "string", "", "arm9"],
+          ["reg", "u32", "register number (register)", 0]
+        ]
+      },
+      "OriginSourceInfo": { "fields": [ ["id", "u32", ""], ["kind", "string", ""], ["name", "string", ""], ["enabled", "bool", ""] ] },
+      "AddrRange": { "fields": [ ["start", "addr", ""], ["end", "addr", "exclusive"] ] },
+      "RecordingParams": {
+        "fields": [
+          ["enabled", "bool?", "recording switch"],
+          ["write_history", "bool?", ""],
+          ["data_origin", "bool?", ""],
+          ["history_cap", "u64?", "entries"],
+          ["history_include", "AddrRange[]?", "write history keeps only writes to these ranges (empty: everywhere)"],
+          ["history_exclude_writers", "AddrRange[]?", "write history skips writes by code in these ranges"],
+          ["history_bulk_threshold", "u32?", "write history skips the bytes of a sequential run (copy, fill, unpacking) beyond this many; 0 keeps everything (default 1024)"],
+          ["history_skip_stack", "bool?", "write history skips CPU writes near the writer's stack pointer: spills and locals (default on)"],
+          ["history_skip_unchanged", "bool?", "write history skips writes that store the value already there (default on)"],
+          ["history_file_mb", "u32?", "keep write history in a file of this many MB in the project folder (about 32,000 writes per MB; 0 = in memory). Starts history afresh"],
+          ["save_session", "bool?", "save a session file now and keep recording (File > Save recording session now)"],
+          ["history_keep_mb", "u32?", "disk budget for saved sessions' history files (.dswbh); the oldest are deleted first, never the newest (default 2048)"],
+          ["origin_all_rom_files", "bool?", "make every ROM file a source (the default)"],
+          ["origin_follow_addresses", "bool?", "follow table lookups: a loaded value also takes the labels of its address registers (off by default)"],
+          ["sources_add", "OriginSourceSpec[]", "", []],
+          ["sources_remove", "u32[]", "source ids", []]
+        ]
+      },
+      "RecordingResult": { "fields": [ ["recording", "RecordingState", ""], ["sources", "OriginSourceInfo[]", ""], ["session_file", "string", "path of the session file saved when recording turned off"] ] },
+      "MemoryWriteParams": { "fields": [ ["addr", "addr", ""], ["hex", "string", "bytes to write"], ["cpu", "string", "", "arm9"] ] },
+      "UiShowParams": {
+        "fields": [
+          ["cpu", "string?", "arm9 or arm7. On its own, the window follows that CPU's PC. With an address, the window stays on the address"],
+          ["addr", "addr?", "put the cursor here. Turns off follow-PC, and Back returns to where the person was"],
+          ["sel_addr", "addr?", "start of the highlighted range. Write history, data origin, the inspector, cross-references and coverage follow it. Omitted with sel_size: the cursor"],
+          ["sel_size", "u32?", "length of the highlighted range, in bytes. Omitted: 1 when a selection or addr is set. 0 means 1"],
+          ["panel", "string?", "panel to open and focus: disasm, memory, history, origin, xrefs, source, decompiler, or a dock name such as dock_disasm"],
+          ["note", "string?", "status-bar message, so the person knows why the view moved"]
+        ]
+      },
+      "UiShowResult": {
+        "fields": [
+          ["cpu", "string", "arm9 or arm7, as the window shows it now"],
+          ["addr", "u32", "the cursor"],
+          ["sel_addr", "u32", "highlighted range start"],
+          ["sel_size", "u32", "highlighted range length"],
+          ["panel", "string", "dock name of the panel opened, empty if none was asked for"],
+          ["follow_pc", "bool", "the disassembly is following the PC"]
+        ]
+      },
+      "UiCaptureParams": {
+        "fields": [
+          ["panel", "string?", "capture this panel (its dock, or its window if it floats). Omitted: the whole workbench window"],
+          ["max_width", "u32", "scale the image down to this width; 0 keeps the native size", 1600]
+        ]
+      },
+      "UiCaptureResult": {
+        "fields": [
+          ["png", "string", "PNG, base64"],
+          ["width", "u32", ""],
+          ["height", "u32", ""],
+          ["panel", "string", "dock name, empty for the whole window"],
+          ["stale", "bool", "the view was still fetching when the wait ran out"]
+        ]
+      },
+      "EventBreakpointHit": { "fields": [ ["hit", "BreakpointHit", ""], ["break_info", "BreakInfo", ""] ] },
+      "EventState": { "fields": [ ["state", "string", ""], ["frame", "u32", ""], ["reason", "string", ""] ] },
+      "EventRecording": { "fields": [ ["recording", "RecordingState", ""], ["frame", "u32", ""] ] }
+    },
+    "methods": [
+      ["auth", "both", "AuthParams", "AuthResult", "Authenticate the connection with the per-launch token. Must be the first call."],
+      ["events.subscribe", "both", "SubscribeParams", "Ok", "Subscribe this connection to pushed event notifications."],
+      ["status.get", "read", "Empty", "Status", "Emulator, recording and CPU state."],
+      ["memory.read", "read", "MemoryReadParams", "MemoryReadResult", "Read a range by virtual address with an optional typed decode."],
+      ["metadata.get", "read", "MetadataParams", "MetadataResult", "Recorded byte records for a range, aggregated per byte, instruction or block."],
+      ["writes.list", "read", "WritesListParams", "WritesListResult", "Write history for an address or range, filtered by frame window and CPU, of the running recording or a saved session."],
+      ["sessions.list", "read", "Empty", "SessionListResult", "Saved sessions of this game, newest first, and whether each kept all of its write history."],
+      ["coverage.get", "read", "CoverageParams", "CoverageResult", "Executed (or read/written/DMA) ranges, optionally only outside known functions."],
+      ["calls.get", "read", "CallsParams", "CallsResult", "Observed callers and callees of a function."],
+      ["callstack.get", "read", "CallStackParams", "CallStackResult", "Current shadow call stack of a CPU."],
+      ["origin.get", "read", "OriginParams", "OriginResult", "Provenance chain and taint labels of a range."],
+      ["origin.label", "read", "OriginLabelParams", "OriginLabelResult", "How a data origin label naming several sources was made: which instruction joined which labels, when, and how, as a tree."],
+      ["origin.ranges", "read", "OriginRangesParams", "OriginRangesResult", "Where a source's data is: RAM ranges whose data origin label includes it."],
+      ["screen.capture", "read", "ScreenParams", "ScreenResult", "Both screens as PNG."],
+      ["archive.list", "read", "ArchiveListParams", "ArchiveListResult", "Files of a detected ROM archive (TrackMania DS's vfs.zip/vfs.bin)."],
+      ["archive.locate", "read", "ArchiveLocateParams", "ArchiveLocateResult", "Where an archived file is in RAM, and the card reads (loader code) of its bytes."],
+      ["container.list", "read", "ContainerListParams", "ContainerListResult", "NARC and SDAT containers in the ROM (packed whole or not) and the files inside them, nested ones included."],
+      ["container.locate", "read", "ContainerLocateParams", "ContainerLocateResult", "Where a file inside a container is in RAM, and the card reads (loader code) of its bytes."],
+      ["asset.list", "read", "AssetListParams", "AssetListResult", "The game's graphics files (NCLR, NCGR, NSCR, NCER, NSBTX, NSBMD) in the ROM, in containers and in the game archive."],
+      ["asset.describe", "read", "AssetParams", "AssetDescribeResult", "What a graphics file (or the RAM copy holding an address, or a RAM range) is, range by range: header, palettes, tiles, map, cells, textures; and where it is in RAM and VRAM."],
+      ["asset.render", "read", "AssetRenderParams", "AssetRenderResult", "A PNG of a palette, tiles, a map, a cell or a texture, as the Graphics panel draws it; or of raw bytes with a chosen bpp and width."],
+      ["disasm.get", "read", "DisasmParams", "DisasmResult", "Disassembly decoded by each line's classification: recorded mode, override, data object or function."],
+      ["breakpoints.list", "read", "Empty", "BreakpointListResult", "Breakpoints and recent hits."],
+      ["xrefs.get", "read", "XrefsParams", "XrefsResult", "References to an address: imported static references, and observed calls, writes, reads and literal-pool loads, as the Cross-references panel shows them."],
+      ["overlays.list", "read", "OverlaysParams", "OverlaysResult", "The ROM's overlay table, which overlays are loaded now, and the recorded load events, as the Overlays panel shows them."],
+      ["search.bytes", "read", "SearchBytesParams", "SearchResult", "Find a byte pattern (with wildcards) in RAM."],
+      ["search.string", "read", "SearchStringParams", "SearchResult", "Find ASCII, Shift-JIS or UTF-16 text in RAM."],
+      ["search.scan", "read", "SearchScanParams", "SearchScanResult", "Value scan: a first scan, then narrow it down across pauses (equal, changed, increased, ...), as the Search panel's Value scan does."],
+      ["recording.get", "read", "Empty", "RecordingResult", "Recording state and data origin sources."],
+      ["game.boot", "control", "BootParams", "Ok", "Boot a ROM (or reboot the current one)."],
+      ["game.reset", "control", "Empty", "Ok", "Reset the console."],
+      ["execution.control", "control", "ExecutionParams", "ExecutionResult", "Pause, resume, step one instruction, break, or run N frames then pause."],
+      ["input.send", "control", "InputParams", "InputResult", "Hold buttons and/or touch the screen for N frames. The person's input always wins."],
+      ["state.save", "control", "StateParams", "Ok", "Save a savestate."],
+      ["state.load", "control", "StateParams", "Ok", "Load a savestate."],
+      ["breakpoint.set", "control", "BreakpointParams", "BreakpointInfo", "Set an execute, read, write or access breakpoint."],
+      ["breakpoint.clear", "control", "BreakpointClearParams", "Ok", "Remove a breakpoint (or all)."],
+      ["breakpoint.update", "control", "BreakpointUpdateParams", "BreakpointInfo", "Enable, disable or change the condition of a breakpoint, keeping its hit count."],
+      ["recording.configure", "control", "RecordingParams", "RecordingResult", "Switch recording, write history and data origin, and edit data origin sources."],
+      ["memory.write", "control", "MemoryWriteParams", "Ok", "Write bytes. Disabled unless enabled in settings or on the command line."],
+      ["kb.function.define", "control", "KbFunctionParams", "KbWriteResult", "Define or resize a function, attributed to this connection's agent."],
+      ["kb.rename", "control", "KbNameParams", "KbWriteResult", "Name the function or label at an address."],
+      ["kb.label.set", "control", "KbNameParams", "KbWriteResult", "Set or remove a label at an address."],
+      ["kb.data.define", "control", "KbDataParams", "KbWriteResult", "Define a data object with a type and a name."],
+      ["kb.type.define", "control", "KbTypeParams", "KbWriteResult", "Add or replace a C type."],
+      ["kb.annotation.save", "control", "KbAnnotationParams", "KbWriteResult", "Add or edit an annotation on any target kind."],
+      ["kb.annotation.delete", "control", "KbIdParams", "KbWriteResult", "Delete an annotation."],
+      ["kb.bookmark.add", "control", "KbBookmarkParams", "KbWriteResult", "Add a bookmark."],
+      ["kb.bookmark.delete", "control", "KbIdParams", "KbWriteResult", "Delete a bookmark."],
+      ["kb.decode.set", "control", "KbDecodeParams", "KbWriteResult", "Decode a range as ARM, Thumb or data whatever the recording says, or clear that (undoable)."],
+      ["kb.function.update", "control", "KbFunctionUpdateParams", "KbWriteResult", "Change a function's name, signature, subsystem or source file."],
+      ["kb.function.delete", "control", "KbAddrParams", "KbWriteResult", "Delete the function containing an address."],
+      ["kb.data.delete", "control", "KbAddrParams", "KbWriteResult", "Delete the data object containing an address."],
+      ["kb.label.delete", "control", "KbAddrParams", "KbWriteResult", "Delete the label at an address."],
+      ["kb.type.delete", "control", "KbTypeNameParams", "KbWriteResult", "Delete a C type."],
+      ["kb.build.record", "control", "KbBuildRecordParams", "KbWriteResult", "Record a build and compare result for a function (its status follows the best result)."],
+      ["kb.build.compare", "control", "KbCompareParams", "KbCompareResult", "Run the configured compare command for a function, as the Source and diff panel's Compare does, and record the result (unless record is false). The command must have been approved in the workbench first."],
+      ["build.setup.check", "read", "BuildSetupParams", "BuildSetupResult", "The Compare setup checklist: Python, the compiler for the function's module, objdiff-cli, the source tree, compare.json and the self-test."],
+      ["build.selftest", "control", "BuildSetupParams", "KbCompareResult", "Compile a built-in function against itself with the module's compiler and diff it with objdiff-cli; a working toolchain scores 100. Never recorded."],
+      ["kb.import.static_analysis", "control", "KbImportParams", "KbImportResult", "Import a static analysis export, as File > Import static analysis does."],
+      ["kb.undo", "control", "Empty", "KbWriteResult", "Undo this agent's most recent knowledge-store change (never the person's)."],
+      ["kb.redo", "control", "Empty", "KbWriteResult", "Redo this agent's most recently undone change."],
+      ["kb.changes.list", "read", "KbChangesParams", "KbChangesResult", "Recent knowledge-store changes with their authors."],
+      ["kb.list", "read", "KbListParams", "KbListResult", "Functions, labels, data objects, types, annotations, bookmarks, decode overrides or modules, filtered and paged as the window's lists are."],
+      ["kb.function.get", "read", "KbFunctionGetParams", "KbFunctionDetail", "One function with its source file, Compare attempts, decompiler output and annotations, as the Source and Decompiler panels show it."],
+      ["ui.show", "control", "UiShowParams", "UiShowResult", "Point the workbench window at an address, a selection, a panel or a CPU, and bring it forward. Say what to show: at least one of cpu, addr, sel_addr, sel_size, panel, note."],
+      ["ui.capture", "control", "UiCaptureParams", "UiCaptureResult", "PNG of the workbench window, or of one panel. Does not raise the window. The game's own picture is screen.capture."]
+    ],
+    "events": [
+      ["breakpoint_hit", "EventBreakpointHit"],
+      ["paused", "EventState"],
+      ["resumed", "EventState"],
+      ["recording_changed", "EventRecording"],
+      ["frames_done", "EventState"],
+      ["input_done", "EventState"]
+    ]
+  }
+}

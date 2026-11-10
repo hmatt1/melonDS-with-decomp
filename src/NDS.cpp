@@ -44,6 +44,7 @@
 #include "DSi_DSP.h"
 #include "ARMJIT.h"
 #include "ARMJIT_Memory.h"
+#include "workbench/Workbench.h"
 
 namespace melonDS
 {
@@ -409,6 +410,8 @@ void NDS::SetupDirectBoot(const std::string& romname)
     ARM9.JumpTo(header.ARM9EntryAddress);
     ARM7.JumpTo(header.ARM7EntryAddress);
 
+    if (WB) WB->OnDirectBoot();
+
     SetExMemCnt(0, 0xE880, 0xFFFF);
     SetExMemCnt(1, 0x0080, 0x00FF);
 
@@ -548,6 +551,8 @@ void NDS::Reset()
     SPI.Reset();
     RTC.Reset();
     Wifi.Reset();
+
+    if (WB) WB->OnReset();
 }
 
 void NDS::Start()
@@ -1068,6 +1073,9 @@ u32 NDS::RunFrame()
     if (LagFrameFlag)
         NumLagFrames++;
 
+    if (WB)
+        WB->FrameEnd();
+
     if (Running)
         return GPU.TotalScanlines;
     else
@@ -1081,6 +1089,12 @@ u32 NDS::RunFrame()
         return RunFrame<CPUExecuteMode::JIT>();
     else
 #endif
+    if (WB && (WBExecHooks || WB->Dbg.ExecHooksNeeded()))
+    {
+        WB->UpdateHookFlags();
+        if (WBExecHooks)
+            return RunFrame<CPUExecuteMode::InterpreterWB>();
+    }
 #ifdef GDBSTUB_ENABLED
     if (EnableGDBStub)
     {
@@ -1299,6 +1313,7 @@ void NDS::MapSharedWRAM(u8 val)
     JIT.Memory.RemapSWRAM();
 
     WRAMCnt = val;
+    if (WB) WB->MappingChanged();
 
     switch (WRAMCnt & 0x3)
     {

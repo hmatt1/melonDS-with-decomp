@@ -29,6 +29,8 @@
 #include "Config.h"
 #include "SaveManager.h"
 
+class WBHost;
+
 const int kMaxWindows = 4;
 
 enum
@@ -91,6 +93,7 @@ public:
     int getConsoleType() { return consoleType; }
     EmuThread* getEmuThread() { return emuThread; }
     melonDS::NDS* getNDS() { return nds; }
+    WBHost* getWorkbench() { return wbHost; }
 
     MainWindow* getMainWindow() { return mainWindow; }
     int getNumWindows() { return numWindows; }
@@ -108,6 +111,8 @@ public:
     std::string instanceFileSuffix();
 
     void createWindow(int id = -1);
+    // a window inside host (the workbench's Game screen panel); nullptr if no slot is free
+    MainWindow* createEmbeddedWindow(QWidget* host);
     void deleteWindow(int id, bool close);
     void deleteAllWindows();
 
@@ -266,9 +271,11 @@ private:
     int instanceID;
 
     EmuThread* emuThread;
+    WBHost* wbHost;
 
     MainWindow* mainWindow;
     MainWindow* windowList[kMaxWindows];
+    QWidget* EmbedHost = nullptr;     // set while createEmbeddedWindow creates a window
     int numWindows;
 
     Config::Table globalCfg;
@@ -380,6 +387,7 @@ private:
 
     friend class EmuThread;
     friend class MainWindow;
+    friend class WBHost;
 };
 
 #endif //EMUINSTANCE_H

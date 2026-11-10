@@ -1,0 +1,11 @@
+<RCC>
+    <qresource prefix="/kb">
+        <file>0001_initial.sql</file>
+        <file>0002_vocabulary_triggers.sql</file>
+        <file>0003_region_modules.sql</file>
+        <file>0004_archive_assets.sql</file>
+        <file>0005_decode_override.sql</file>
+        <file>0006_system_author.sql</file>
+        <file>0007_library_subsystem.sql</file>
+    </qresource>
+</RCC>
