@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>melonDS Decomp Workbench</title>
+  <meta name="description" content="A fork of the melonDS Nintendo DS emulator with a second window for decompiling DS games: it records what the game does to every byte of RAM and keeps your names, types and comments.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23b34700'/%3E%3Ctext x='16' y='21' font-family='monospace' font-size='14' font-weight='700' fill='white' text-anchor='middle'%3EWB%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="index.html"><span class="brand-mark">WB</span><span class="brand-text">melonDS Decomp Workbench</span></a>
+    <nav class="site-nav" aria-label="Site">
+      <a href="index.html" aria-current="page">Home</a>
+      <a href="install.html">Install</a>
+      <a href="guide.html">Guide</a>
+      <a href="https://github.com/hmatt1/melonDS-with-decomp">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    <div class="content">
+      <section class="hero">
+        <span class="eyebrow">melonDS fork for DS decompilation</span>
+        <h1>See what the game does to every byte</h1>
+        <p class="lede">The Decomp Workbench is melonDS with a second window for decompiling Nintendo DS
+          games. While the game runs, it records which code ran, which code wrote what, and where data
+          came from. Your names, types and comments go in a knowledge store, one SQLite file per game.</p>
+        <div class="actions">
+          <a class="button primary" href="install.html">Install</a>
+          <a class="button" href="guide.html">Read the guide</a>
+        </div>
+      </section>
+
+      <figure class="shot">
+        <div class="frame" data-pending="the workbench window in its default layout, next to the running game">
+          <img src="img/default-layout.png" alt="The workbench window: functions on the left, disassembly and memory in the middle, registers and the inspector on the right, and a group of tabs at the bottom" width="1600" height="1000">
+        </div>
+      </figure>
+
+      <div class="cards">
+        <div class="card">
+          <h3>A recording engine</h3>
+          <p>Coverage, call stacks, every write with its writer and old and new value, and the origin of
+            data from the ROM through copies, unpacking and arithmetic.</p>
+        </div>
+        <div class="card">
+          <h3>A decompilation window</h3>
+          <p>Disassembly, memory with typed structs, an inspector, cross-references, a call graph, a
+            coverage map, value scans and a build-and-compare loop.</p>
+        </div>
+        <div class="card">
+          <h3>An API for scripts and agents</h3>
+          <p>A local JSON-RPC server with a generated Python client. Anything a panel can do, the API
+            can do too.</p>
+        </div>
+      </div>
+
+      <h2>What you can do with it</h2>
+      <p>The <a href="guide.html">guide</a> has one section per task, with the steps.</p>
+      <ul class="uc-list">
+        <li><a href="guide.html#uc0"><span class="uc-num">0</span>Start the workbench</a></li>
+        <li><a href="guide.html#uc1"><span class="uc-num">1</span>Who writes the fields of my unk struct?</a></li>
+        <li><a href="guide.html#uc2"><span class="uc-num">2</span>Stop the game when a field is written</a></li>
+        <li><a href="guide.html#uc3"><span class="uc-num">3</span>Find a value in RAM</a></li>
+        <li><a href="guide.html#uc4"><span class="uc-num">4</span>Where does this data come from?</a></li>
+        <li><a href="guide.html#uc5"><span class="uc-num">5</span>Who calls a function, who touches an address?</a></li>
+        <li><a href="guide.html#uc6"><span class="uc-num">6</span>Name things as you learn them</a></li>
+        <li><a href="guide.html#uc7"><span class="uc-num">7</span>Which code has run?</a></li>
+        <li><a href="guide.html#uc8"><span class="uc-num">8</span>Check a decompiled function against the original</a></li>
+        <li><a href="guide.html#uc9"><span class="uc-num">9</span>Script it</a></li>
+        <li><a href="guide.html#uc10"><span class="uc-num">10</span>Keep a recording</a></li>
+      </ul>
+
+      <h2>Get started</h2>
+      <ol class="steps">
+        <li><a href="install.html">Download the Windows build, or build it from source</a> on Windows, Linux or macOS.</li>
+        <li>Turn the JIT recompiler off in <span class="menu">Config &gt; Emu settings</span>: recording and breakpoints need the interpreter.</li>
+        <li>Start it with the workbench window open: <code>melonDS -w game.nds</code>.</li>
+        <li>Follow <a href="guide.html#uc0">use case 0</a> to find your way around.</li>
+      </ol>
+
+      <div class="note info">
+        <span class="note-title">No games included</span>
+        <p>The workbench comes with no game ROMs and no SDK material. Bring your own dump of a game you own.</p>
+      </div>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    melonDS Decomp Workbench is a fork of <a href="https://melonds.kuribo64.net/">melonDS</a>, licensed under the GPL v3.
+    Source: <a href="https://github.com/hmatt1/melonDS-with-decomp">hmatt1/melonDS-with-decomp</a>.
+  </footer>
+  <script src="assets/site.js" defer></script>
+</body>
+</html>
