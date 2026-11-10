@@ -1,5 +1,6 @@
-"""The Debug menu's keys work in the workbench window: F5 resumes a paused game and pauses a running one,
-F9 then F5 runs to a breakpoint.
+"""The Debug menu's keys work in the workbench window: Ctrl+F5 continues a paused game, Ctrl+Shift+F5 breaks a
+running one, Ctrl+F9 then Ctrl+F5 runs to a breakpoint. F5 alone is the game window's (Load state 5): in the
+workbench it neither pauses nor resumes.
 
     python tools/workbench/tests/ui_debug_keys.py --rom tools/workbench/testrom/wbtest.nds
 
@@ -20,6 +21,7 @@ from ui_person_flow import FAILS, check, dialog, find_window, focus, key, press,
 
 VK_F5 = 0x74        # not 0x75: that is F6
 VK_F9 = 0x78
+VK_F11 = 0x7A
 
 
 def state(c):
@@ -81,36 +83,52 @@ def main():
         check(hwnd is not None, "workbench window is open")
         focus(hwnd)
 
-        print("F5 after the API paused the game")
+        print("F5 alone is not a workbench key")
         c.execution_control("pause")
         check(wait_state(c, "paused") == "paused", "the API pauses the game")
         focus(hwnd)
         key(VK_F5)
-        s = wait_state(c, "running")
-        check(s == "running", "F5 resumes it: %s (foreground: %s)" % (s, fg_title()))
+        time.sleep(0.5)
+        check(state(c) == "paused", "F5 in the workbench leaves the game paused: %s" % state(c))
 
-        print("F5 while running")
+        print("Ctrl+F5 after the API paused the game")
         focus(hwnd)
-        key(VK_F5)
-        s = wait_state(c, "paused")
-        check(s == "paused", "F5 pauses it: %s" % s)
+        key(VK_F5, ("ctrl",))
+        s = wait_state(c, "running")
+        check(s == "running", "Ctrl+F5 continues it: %s (foreground: %s)" % (s, fg_title()))
 
-        print("F9 then F5 runs to the breakpoint")
-        key(ord("G"), ("ctrl",))
+        print("Ctrl+Shift+F5 while running")
+        focus(hwnd)
+        key(VK_F5, ("ctrl", "shift"))
+        s = wait_state(c, "break")
+        check(s == "break", "Ctrl+Shift+F5 breaks it: %s" % s)
+        key(VK_F11)
+        time.sleep(0.5)
+        check(state(c) == "break", "F11 steps and stays in the break: %s" % state(c))
+        focus(hwnd)
+        key(VK_F5, ("ctrl",))
+        s = wait_state(c, "running")
+        check(s == "running", "Ctrl+F5 continues from the break: %s" % s)
+        c.execution_control("pause")
+        wait_state(c, "paused")
+
+        print("Ctrl+F9 then Ctrl+F5 runs to the breakpoint")
+        focus(hwnd)
+        key(ord("G"))
         dialog("Go to")
         type_text("%08x" % m["arm_func"])
         press("enter")
         time.sleep(0.5)
         focus(hwnd)
-        key(VK_F9)
+        key(VK_F9, ("ctrl",))
         time.sleep(0.5)
         bl = c.breakpoints_list().breakpoints
-        check(any(b.addr == m["arm_func"] for b in bl), "F9 sets a breakpoint at the function")
-        key(VK_F5)
+        check(any(b.addr == m["arm_func"] for b in bl), "Ctrl+F9 sets a breakpoint at the function")
+        key(VK_F5, ("ctrl",))
         s = wait_state(c, "break", timeout=5.0)
         bl = c.breakpoints_list().breakpoints
         hits = [b.hit_count for b in bl if b.addr == m["arm_func"]]
-        check(s == "break" and hits and hits[0] >= 1, "F5 runs until the breakpoint hits: %s, hits %s" % (s, hits))
+        check(s == "break" and hits and hits[0] >= 1, "Ctrl+F5 runs until the breakpoint hits: %s, hits %s" % (s, hits))
         c.close()
     finally:
         proc.terminate()

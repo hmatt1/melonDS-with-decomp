@@ -22,6 +22,7 @@
 #include <functional>
 #include <vector>
 #include <QFrame>
+#include <QHash>
 #include <QImage>
 #include <QLabel>
 #include <QMainWindow>
@@ -118,6 +119,18 @@ public:
     void PromptGoTo();
     bool ParseAddress(const QString& text, melonDS::u32& addr, int* cpu = nullptr);
     QString AddrText(melonDS::u32 addr) const;     // hex + name
+
+    // The window's commands by id ("rename", "run_to_cursor"...). The menu bar, the debug toolbar and every
+    // right-click menu show these same QActions, so a command has one name and one key everywhere.
+    QAction* Action(const QString& id) const;
+    QString KeyText(const QString& id) const;       // the command's key as shown in menus, or empty
+    // What a command acts on: the address a right-click menu was opened on, or else the cursor (the
+    // selection when it is a range). Size is 1 for a single address.
+    struct CmdTarget { int Cpu = 0; melonDS::u32 Addr = 0, Size = 1; };
+    CmdTarget Target() const;
+    // a right-click menu's commands act on this address until the menu is destroyed; cpu -1 is the
+    // current one
+    void SetMenuTarget(QMenu& m, int cpu, melonDS::u32 addr, melonDS::u32 size = 1);
 
     // shared actions (panels call these; shortcuts are bound in the window)
     void RenameAt(melonDS::u32 addr);
@@ -265,8 +278,14 @@ private:
     QWidget* GameHost = nullptr;
     QWidget* GamePlaceholder = nullptr;
     MainWindow* GameWin = nullptr;
+    QHash<QString, QAction*> Actions;
+    bool HasMenuTarget = false;
+    CmdTarget MenuTarget;
+    void UseTargetCpu(const CmdTarget& t);          // a command on another CPU's address switches to it first
     QAction* ActEmbed = nullptr;
     QAction* ActPause = nullptr;
+    QAction* ActContinue = nullptr;
+    QAction* ActCancelAnalysis = nullptr;
     QAction* ActAnalyze = nullptr;
     QAction* ActClearAnalysis = nullptr;
     QAction* ActBreak = nullptr;
@@ -318,7 +337,7 @@ private:
     QLabel* LblFrames;
 
     QLabel* LblSpeed;
-    QLabel* LblPC;
+    QToolButton* LblPC;                  // the CPU every panel shows, its PC and function; a click switches CPU
     QLabel* LblKB;
     QAction* ActLock;
     QAction* ActRec;

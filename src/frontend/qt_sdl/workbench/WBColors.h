@@ -20,6 +20,7 @@
 #define WB_COLORS_H
 
 #include <QColor>
+#include <QFont>
 #include <QString>
 
 // Workbench palette, loaded from workbench-colors.toml next to melonDS.toml.
@@ -31,6 +32,9 @@ QString FilePath();
 // Reads the file, creating it from the defaults when it is missing. True when a color changed.
 bool Load();
 QString WidgetStyleSheet();
+// The workbench's fixed-width font, the same in every panel: Consolas where it is installed, else the
+// system's own fixed-width font (Linux and macOS have no Consolas)
+QFont MonoFont();
 
 QColor Text();
 QColor Muted();

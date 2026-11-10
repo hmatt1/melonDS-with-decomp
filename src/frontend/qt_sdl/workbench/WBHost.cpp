@@ -202,7 +202,7 @@ void WBHost::OnRomLoaded(const QString& path, u32 filelen)
         {
             QMetaObject::invokeMethod(this, [this]()
             {
-                emit notice("Recording stays off because the JIT recompiler is on. Switch to the interpreter in Config > Emu settings (the game resets), then turn Recording on from the Recording menu.");
+                emit notice("Recording stays off because the JIT recompiler is on. Switch to the interpreter in Config > Emu settings (the game resets), then start it from the Recording menu.");
             }, Qt::QueuedConnection);
         }
         else StartRecordingNow();
@@ -1488,7 +1488,7 @@ QString WBHost::Missing(WBNeed n) const
         QString st = ArchiveStatus();
         if (st == "ready") return QString();
         if (st == "indexing") return "The game archive is still being indexed.";
-        if (st == "none") return "No game archive (TrackMania's vfs.zip) was found in this ROM.";
+        if (st == "none") return "No game archive (a vfs.zip, vfs.bin or vfs.dat) was found in this ROM.";
         return "The game archive could not be read: " + st;
     }
     case WBNeed::Containers:
@@ -2509,7 +2509,15 @@ QString WBHost::TitlePrefix() const
     QString p;
     if (s.Recording) p += "[REC] ";
     if (s.EmuState == WBStatus::Break) p += "[BREAK] ";
+    else if (s.EmuState == WBStatus::Paused) p += "[PAUSED] ";
     return p;
+}
+
+QString WBHost::BreakReasonText(const std::string& reason)
+{
+    // the API keeps the short names; "pause" there is a break someone asked for (Debug > Break)
+    if (reason == "pause") return "requested";
+    return QString::fromStdString(reason);
 }
 
 void WBHost::StartApi(int port, bool memwrite)

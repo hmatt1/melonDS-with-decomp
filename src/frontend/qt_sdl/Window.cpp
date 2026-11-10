@@ -416,10 +416,14 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
                 actWorkbench = menu->addAction("Decomp workbench...");
                 actWorkbench->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_W));
                 connect(actWorkbench, &QAction::triggered, this, [this]() { emuInstance->getWorkbench()->ShowWindow(); });
-                actRecording = menu->addAction("Recording");
-                actRecording->setCheckable(true);
-                actRecording->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R));
-                connect(actRecording, &QAction::triggered, this, [this](bool on) { emuInstance->getWorkbench()->SetRecording(on); });
+                // the same name and key as the workbench's Recording > Start recording
+                actRecording = menu->addAction("Start recording");
+                actRecording->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_R));
+                connect(actRecording, &QAction::triggered, this, [this]()
+                {
+                    WBHost* wb = emuInstance->getWorkbench();
+                    wb->SetRecording(!wb->Status().Recording);
+                });
 
                 actTitleManager = menu->addAction("Manage DSi titles");
                 connect(actTitleManager, &QAction::triggered, this, &MainWindow::onOpenTitleManager);
@@ -695,8 +699,8 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
             if (statusBar()->isVisible() != show) statusBar()->setVisible(show);
             if (hasMenu && actRecording)
             {
-                actRecording->setChecked(s.Recording);
-                actRecording->setEnabled(s.Available && s.EmuState != WBStatus::NoGame);
+                actRecording->setText(s.Recording ? "Stop recording" : "Start recording");
+                actRecording->setEnabled(s.Recording || (s.Available && s.EmuState != WBStatus::NoGame));
             }
             wbStatus->refresh();
         });

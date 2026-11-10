@@ -222,7 +222,7 @@ the legend comes last.
 ### CV-3 Click, double-click, right-click, drag
 - **Click:** select the range. Inspector, Data origin and Write history follow the selection.
 - **Double-click:** go to it in the Disassembly for exec coverage, or in Memory for read, write and DMA coverage.
-- **Right-click:** Go to disassembly, Go to memory, Define function here, Define data here, Add bookmark, Cross-references, Write history, Track origin, Locate archived file.
+- **Right-click:** Define function, Define data, Locate <file> in game archive (when an archived file's copy covers the cell), then the shared address commands: Go to disassembly, Go to memory, Rename, Comment, Add bookmark, Cross-references, Show write history, Show data origin, Track value origin. Commands act on the region's CPU: the ARM7 for ARM7 WRAM, the ARM9 for ITCM, DTCM and VRAM, the window's CPU otherwise. A click selects without switching CPU.
 - **Drag:** select a range, with the same right-click actions.
 
 ### CV-4 Legend and layers

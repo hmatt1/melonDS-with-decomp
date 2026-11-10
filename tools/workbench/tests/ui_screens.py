@@ -22,7 +22,7 @@ from dswb import Client  # noqa: E402
 WORKSPACES = ["Default", "Decomp", "Debug", "Data tracing", "Coverage", "Minimal"]
 EMPTY = [("dock_callgraph", "Call graph"), ("dock_callstack", "Call stack"), ("dock_coverage", "Coverage map"),
          ("dock_history", "Write history"), ("dock_origin", "Data origin"), ("dock_overlays", "Overlays"),
-         ("dock_breakpoints", "Breakpoints"), ("dock_archive", "Archive"), ("dock_containers", "Containers"), ("dock_start", "Getting started"),
+         ("dock_breakpoints", "Breakpoints"), ("dock_archive", "Game archive"), ("dock_containers", "NARC/SDAT files"), ("dock_start", "Getting started"),
          ("dock_game", "Game screen (placeholder)")]
 
 

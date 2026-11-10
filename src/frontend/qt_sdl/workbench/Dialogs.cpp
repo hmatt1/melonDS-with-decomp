@@ -30,10 +30,12 @@
 #include <QVBoxLayout>
 
 #include "Dialogs.h"
+#include "WBColors.h"
 #include "WorkbenchWindow.h"
 #include "WBHost.h"
 #include "WBQueries.h"
 #include "ApiServer.h"
+#include "Panels.h"
 
 using namespace melonDS;
 using namespace melonDS::WB;
@@ -73,20 +75,20 @@ AnnotationDialog::AnnotationDialog(WorkbenchWindow* w, const WBKB::Annotation* a
     Comment->setMinimumHeight(90);
     Comment->setTabChangesFocus(true);
     Tags = new QLineEdit(this);
-    Tags->setPlaceholderText("comma separated, e.g. todo, player");
+    Tags->setPlaceholderText("Comma separated, e.g. todo, player");
 
-    form->addRow("Target", Kind);
-    RowAddr = Row(form, "Address", Addr);
-    RowEnd = Row(form, "End (exclusive)", End);
-    RowReg = Row(form, "Register", Reg);
+    form->addRow("Target:", Kind);
+    RowAddr = Row(form, "Address:", Addr);
+    RowEnd = Row(form, "End (exclusive):", End);
+    RowReg = Row(form, "Register:", Reg);
     form->addRow("", WholeFunction);
-    RowType = Row(form, "Type", TypeName);
-    RowField = Row(form, "Field", Field);
-    RowOverlay = Row(form, "Overlay", Overlay);
-    RowSavestate = Row(form, "Savestate", Savestate);
+    RowType = Row(form, "Type:", TypeName);
+    RowField = Row(form, "Field:", Field);
+    RowOverlay = Row(form, "Overlay:", Overlay);
+    RowSavestate = Row(form, "Savestate:", Savestate);
     form->addRow("", Resolved);
-    form->addRow("Comment", Comment);
-    form->addRow("Tags", Tags);
+    form->addRow("Comment:", Comment);
+    form->addRow("Tags:", Tags);
 
     QDialogButtonBox* bb = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, this);
     QVBoxLayout* v = new QVBoxLayout(this);
@@ -217,22 +219,22 @@ FunctionDialog::FunctionDialog(WorkbenchWindow* w, u32 addr) : QDialog(w), W(w)
     Size->setPrefix("0x");
     Name = new QLineEdit(this);
     Signature = new QLineEdit(this);
-    Signature->setPlaceholderText("e.g. void func(Player* p, int frame)");
+    Signature->setPlaceholderText("For example: void func(Player* p, int frame)");
     Subsystem = new QComboBox(this);
     Subsystem->addItems({"unknown", "game", "library", "msl", "runtime"});
     SourceFile = new QLineEdit(this);
-    SourceFile->setPlaceholderText("path in the decomp tree, e.g. src/player/move.c");
-    form->addRow("Address", Addr);
-    form->addRow("Mode", Mode);
+    SourceFile->setPlaceholderText("Path in the decomp tree, e.g. src/player/move.c");
+    form->addRow("Address:", Addr);
+    form->addRow("Mode:", Mode);
     QPushButton* det = new QPushButton("Detect size from recording", this);
     QHBoxLayout* sz = new QHBoxLayout();
     sz->addWidget(Size);
     sz->addWidget(det);
-    form->addRow("Size", sz);
-    form->addRow("Name", Name);
-    form->addRow("Signature", Signature);
-    form->addRow("Subsystem", Subsystem);
-    form->addRow("Source file", SourceFile);
+    form->addRow("Size:", sz);
+    form->addRow("Name:", Name);
+    form->addRow("Signature:", Signature);
+    form->addRow("Subsystem:", Subsystem);
+    form->addRow("Source file:", SourceFile);
 
     int ov = W->OverlayContext(addr);
     if (const WBKB::Function* f = W->KB().FunctionAt(W->Cpu(), addr & ~1u, ov))
@@ -376,10 +378,10 @@ DataDialog::DataDialog(WorkbenchWindow* w, u32 addr, u32 size) : QDialog(w), W(w
     for (const auto& kv : W->KB().Types()) Type->addItem(kv.first);
     Type->addItems({"u8", "u16", "u32", "s8", "s16", "s32", "fx16", "fx32", "char", "void*"});
     Name = new QLineEdit(this);
-    form->addRow("Address", Addr);
-    form->addRow("Size (0 = from type)", Size);
-    form->addRow("Type", Type);
-    form->addRow("Name", Name);
+    form->addRow("Address:", Addr);
+    form->addRow("Size (0 = from type):", Size);
+    form->addRow("Type:", Type);
+    form->addRow("Name:", Name);
     if (const WBKB::DataObject* d = W->KB().DataObjectAt(W->Cpu(), addr, W->OverlayContext(addr)))
     {
         if (d->Addr == addr)
@@ -433,8 +435,7 @@ TypeEditorDialog::TypeEditorDialog(WorkbenchWindow* w) : QDialog(w), W(w)
     setWindowTitle("Types");
     List = new QListWidget(this);
     Edit = new QPlainTextEdit(this);
-    QFont mono("Consolas");
-    mono.setStyleHint(QFont::Monospace);
+    QFont mono = WBColor::MonoFont();
     Edit->setFont(mono);
     Edit->setPlaceholderText("struct Player {\n    u32 flags;\n    fx32 pos[3];\n    struct Car* car;\n};");
     Layout = new QLabel(this);
@@ -525,12 +526,26 @@ SettingsDialog::SettingsDialog(WorkbenchWindow* w) : QDialog(w), W(w)
     WBSettings& c = W->Host()->Settings();
     QFormLayout* form = new QFormLayout();
     KbPath = new QLineEdit(c.KnowledgeStorePath, this);
-    KbPath->setPlaceholderText("default: <melonDS dir>/workbench/<game>_<sha1>/knowledge.db");
+    KbPath->setPlaceholderText("Default: <melonDS dir>/workbench/<game>_<sha1>/knowledge.db");
     SourceRoot = new QLineEdit(c.SourceRoot, this);
+    // the compare command is set in one place, Build > Compare setup; here it is only shown
     Compare = new QLineEdit(c.CompareCommand, this);
-    Compare->setPlaceholderText("empty: the project's compare script (Build > Compare setup)");
+    Compare->setReadOnly(true);
+    Compare->setPlaceholderText("The project's compare script");
+    QPushButton* compareSetup = new QPushButton("Change in Compare setup", this);
+    compareSetup->setToolTip("Saves these settings, closes this window and opens the Run tab of Build > Compare setup");
+    connect(compareSetup, &QPushButton::clicked, this, [this]()
+    {
+        Apply();
+        accept();
+        W->Action("compare_setup")->trigger();
+        if (CompareSetupPanel* sp = W->FindPanel<CompareSetupPanel>()) sp->ShowTab(2);
+    });
+    QHBoxLayout* compareRow = new QHBoxLayout();
+    compareRow->addWidget(Compare, 1);
+    compareRow->addWidget(compareSetup);
     Editor = new QLineEdit(c.EditorCommand, this);
-    Editor->setPlaceholderText("e.g. code -g {file}:{line}");
+    Editor->setPlaceholderText("For example: code -g {file}:{line}");
     Author = new QLineEdit(c.AuthorName, this);
     Cap = new QSpinBox(this);
     Cap->setRange(1, 2000);
@@ -557,18 +572,18 @@ SettingsDialog::SettingsDialog(WorkbenchWindow* w) : QDialog(w), W(w)
     ApiInfo->setTextInteractionFlags(Qt::TextSelectableByMouse);
     ApiServer* api = W->Host()->Api();
     ApiInfo->setText(api && api->Running() ? QString("running: read %1, control %2, token file %3").arg(api->ReadPort()).arg(api->ControlPort()).arg(api->InfoFile()) : "not running");
-    form->addRow("Knowledge store", KbPath);
-    form->addRow("Decomp source tree", SourceRoot);
-    form->addRow("Compare command", Compare);
-    form->addRow("Editor command", Editor);
-    form->addRow("Author name", Author);
-    form->addRow("Write history cap", Cap);
+    form->addRow("Knowledge store:", KbPath);
+    form->addRow("Decomp source tree:", SourceRoot);
+    form->addRow("Compare command:", compareRow);
+    form->addRow("Editor command:", Editor);
+    form->addRow("Author name:", Author);
+    form->addRow("Write history cap:", Cap);
     form->addRow("", AllRom);
     form->addRow("", AutoImport);
     form->addRow("", ApiOn);
-    form->addRow("API read port (control = +1)", ApiPort);
+    form->addRow("API read port (control = +1):", ApiPort);
     form->addRow("", ApiMemWrite);
-    form->addRow("API", ApiInfo);
+    form->addRow("API:", ApiInfo);
     QDialogButtonBox* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     QVBoxLayout* v = new QVBoxLayout(this);
     v->addLayout(form);
@@ -585,7 +600,6 @@ void SettingsDialog::Apply()
     bool kbChanged = c.KnowledgeStorePath != KbPath->text().trimmed();
     c.KnowledgeStorePath = KbPath->text().trimmed();
     c.SourceRoot = SourceRoot->text().trimmed();
-    c.CompareCommand = Compare->text().trimmed();
     c.EditorCommand = Editor->text().trimmed();
     c.AuthorName = Author->text().trimmed();
     c.OriginAllRomFiles = AllRom->isChecked();
@@ -628,13 +642,13 @@ BreakpointDialog::BreakpointDialog(WorkbenchWindow* w, u32 addr) : QDialog(w)
     Cpu->addItems({"arm9", "arm7", "any"});
     Cpu->setCurrentIndex(w->Cpu());
     Condition = new QLineEdit(this);
-    Condition->setPlaceholderText("optional, e.g. r0 == 0x10 && [sp+4].w > 3, or value == 0");
+    Condition->setPlaceholderText("Optional, e.g. r0 == 0x10 && [sp+4].w > 3, or value == 0");
     Temporary = new QCheckBox("delete after the first hit", this);
-    form->addRow("Kind", Kind);
-    form->addRow("Address", Addr);
-    form->addRow("Size", Size);
-    form->addRow("CPU", Cpu);
-    form->addRow("Condition", Condition);
+    form->addRow("Kind:", Kind);
+    form->addRow("Address:", Addr);
+    form->addRow("Size:", Size);
+    form->addRow("CPU:", Cpu);
+    form->addRow("Condition:", Condition);
     form->addRow("", Temporary);
     QDialogButtonBox* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     QVBoxLayout* v = new QVBoxLayout(this);

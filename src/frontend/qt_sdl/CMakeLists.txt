@@ -106,6 +106,7 @@ set(SOURCES_QT_SDL
     workbench/KbQueries.h
     workbench/WBStatusWidget.h
     workbench/WBColors.h
+    workbench/WBText.h
 )
 
 option(USE_QT6 "Use Qt 6 instead of Qt 5" ON)

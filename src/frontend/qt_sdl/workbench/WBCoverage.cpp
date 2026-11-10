@@ -97,6 +97,18 @@ private:
     CoveragePanel* P;
 };
 
+int CoveragePanel::RegionCpu() const
+{
+    // ARM7 WRAM is the ARM7's, ITCM, DTCM and LCDC VRAM the ARM9's; main RAM and shared WRAM follow the
+    // window's CPU, like every other panel
+    switch (Region)
+    {
+    case 4: return 1;
+    case 1: case 2: case 5: return 0;
+    default: return W->Cpu();
+    }
+}
+
 bool CoveragePanel::Need(WBNeed& need, QString& what) const
 {
     if (Scope->currentIndex() == 1) return false;     // all time: saved sessions
@@ -157,6 +169,8 @@ CoveragePanel::CoveragePanel(WorkbenchWindow* w) : WBPanel(w)
     layers->setMenu(lm);
 
     Map = new CoverageCanvas(this);
+    // main RAM and shared WRAM follow the window's CPU
+    connect(w, &WorkbenchWindow::cpuChanged, this, [this]() { Map->update(); });
     VBar = new QScrollBar(Qt::Vertical, this);
     Info = new QLabel(this);
     Info->setTextFormat(Qt::RichText);
@@ -544,7 +558,7 @@ void CoveragePanel::PaintMap(QPainter& p, const QRect& area)
         }
     };
     WBKB::KnowledgeStore& kb = W->KB();
-    int cpu = Region == 4 ? 1 : 0;
+    int cpu = RegionCpu();
     if (ShowOverlays)
         for (const WBKB::Module& m : kb.Modules())
             if (m.Kind == "overlay" && m.CpuNum() == cpu && m.End() > viewStart && m.Load < viewEnd && W->OverlayContext(m.Load) == m.OverlayId)
@@ -682,7 +696,6 @@ void CoveragePanel::MouseRelease(QMouseEvent* e)
     Dragging = false;
     // a click selects the cell, a drag the cells it covered; the Inspector, Data origin and Write history follow
     u32 s = std::min(DragA, DragB), en = std::max(DragA, DragB) + CellBytes;
-    if (Region == 4 && W->Cpu() != 1) W->SetCpu(1);
     W->SetSelection(s, en - s);
     Map->update();
 }
@@ -696,7 +709,8 @@ void CoveragePanel::MouseDoubleClick(QMouseEvent* e)
 
 void CoveragePanel::OpenAt(u32 a, const QString& panel)
 {
-    if (Region == 4 && W->Cpu() != 1) W->SetCpu(1);
+    // opening an address in a region of the other CPU switches to it (the status bar shows the change)
+    if (RegionCpu() != W->Cpu()) W->SetCpu(RegionCpu());
     W->SetLockToPC(false);
     W->GoTo(a);
     W->ShowPanel(panel);
@@ -710,10 +724,23 @@ void CoveragePanel::ContextMenu(QContextMenuEvent* e)
     u32 s = a, n = CellBytes;
     if (W->SelSize() > 1 && a >= W->SelStart() && a < W->SelStart() + W->SelSize()) { s = W->SelStart(); n = W->SelSize(); }
     QMenu m(this);
-    int cpu = Region == 4 ? 1 : -1;      // the ARM7 region on the ARM7, others on the current CPU
-    m.addAction("Define function here", [=]() { if (cpu >= 0 && W->Cpu() != cpu) W->SetCpu(cpu); W->DefineFunctionAt(s); });
-    m.addAction("Define data here", [=]() { if (cpu >= 0 && W->Cpu() != cpu) W->SetCpu(cpu); W->DefineDataAt(s, n); });
-    m.addAction("Locate archived file...", [=]() { W->PromptLocateArchived(); });
+    // the window's commands, on the cell (or the selection it is in), on the region's CPU
+    int cpu = RegionCpu();
+    W->SetMenuTarget(m, cpu, s, n);
+    m.addAction(W->Action("define_function"));
+    m.addAction(W->Action("define_data"));
+    // the archived file whose copy covers this cell, if there is one
+    if (ShowArchived && Region == 0)
+        for (const ArcRun& r : ArcRuns)
+            if (a >= r.Addr && a < r.Addr + r.Size)
+            {
+                QString name = r.Name;
+                m.addAction(QString("Locate %1 in game archive").arg(name), [this, name]()
+                {
+                    if (ArchivePanel* ap = W->FindPanel<ArchivePanel>()) W->LocateArchived(ap->IndexOf(name), true);
+                });
+                break;
+            }
     m.addSeparator();
     W->AddressActions(m, cpu, s, n);
     m.exec(e->globalPos());
@@ -726,7 +753,7 @@ void CoveragePanel::FetchHover()
     if (HoverCell < 0) return;
     u32 a = (u32)HoverCell;
     u32 n = CellBytes;
-    int cpu = Region == 4 ? 1 : 0;
+    int cpu = RegionCpu();
     // knowledge-store names on this thread, records on the emulation thread
     int ov = W->OverlayContext(a);
     WBQ::KbHints hints = WBQ::KbHints::Collect(W->KB(), cpu, a, a + n, ov);

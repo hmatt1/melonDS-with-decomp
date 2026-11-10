@@ -47,6 +47,7 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
+#include "WBText.h"
 #include "Panels.h"
 #include "Disasm.h"
 #include "Dialogs.h"
@@ -79,7 +80,7 @@ WriteHistoryPanel::WriteHistoryPanel(WorkbenchWindow* w) : WBPanel(w)
     MoreThanOnce = new QCheckBox("Written more than once", this);
     MoreThanOnce->setChecked(true);
     AddrFilter = new QLineEdit(this);
-    AddrFilter->setPlaceholderText("address");
+    AddrFilter->setPlaceholderText("Address");
     AddrFilter->setClearButtonEnabled(true);
     AddrFilter->setMaximumWidth(110);
     Groups = MakeTable(this, {"Address", "Writes", "Last writer", "Last frame", "Size"});
@@ -88,7 +89,7 @@ WriteHistoryPanel::WriteHistoryPanel(WorkbenchWindow* w) : WBPanel(w)
     top->addWidget(Note, 1);
     top->addWidget(AddrFilter);
     top->addWidget(MoreThanOnce);
-    top->addWidget(new QLabel("History of", this));
+    top->addWidget(new QLabel("History of:", this));
     top->addWidget(SessionPick);
     QVBoxLayout* v = new QVBoxLayout(this);
     v->setContentsMargins(2, 2, 2, 2);
@@ -374,8 +375,8 @@ DataOriginPanel::DataOriginPanel(WorkbenchWindow* w) : WBPanel(w)
         FollowLink(W, u);
     });
     Sources = MakeTable(this, {"Id", "Kind", "Enabled", "Source"});     // the source last: it takes the spare width
-    QPushButton* track = new QPushButton("Track selection", this);
-    QPushButton* trackReg = new QPushButton("Track register...", this);
+    QPushButton* track = new QPushButton("Track selection's origin...", this);
+    QPushButton* trackReg = new QPushButton("Track register's origin...", this);
     QPushButton* remove = new QPushButton("Remove source", this);
     QHBoxLayout* b = new QHBoxLayout();
     b->addWidget(track);
@@ -672,19 +673,26 @@ public:
 };
 }
 
-ArchivePanel::ArchivePanel(WorkbenchWindow* w) : WBPanel(w)
+// ================================================================ files in the ROM (the game archive and NARC/SDAT panels)
+
+FileListPanel::FileListPanel(WorkbenchWindow* w) : WBPanel(w)
 {
     Status = new QLabel(this);
     Status->setWordWrap(true);
     Filter = new QLineEdit(this);
-    Filter->setPlaceholderText("filter by path, e.g. cars/stadium or .nsbmd");
-    QPushButton* loc = new QPushButton("Locate in RAM", this);
-    loc->setToolTip("Find where the selected file is in RAM and which code read it from the card (Enter)");
-    QPushButton* track = new QPushButton("Track this file", this);
-    track->setToolTip("Data origin: label every value derived from this file's bytes with its name");
-    Table = MakeTable(this, {"Path", "Size", "Packed", "Method", "ROM offset", "VFS entry", "Index"});
     Result = new QTextBrowser(this);
     Result->setOpenLinks(false);
+    connect(Filter, &QLineEdit::textChanged, this, [this]() { ApplyFilter(); });
+    connect(Result, &QTextBrowser::anchorClicked, this, [this](const QUrl& u) { FollowLink(W, u); });
+}
+
+QHBoxLayout* FileListPanel::MakeTools(const QString& filterHint)
+{
+    Filter->setPlaceholderText(filterHint);
+    QPushButton* loc = new QPushButton("Locate in RAM", this);
+    loc->setToolTip("Find where the selected file is in RAM and which code read it from the card (Enter)");
+    QPushButton* track = new QPushButton("Add as origin source", this);
+    track->setToolTip("Data origin: label every value derived from this file's bytes with its name");
     QPushButton* gfx = new QPushButton("Show graphics", this);
     gfx->setToolTip("Open the selected palette, tiles, map, cells or textures in the Graphics panel");
     QHBoxLayout* top = new QHBoxLayout();
@@ -692,6 +700,111 @@ ArchivePanel::ArchivePanel(WorkbenchWindow* w) : WBPanel(w)
     top->addWidget(loc);
     top->addWidget(track);
     top->addWidget(gfx);
+    connect(Filter, &QLineEdit::returnPressed, this, [this]()
+    {
+        // Enter in the filter locates the first visible file
+        for (int r = 0; r < Table->rowCount(); r++)
+            if (!Table->isRowHidden(r)) { Table->selectRow(r); Locate(Table->item(r, 0)->data(Qt::UserRole).toInt()); break; }
+    });
+    connect(loc, &QPushButton::clicked, this, [this]() { if (CurrentId() >= 0) Locate(CurrentId()); });
+    connect(track, &QPushButton::clicked, this, [this]()
+    {
+        int id = CurrentId();
+        if (id < 0 || !AddSource(id)) return;
+        QString name = FilePath(id);
+        W->Notice(H->Status().Origin ? "Added " + name + " as a data origin source"
+                                     : "Added " + name + " as a data origin source; it is used once Record data origin is on", 5000);
+    });
+    connect(gfx, &QPushButton::clicked, this, [this]()
+    {
+        int id = CurrentId();
+        if (id >= 0) ShowGraphics(W, FilePath(id));
+    });
+    connect(Table, &QTableWidget::cellDoubleClicked, this, [this](int, int) { if (CurrentId() >= 0) Locate(CurrentId()); });
+    QShortcut* enter = new QShortcut(QKeySequence(Qt::Key_Return), Table, nullptr, nullptr, Qt::WidgetShortcut);
+    connect(enter, &QShortcut::activated, this, [this]() { if (CurrentId() >= 0) Locate(CurrentId()); });
+    return top;
+}
+
+int FileListPanel::CurrentId() const
+{
+    int r = Table->currentRow();
+    return r < 0 || !Table->item(r, 0) ? -1 : Table->item(r, 0)->data(Qt::UserRole).toInt();
+}
+
+void FileListPanel::ApplyFilter()
+{
+    QString f = Filter->text().trimmed();
+    for (int r = 0; r < Table->rowCount(); r++)
+        Table->setRowHidden(r, !f.isEmpty() && !Table->item(r, 0)->text().contains(f, Qt::CaseInsensitive));
+}
+
+void FileListPanel::SelectRow(int id)
+{
+    for (int r = 0; r < Table->rowCount(); r++)
+        if (Table->item(r, 0)->data(Qt::UserRole).toInt() == id)
+        {
+            if (Table->isRowHidden(r)) Filter->clear();
+            Table->selectRow(r);
+            Table->scrollToItem(Table->item(r, 0));
+            break;
+        }
+}
+
+QString FileListPanel::Link(u32 a) const
+{
+    QString n = W->KB().NameAt(W->Cpu(), a, W->OverlayContext(a), true);
+    return QString("<a href=\"addr:%1\">%1</a>%2").arg(Hex8(a), n.isEmpty() ? QString() : " &lt;" + n.toHtmlEscaped() + "&gt;");
+}
+
+QString FileListPanel::InFunction(u32 pc) const
+{
+    WBKB::KnowledgeStore& kb = W->KB();
+    const WBKB::Function* f = kb.FunctionAt(W->Cpu(), pc, W->OverlayContext(pc));
+    if (!f) return QString();
+    QString n = kb.NameAt(W->Cpu(), f->Addr, W->OverlayContext(f->Addr));
+    return " in " + (n.isEmpty() ? Hex8(f->Addr) : n.toHtmlEscaped());
+}
+
+QString FileListPanel::RamCopiesHtml(const std::vector<WBApi::ArchiveSegment>& ram, u32 size) const
+{
+    QString h = "<p><b>In main RAM now</b><br>";
+    if (ram.empty()) h += "<i>not in RAM</i> (not loaded yet, or freed or overwritten)<br>";
+    for (const WBApi::ArchiveSegment& s : ram)
+    {
+        h += QString("<a href=\"sel:%1:%2\">%1-%3</a> = bytes +0x%4..+0x%5 (%6%)")
+            .arg(Hex8(s.addr)).arg(s.size, 0, 16).arg(Hex8(s.addr + s.size))
+            .arg(s.member_offset, 0, 16).arg(s.member_offset + s.size, 0, 16)
+            .arg(size ? (int)((u64)s.size * 100 / size) : 100);
+        if (s.best_match != s.path) h += ", <span style='color:%MUTED%'>part of a longer match with " + s.best_match.toHtmlEscaped() + "</span>";
+        else if (!s.alternatives.empty())
+            h += QString(", <span style='color:%MUTED%'>same bytes in %1 other file%2, e.g. %3</span>")
+                .arg(s.alternatives.size()).arg(s.alternatives.size() > 1 ? "s" : "").arg(s.alternatives[0].toHtmlEscaped());
+        if (s.writer_pc) h += ", written by " + Link(s.writer_pc) + InFunction(s.writer_pc);
+        h += "<br>";
+    }
+    return h;
+}
+
+QString FileListPanel::LoadHtml(const WBApi::ProvenanceInfo& l, const QString& what) const
+{
+    return QString("frame %1: %2%3 read 0x%4 bytes to %5 <span style='color:%MUTED%'>(%6)</span><br>")
+        .arg(l.frame).arg(Link(l.pc), InFunction(l.pc)).arg(l.src_size, 0, 16).arg(Link(l.dst_addr)).arg(what.toHtmlEscaped());
+}
+
+void FileListPanel::ShowLocated(int id, const QString& html, const std::vector<WBApi::ArchiveSegment>& ram)
+{
+    Result->setHtml(WBColor::ApplyHtmlColors(html));
+    u32 addr = ram.empty() ? 0 : ram[0].addr, size = ram.empty() ? 0 : ram[0].size;
+    emit located(id, addr, size);
+}
+
+// ================================================================ game archive
+
+ArchivePanel::ArchivePanel(WorkbenchWindow* w) : FileListPanel(w)
+{
+    Table = MakeTable(this, {"Path", "Size", "Packed", "Method", "ROM offset", "VFS entry", "Index"});
+    QHBoxLayout* top = MakeTools("Filter by path, e.g. data/models or .nsbmd");
     QSplitter* sp = new QSplitter(Qt::Horizontal, this);
     sp->addWidget(Table);
     sp->addWidget(Result);
@@ -703,44 +816,29 @@ ArchivePanel::ArchivePanel(WorkbenchWindow* w) : WBPanel(w)
     v->addWidget(Status);
     v->addLayout(top);
     v->addWidget(sp, 1);
-
-    connect(Filter, &QLineEdit::textChanged, this, [this]() { ApplyFilter(); });
-    connect(Filter, &QLineEdit::returnPressed, this, [this]()
-    {
-        // Enter in the filter locates the first visible file
-        for (int r = 0; r < Table->rowCount(); r++)
-            if (!Table->isRowHidden(r)) { Table->selectRow(r); Locate(Table->item(r, 0)->data(Qt::UserRole).toInt()); break; }
-    });
-    auto current = [this]() { int r = Table->currentRow(); return r < 0 ? -1 : Table->item(r, 0)->data(Qt::UserRole).toInt(); };
-    connect(loc, &QPushButton::clicked, this, [this, current]() { if (current() >= 0) Locate(current()); });
-    connect(track, &QPushButton::clicked, this, [this, current]()
-    {
-        auto arc = H->Archive();
-        int i = current();
-        if (!arc || i < 0) return;
-        DataSource ds;
-        ds.Kind = SourceKind::RomFile;
-        ds.FileId = arc->ArchiveFileId;
-        ds.Addr = (u32)i + 1;
-        ds.Name = arc->ArchivePath + ":" + arc->Members()[i].Path;
-        H->RunSync([this, ds]() { H->Core().Taint.AddSource(ds); });
-        W->Notice(H->Status().Origin ? "Tracking " + QString::fromStdString(arc->Members()[i].Path)
-                                                       : "Tracking " + QString::fromStdString(arc->Members()[i].Path) + " once Data origin is on", 5000);
-    });
-    connect(gfx, &QPushButton::clicked, this, [this, current]()
-    {
-        auto arc = H->Archive();
-        int i = current();
-        if (!arc || i < 0) return;
-        ShowGraphics(W, QString::fromStdString(arc->ArchivePath + ":" + arc->Members()[i].Path));
-    });
-    connect(Table, &QTableWidget::cellDoubleClicked, this, [this, current](int, int) { if (current() >= 0) Locate(current()); });
-    QShortcut* enter = new QShortcut(QKeySequence(Qt::Key_Return), Table, nullptr, nullptr, Qt::WidgetShortcut);
-    connect(enter, &QShortcut::activated, this, [this, current]() { if (current() >= 0) Locate(current()); });
-    connect(Result, &QTextBrowser::anchorClicked, this, [this](const QUrl& u) { FollowLink(W, u); });
     connect(H, &WBHost::archiveChanged, this, &ArchivePanel::Reload);
     connect(H, &WBHost::romChanged, this, &ArchivePanel::Reload);
     Reload();
+}
+
+QString ArchivePanel::FilePath(int member) const
+{
+    auto arc = H->Archive();
+    if (!arc || member < 0 || member >= (int)arc->Members().size()) return QString();
+    return QString::fromStdString(arc->ArchivePath + ":" + arc->Members()[member].Path);
+}
+
+bool ArchivePanel::AddSource(int member)
+{
+    auto arc = H->Archive();
+    if (!arc || member < 0 || member >= (int)arc->Members().size()) return false;
+    DataSource ds;
+    ds.Kind = SourceKind::RomFile;
+    ds.FileId = arc->ArchiveFileId;
+    ds.Addr = (u32)member + 1;
+    ds.Name = arc->ArchivePath + ":" + arc->Members()[member].Path;
+    H->RunSync([this, ds]() { H->Core().Taint.AddSource(ds); });
+    return true;
 }
 
 void ArchivePanel::Reload()
@@ -753,7 +851,7 @@ void ArchivePanel::Reload()
     Shown = -1;
     if (!arc)
     {
-        Status->setText(st == "none" ? "No game archive detected in this ROM (looked for TrackMania DS / Octane engine vfs.zip, vfs.bin and vfs.dat)."
+        Status->setText(st == "none" ? "No game archive detected in this ROM (looked for a vfs.zip, vfs.bin or vfs.dat game archive)."
                       : st == "indexing" ? "Unpacking and indexing the game archive..." : "Game archive: " + st);
         return;
     }
@@ -781,13 +879,6 @@ void ArchivePanel::Reload()
     ApplyFilter();
 }
 
-void ArchivePanel::ApplyFilter()
-{
-    QString f = Filter->text().trimmed();
-    for (int r = 0; r < Table->rowCount(); r++)
-        Table->setRowHidden(r, !f.isEmpty() && !Table->item(r, 0)->text().contains(f, Qt::CaseInsensitive));
-}
-
 QStringList ArchivePanel::Paths() const
 {
     QStringList out;
@@ -807,14 +898,7 @@ void ArchivePanel::Locate(int member)
     auto arc = H->Archive();
     if (!arc || member < 0 || member >= (int)arc->Members().size()) return;
     Shown = member;
-    for (int r = 0; r < Table->rowCount(); r++)
-        if (Table->item(r, 0)->data(Qt::UserRole).toInt() == member)
-        {
-            if (Table->isRowHidden(r)) { Filter->clear(); }
-            Table->selectRow(r);
-            Table->scrollToItem(Table->item(r, 0));
-            break;
-        }
+    SelectRow(member);
     Result->setHtml("<i>Searching RAM...</i>");
     WBQ::ArchiveCtx ctx {arc, H->ArchiveStatus()};
     WBApi::ArchiveLocateParams p;
@@ -830,63 +914,23 @@ void ArchivePanel::Locate(int member)
         if (member != Shown) return;
         if (!r.Ok) { Result->setHtml("<i>" + r.Err.toHtmlEscaped() + "</i>"); return; }
         const WBApi::ArchiveMemberInfo& m = r.R.member;
-        WBKB::KnowledgeStore& kb = W->KB();
-        int cpu = W->Cpu();
-        auto link = [&](u32 a)
-        {
-            QString n = kb.NameAt(cpu, a, W->OverlayContext(a), true);
-            return QString("<a href=\"addr:%1\">%1</a>%2").arg(Hex8(a), n.isEmpty() ? QString() : " &lt;" + n.toHtmlEscaped() + "&gt;");
-        };
-        auto inFunc = [&](u32 pc)
-        {
-            const WBKB::Function* f = kb.FunctionAt(cpu, pc, W->OverlayContext(pc));
-            if (!f) return QString();
-            QString n = kb.NameAt(cpu, f->Addr, W->OverlayContext(f->Addr));
-            return " in " + (n.isEmpty() ? Hex8(f->Addr) : n.toHtmlEscaped());
-        };
         QString h = QString("<b>%1</b><br>%2 bytes, %3 (%4 bytes) at ROM 0x%5, file index %6")
             .arg(m.path.toHtmlEscaped()).arg(m.size).arg(m.method).arg(m.packed_size).arg(m.rom_offset, 0, 16).arg(m.index);
         if (m.vfs_entry >= 0) h += QString(", vfs.bin entry %1").arg(m.vfs_entry);
         if (!m.duplicate_of.isEmpty()) h += "<br><span style='color:%MUTED%'>identical to " + m.duplicate_of.toHtmlEscaped() + "</span>";
         if (!m.readable) h += QString("<br><span style='color:%1'>content could not be unpacked</span>").arg(WBColor::Red().name());
-        h += "<p><b>In main RAM now</b><br>";
-        if (r.R.ram.empty()) h += "<i>not in RAM</i> (not loaded yet, or freed or overwritten)<br>";
-        for (const WBApi::ArchiveSegment& s : r.R.ram)
-        {
-            h += QString("<a href=\"sel:%1:%2\">%1-%3</a> = bytes +0x%4..+0x%5 (%6%)")
-                .arg(Hex8(s.addr)).arg(s.size, 0, 16).arg(Hex8(s.addr + s.size))
-                .arg(s.member_offset, 0, 16).arg(s.member_offset + s.size, 0, 16)
-                .arg(m.size ? (int)((u64)s.size * 100 / m.size) : 100);
-            if (s.best_match != s.path) h += ", <span style='color:%MUTED%'>part of a longer match with " + s.best_match.toHtmlEscaped() + "</span>";
-            else if (!s.alternatives.empty())
-                h += QString(", <span style='color:%MUTED%'>same bytes in %1 other file%2, e.g. %3</span>")
-                    .arg(s.alternatives.size()).arg(s.alternatives.size() > 1 ? "s" : "").arg(s.alternatives[0].toHtmlEscaped());
-            if (s.writer_pc) h += ", written by " + link(s.writer_pc) + inFunc(s.writer_pc);
-            h += "<br>";
-        }
+        h += RamCopiesHtml(r.R.ram, m.size);
         h += "<p><b>Read from the card</b><br>";
         if (r.R.loads.empty()) h += "<i>no card reads of this file recorded</i> (turn recording on before the game loads it)<br>";
-        for (const WBApi::ProvenanceInfo& l : r.R.loads)
-            h += QString("frame %1: %2%3 read 0x%4 bytes to %5 <span style='color:%MUTED%'>(%6)</span><br>")
-                .arg(l.frame).arg(link(l.pc), inFunc(l.pc)).arg(l.src_size, 0, 16).arg(link(l.dst_addr)).arg(l.archive_member.toHtmlEscaped());
-        Result->setHtml(WBColor::ApplyHtmlColors(h));
-        u32 addr = r.R.ram.empty() ? 0 : r.R.ram[0].addr, size = r.R.ram.empty() ? 0 : r.R.ram[0].size;
-        emit located(member, addr, size);
+        for (const WBApi::ProvenanceInfo& l : r.R.loads) h += LoadHtml(l, l.archive_member);
+        ShowLocated(member, h, r.R.ram);
     });
 }
 
 // ================================================================ NARC and SDAT containers
 
-ContainersPanel::ContainersPanel(WorkbenchWindow* w) : WBPanel(w)
+ContainersPanel::ContainersPanel(WorkbenchWindow* w) : FileListPanel(w)
 {
-    Status = new QLabel(this);
-    Status->setWordWrap(true);
-    Filter = new QLineEdit(this);
-    Filter->setPlaceholderText("filter the files by name, e.g. .ncgr or SEQ_");
-    QPushButton* loc = new QPushButton("Locate in RAM", this);
-    loc->setToolTip("Find where the selected file is in RAM and which code read it from the card (Enter)");
-    QPushButton* track = new QPushButton("Track this file", this);
-    track->setToolTip("Data origin: label every value derived from this file's bytes with its name");
     List = MakeTable(this, {"Container", "Format", "Packed", "Files", "Nested"});
     List->horizontalHeaderItem(2)->setToolTip("The whole file is packed in this BIOS compression: its files are found in RAM by content only");
     List->horizontalHeaderItem(4)->setToolTip("Files inside containers nested in this one");
@@ -894,15 +938,7 @@ ContainersPanel::ContainersPanel(WorkbenchWindow* w) : WBPanel(w)
     Table->horizontalHeaderItem(1)->setToolTip("From the file's first bytes (its magic)");
     Table->horizontalHeaderItem(3)->setToolTip("Size as stored in the container (packed on its own when Form says so)");
     Table->horizontalHeaderItem(5)->setToolTip("ROM offset of the stored bytes; none inside a container packed whole");
-    Result = new QTextBrowser(this);
-    Result->setOpenLinks(false);
-    QPushButton* gfx = new QPushButton("Show graphics", this);
-    gfx->setToolTip("Open the selected palette, tiles, map, cells or textures in the Graphics panel");
-    QHBoxLayout* top = new QHBoxLayout();
-    top->addWidget(Filter, 1);
-    top->addWidget(loc);
-    top->addWidget(track);
-    top->addWidget(gfx);
+    QHBoxLayout* top = MakeTools("Filter the files by name, e.g. .ncgr or SEQ_");
     QSplitter* left = new QSplitter(Qt::Vertical, this);
     left->addWidget(List);
     left->addWidget(Table);
@@ -924,42 +960,30 @@ ContainersPanel::ContainersPanel(WorkbenchWindow* w) : WBPanel(w)
     {
         if (r >= 0 && List->item(r, 0)) ShowContainer(List->item(r, 0)->data(Qt::UserRole).toInt());
     });
-    connect(Filter, &QLineEdit::textChanged, this, [this]() { ApplyFilter(); });
-    connect(Filter, &QLineEdit::returnPressed, this, [this]()
-    {
-        // Enter in the filter locates the first visible file
-        for (int r = 0; r < Table->rowCount(); r++)
-            if (!Table->isRowHidden(r)) { Table->selectRow(r); Locate(Table->item(r, 0)->data(Qt::UserRole).toInt()); break; }
-    });
-    auto current = [this]() { int r = Table->currentRow(); return r < 0 ? -1 : Table->item(r, 0)->data(Qt::UserRole).toInt(); };
-    connect(loc, &QPushButton::clicked, this, [this, current]() { if (current() >= 0) Locate(current()); });
-    connect(track, &QPushButton::clicked, this, [this, current]()
-    {
-        auto cont = H->Containers();
-        auto [ci, mi] = cont ? cont->FromGlobal(current()) : std::make_pair(-1, -1);
-        if (ci < 0) return;
-        DataSource ds;
-        ds.Kind = SourceKind::RomFile;
-        ds.FileId = cont->Containers()[ci].FileId;
-        ds.Addr = (u32)mi + 1;
-        ds.Name = cont->FullName(ci, mi);
-        H->RunSync([this, ds]() { H->Core().Taint.AddSource(ds); });
-        QString name = QString::fromStdString(ds.Name);
-        W->Notice(H->Status().Origin ? "Tracking " + name : "Tracking " + name + " once Data origin is on", 5000);
-    });
-    connect(gfx, &QPushButton::clicked, this, [this, current]()
-    {
-        auto cont = H->Containers();
-        auto [ci, mi] = cont ? cont->FromGlobal(current()) : std::make_pair(-1, -1);
-        if (ci >= 0) ShowGraphics(W, QString::fromStdString(cont->FullName(ci, mi)));
-    });
-    connect(Table, &QTableWidget::cellDoubleClicked, this, [this, current](int, int) { if (current() >= 0) Locate(current()); });
-    QShortcut* enter = new QShortcut(QKeySequence(Qt::Key_Return), Table, nullptr, nullptr, Qt::WidgetShortcut);
-    connect(enter, &QShortcut::activated, this, [this, current]() { if (current() >= 0) Locate(current()); });
-    connect(Result, &QTextBrowser::anchorClicked, this, [this](const QUrl& u) { FollowLink(W, u); });
     connect(H, &WBHost::containersChanged, this, &ContainersPanel::Reload);
     connect(H, &WBHost::romChanged, this, &ContainersPanel::Reload);
     Reload();
+}
+
+QString ContainersPanel::FilePath(int global) const
+{
+    auto cont = H->Containers();
+    auto [ci, mi] = cont ? cont->FromGlobal(global) : std::make_pair(-1, -1);
+    return ci < 0 ? QString() : QString::fromStdString(cont->FullName(ci, mi));
+}
+
+bool ContainersPanel::AddSource(int global)
+{
+    auto cont = H->Containers();
+    auto [ci, mi] = cont ? cont->FromGlobal(global) : std::make_pair(-1, -1);
+    if (ci < 0) return false;
+    DataSource ds;
+    ds.Kind = SourceKind::RomFile;
+    ds.FileId = cont->Containers()[ci].FileId;
+    ds.Addr = (u32)mi + 1;
+    ds.Name = cont->FullName(ci, mi);
+    H->RunSync([this, ds]() { H->Core().Taint.AddSource(ds); });
+    return true;
 }
 
 void ContainersPanel::Reload()
@@ -1022,13 +1046,6 @@ void ContainersPanel::ShowContainer(int container)
     ApplyFilter();
 }
 
-void ContainersPanel::ApplyFilter()
-{
-    QString f = Filter->text().trimmed();
-    for (int r = 0; r < Table->rowCount(); r++)
-        Table->setRowHidden(r, !f.isEmpty() && !Table->item(r, 0)->text().contains(f, Qt::CaseInsensitive));
-}
-
 QStringList ContainersPanel::Paths() const
 {
     QStringList out;
@@ -1057,14 +1074,7 @@ void ContainersPanel::Locate(int global)
     for (int r = 0; r < List->rowCount(); r++)
         if (List->item(r, 0)->data(Qt::UserRole).toInt() == ci) { List->selectRow(r); List->scrollToItem(List->item(r, 0)); break; }
     ShowContainer(ci);
-    for (int r = 0; r < Table->rowCount(); r++)
-        if (Table->item(r, 0)->data(Qt::UserRole).toInt() == global)
-        {
-            if (Table->isRowHidden(r)) Filter->clear();
-            Table->selectRow(r);
-            Table->scrollToItem(Table->item(r, 0));
-            break;
-        }
+    SelectRow(global);
     Result->setHtml("<i>Searching RAM...</i>");
     WBQ::ContainerCtx ctx {cont, H->ContainerStatus()};
     WBApi::ContainerLocateParams p;
@@ -1080,20 +1090,6 @@ void ContainersPanel::Locate(int global)
         if (global != Shown) return;
         if (!r.Ok) { Result->setHtml("<i>" + r.Err.toHtmlEscaped() + "</i>"); return; }
         const WBApi::ContainerMemberInfo& m = r.R.member;
-        WBKB::KnowledgeStore& kb = W->KB();
-        int cpu = W->Cpu();
-        auto link = [&](u32 a)
-        {
-            QString n = kb.NameAt(cpu, a, W->OverlayContext(a), true);
-            return QString("<a href=\"addr:%1\">%1</a>%2").arg(Hex8(a), n.isEmpty() ? QString() : " &lt;" + n.toHtmlEscaped() + "&gt;");
-        };
-        auto inFunc = [&](u32 pc)
-        {
-            const WBKB::Function* f = kb.FunctionAt(cpu, pc, W->OverlayContext(pc));
-            if (!f) return QString();
-            QString n = kb.NameAt(cpu, f->Addr, W->OverlayContext(f->Addr));
-            return " in " + (n.isEmpty() ? Hex8(f->Addr) : n.toHtmlEscaped());
-        };
         QString h = QString("<b>%1</b><br>%2 bytes").arg(m.path.toHtmlEscaped()).arg(m.size);
         if (!m.kind.isEmpty()) h += ", " + m.kind.toHtmlEscaped();
         if (m.form != "stored") h += QString(", packed (%1) in %2 bytes").arg(m.form.toHtmlEscaped()).arg(m.stored_size);
@@ -1102,30 +1098,11 @@ void ContainersPanel::Locate(int global)
         if (!m.nested_in.isEmpty()) h += "<br>nested in " + m.nested_in.toHtmlEscaped();
         if (!m.duplicate_of.isEmpty()) h += "<br><span style='color:%MUTED%'>identical to " + m.duplicate_of.toHtmlEscaped() + "</span>";
         if (!m.readable) h += "<br><span style='color:%MUTED%'>too large to search for by content</span>";
-        h += "<p><b>In main RAM now</b><br>";
-        if (r.R.ram.empty()) h += "<i>not in RAM</i> (not loaded yet, or freed or overwritten)<br>";
-        for (const WBApi::ArchiveSegment& s : r.R.ram)
-        {
-            h += QString("<a href=\"sel:%1:%2\">%1-%3</a> = bytes +0x%4..+0x%5 (%6%)")
-                .arg(Hex8(s.addr)).arg(s.size, 0, 16).arg(Hex8(s.addr + s.size))
-                .arg(s.member_offset, 0, 16).arg(s.member_offset + s.size, 0, 16)
-                .arg(m.size ? (int)((u64)s.size * 100 / m.size) : 100);
-            if (s.best_match != s.path) h += ", <span style='color:%MUTED%'>part of a longer match with " + s.best_match.toHtmlEscaped() + "</span>";
-            else if (!s.alternatives.empty())
-                h += QString(", <span style='color:%MUTED%'>same bytes in %1 other file%2, e.g. %3</span>")
-                    .arg(s.alternatives.size()).arg(s.alternatives.size() > 1 ? "s" : "").arg(s.alternatives[0].toHtmlEscaped());
-            if (s.writer_pc) h += ", written by " + link(s.writer_pc) + inFunc(s.writer_pc);
-            h += "<br>";
-        }
+        h += RamCopiesHtml(r.R.ram, m.size);
         h += m.rom_offset != 0xFFFFFFFF ? "<p><b>Read from the card</b><br>" : "<p><b>Its container read from the card</b><br>";
         if (r.R.loads.empty()) h += "<i>no card reads recorded</i> (turn recording on before the game loads it)<br>";
-        for (const WBApi::ProvenanceInfo& l : r.R.loads)
-            h += QString("frame %1: %2%3 read 0x%4 bytes to %5 <span style='color:%MUTED%'>(%6)</span><br>")
-                .arg(l.frame).arg(link(l.pc), inFunc(l.pc)).arg(l.src_size, 0, 16).arg(link(l.dst_addr))
-                .arg((l.archive_member.isEmpty() ? l.detail : l.archive_member).toHtmlEscaped());
-        Result->setHtml(WBColor::ApplyHtmlColors(h));
-        u32 addr = r.R.ram.empty() ? 0 : r.R.ram[0].addr, size = r.R.ram.empty() ? 0 : r.R.ram[0].size;
-        emit located(global, addr, size);
+        for (const WBApi::ProvenanceInfo& l : r.R.loads) h += LoadHtml(l, l.archive_member.isEmpty() ? l.detail : l.archive_member);
+        ShowLocated(global, h, r.R.ram);
     });
 }
 
@@ -1284,13 +1261,13 @@ SourcePanel::SourcePanel(WorkbenchWindow* w) : WBPanel(w)
     Header->setTextFormat(Qt::RichText);
     Source = new QPlainTextEdit(this);
     Source->setReadOnly(true);
-    QFont f("Consolas");
-    f.setStyleHint(QFont::Monospace);
-    f.setPointSize(9);
+    QFont f = WBColor::MonoFont();
     Source->setFont(f);
     Diff = MakeTable(this, {"Original", "Compiled", ""});
-    Compare = new QPushButton("Compare", this);
-    Editor = new QPushButton("Open in editor", this);
+    Compare = new QPushButton("Build and compare", this);
+    // panels are made before the menus, so the key isn't known yet
+    Compare->setToolTip("Build the function at the cursor and compare it with the original (Build > Build and compare function)");
+    Editor = new QPushButton("Open source in editor", this);
     Attempts = new QComboBox(this);
     QHBoxLayout* b = new QHBoxLayout();
     b->addWidget(Compare);
@@ -1411,7 +1388,7 @@ void SourcePanel::Load(bool force)
 void SourcePanel::CompareAt(u32 addr)
 {
     const WBKB::Function* f = W->KB().FunctionAt(W->Cpu(), addr, W->OverlayContext(addr));
-    if (!f) { W->ShowError("Compare", "No function at the cursor. Define one with P."); return; }
+    if (!f) { W->ShowError("Build and compare", QString("No function at the cursor. Define one first (Edit > Define function, %1).").arg(W->KeyText("define_function"))); return; }
     if (f->Id != FuncId) { FuncId = f->Id; Load(true); }
     RunCompare();
 }
@@ -1419,7 +1396,7 @@ void SourcePanel::CompareAt(u32 addr)
 void SourcePanel::OpenEditorAt(u32 addr)
 {
     const WBKB::Function* f = W->KB().FunctionAt(W->Cpu(), addr, W->OverlayContext(addr));
-    if (!f) { W->ShowError("Open in editor", "No function at the cursor."); return; }
+    if (!f) { W->ShowError("Open source in editor", "No function at the cursor."); return; }
     if (f->Id != FuncId) { FuncId = f->Id; Load(true); }
     OpenEditor();
 }
@@ -1496,13 +1473,13 @@ void SourcePanel::RunCompare()
     }
     if (!ConfirmCompareCommand(this, H, job)) return;
     Compare->setEnabled(false);
-    Compare->setText("Comparing...");
+    Compare->setText("Building...");
     QPointer<SourcePanel> self(this);
     H->RunCompare(job, true, 0, QString(), [self](const WBHost::CompareRun& r)
     {
         if (!self) return;
         self->Compare->setEnabled(true);
-        self->Compare->setText("Compare");
+        self->Compare->setText("Build and compare");
         if (!r.Ok)
         {
             QString details = r.Result.value("log").toString();
@@ -1540,9 +1517,7 @@ DecompilerPanel::DecompilerPanel(WorkbenchWindow* w) : WBPanel(w)
     Header->setWordWrap(true);
     Text = new QPlainTextEdit(this);
     Text->setReadOnly(true);
-    QFont f("Consolas");
-    f.setStyleHint(QFont::Monospace);
-    f.setPointSize(9);
+    QFont f = WBColor::MonoFont();
     Text->setFont(f);
     UseSource = new QPushButton("Use as source", this);
     UseSource->setToolTip("Copy this draft into the function's source file.");
@@ -1645,8 +1620,8 @@ SearchPanel::SearchPanel(WorkbenchWindow* w) : WBPanel(w)
     Tabs = new QTabWidget(this);
     QWidget* tb = new QWidget(this);
     BytesEdit = new QLineEdit(tb);
-    BytesEdit->setPlaceholderText("hex bytes, ?? for any byte: 12 34 ?? 56");
-    QPushButton* bgo = new QPushButton("Find", tb);
+    BytesEdit->setPlaceholderText("Hex bytes, ?? for any byte: 12 34 ?? 56");
+    QPushButton* bgo = new QPushButton("Find bytes", tb);
     QHBoxLayout* bl = new QHBoxLayout(tb);
     bl->addWidget(BytesEdit);
     bl->addWidget(bgo);
@@ -1656,7 +1631,7 @@ SearchPanel::SearchPanel(WorkbenchWindow* w) : WBPanel(w)
     StringEdit = new QLineEdit(ts);
     StringEnc = new QComboBox(ts);
     StringEnc->addItems({"ASCII", "Shift-JIS", "UTF-16LE"});
-    QPushButton* sgo = new QPushButton("Find", ts);
+    QPushButton* sgo = new QPushButton("Find string", ts);
     QHBoxLayout* sl = new QHBoxLayout(ts);
     sl->addWidget(StringEdit);
     sl->addWidget(StringEnc);
@@ -1670,7 +1645,7 @@ SearchPanel::SearchPanel(WorkbenchWindow* w) : WBPanel(w)
     ScanCond = new QComboBox(tv);
     ScanCond->addItems({"equal to", "not equal to", "changed", "unchanged", "increased", "decreased", "greater than", "less than", "unknown (first scan)"});
     ScanValue = new QLineEdit(tv);
-    ScanValue->setPlaceholderText("value (decimal or 0x hex)");
+    ScanValue->setPlaceholderText("Value (decimal or 0x hex)");
     ScanRegion = new QComboBox(tv);
     ScanRegion->addItems({"main RAM", "main RAM + WRAM + DTCM"});
     QPushButton* first = new QPushButton("First scan", tv);
@@ -1687,9 +1662,7 @@ SearchPanel::SearchPanel(WorkbenchWindow* w) : WBPanel(w)
     Tabs->addTab(tv, "Value scan");
 
     Results = new QListWidget(this);
-    QFont f("Consolas");
-    f.setStyleHint(QFont::Monospace);
-    f.setPointSize(9);
+    QFont f = WBColor::MonoFont();
     Results->setFont(f);
     QVBoxLayout* v = new QVBoxLayout(this);
     v->setContentsMargins(2, 2, 2, 2);
@@ -1875,23 +1848,22 @@ BreakpointsPanel::BreakpointsPanel(WorkbenchWindow* w) : WBPanel(w)
     {
         int id = idx.sibling(idx.row(), 0).data(Qt::UserRole).toInt();
         bool on = idx.sibling(idx.row(), 6).data().toString() == "yes";
-        u32 addr = idx.sibling(idx.row(), 3).data(Qt::UserRole).toUInt();
-        m.addAction(on ? "Disable" : "Enable", [this, id, on]()
+        QString noun = idx.sibling(idx.row(), 1).data().toString() == "exec" ? "breakpoint" : "watchpoint";
+        m.addAction((on ? "Disable " : "Enable ") + noun, [this, id, on]()
         {
             if (!id) return;
             H->RunSync([this, id, on]() { H->Core().Dbg.SetBreakpointEnabled(id, !on); });
             LastKey.clear();
             emit H->breakpointsChanged();
         });
-        m.addAction("Delete", [this, id]()
+        m.addAction("Delete " + noun, [this, id]()
         {
             if (!id) return;
             H->RunSync([this, id]() { H->Core().Dbg.RemoveBreakpoint(id); });
             LastKey.clear();
             emit H->breakpointsChanged();
         });
-        m.addAction("Edit condition", editCond);
-        m.addAction("Go to disassembly", [this, addr]() { W->SetLockToPC(false); W->GoTo(addr); W->ShowPanel("dock_disasm"); });
+        m.addAction("Edit condition...", editCond);
         (void)curId;
     });
 }
@@ -1965,8 +1937,8 @@ RecordingPanel::RecordingPanel(WorkbenchWindow* w) : WBPanel(w)
     RecBtn = new QPushButton("Start recording", this);
     RecBtn->setCheckable(true);
     RecBtn->setMinimumHeight(30);
-    Hist = new QCheckBox("Write history", this);
-    Origin = new QCheckBox("Data origin", this);
+    Hist = new QCheckBox("Record write history", this);
+    Origin = new QCheckBox("Record data origin", this);
     Cap = new QSpinBox(this);
     Cap->setRange(1, 2000);
     Cap->setSuffix(" M entries cap");
@@ -2020,10 +1992,9 @@ RecordingPanel::RecordingPanel(WorkbenchWindow* w) : WBPanel(w)
     HistFileMB = new QSpinBox(this);
     HistFileMB->setRange(0, 65536);
     HistFileMB->setSingleStep(256);
-    HistFileMB->setSuffix(" MB history file");
-    HistFileMB->setSpecialValueText("history in memory");
-    HistFileMB->setToolTip("Keep write history in a file of this size instead of memory (about 32,000 writes per MB). "
-                           "Changing it starts history afresh.");
+    HistFileMB->setSuffix(WBText::HistoryFileSuffix);
+    HistFileMB->setSpecialValueText(WBText::HistoryInMemory);
+    HistFileMB->setToolTip(WBText::HistoryFileTip);
     HistFileMB->setValue((int)H->Settings().HistoryFileMB);
     HistNote = new QLabel(this);
     QHBoxLayout* hf = new QHBoxLayout();
@@ -2134,7 +2105,8 @@ void RecordingPanel::Refresh()
     WBStatus s = H->Status();
     Updating = true;
     RecBtn->setChecked(s.Recording);
-    RecBtn->setText(s.Recording ? "Stop recording (saves the session)" : "Start recording");
+    RecBtn->setText(s.Recording ? "Stop recording" : "Start recording");
+    RecBtn->setToolTip(s.Recording ? "Stopping saves the session" : QString());
     RecBtn->setStyleSheet(s.Recording ? QString("QPushButton { background: %1; color: %2; font-weight: bold; }").arg(WBColor::ChipRec().name(), WBColor::Text().name()) : "");
     RecBtn->setEnabled(s.Available && s.EmuState != WBStatus::NoGame);
     Hist->setChecked(s.History);
@@ -2148,7 +2120,9 @@ void RecordingPanel::Refresh()
     if (s.Recording && s.History) ind += QString("<span style='background:%1;color:%2;font-weight:bold'>&nbsp;HIST&nbsp;</span> ")
                                              .arg(WBColor::Off().name(), s.HistoryWrapped ? WBColor::Amber().name() : on);
     if (s.Recording && s.Origin) ind += QString("<span style='background:%1;color:%2;font-weight:bold'>&nbsp;ORIGIN&nbsp;</span> ").arg(WBColor::ChipOrigin().name(), on);
-    if (s.EmuState == WBStatus::Paused || s.EmuState == WBStatus::Break)
+    if (s.EmuState == WBStatus::Break)
+        ind += QString("<span style='background:%1;color:%2;font-weight:bold'>&nbsp;BREAK&nbsp;</span> ").arg(WBColor::Red().name(), on);
+    else if (s.EmuState == WBStatus::Paused)
         ind += QString("<span style='background:%1;color:%2;font-weight:bold'>&nbsp;PAUSED&nbsp;</span> ").arg(WBColor::Select().name(), on);
     ind += QString("frames %1, history %2/%3, %4 pages, %5 fps").arg(s.FramesRecorded).arg(s.HistoryCount).arg(s.HistoryCap).arg(s.Pages).arg(s.Fps, 0, 'f', 1);
     Indicator->setText(ind);

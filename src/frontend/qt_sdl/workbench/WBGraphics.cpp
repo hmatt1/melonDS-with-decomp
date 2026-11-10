@@ -134,7 +134,7 @@ GraphicsPanel::GraphicsPanel(WorkbenchWindow* w) : WBPanel(w)
     QHBoxLayout* bar = new QHBoxLayout();
     bar->addWidget(Part);
     bar->addWidget(Item);
-    bar->addWidget(new QLabel("Palette", this));
+    bar->addWidget(new QLabel("Palette:", this));
     bar->addWidget(PaletteChoice, 1);
     bar->addWidget(PalNumber);
     bar->addWidget(Zoom);

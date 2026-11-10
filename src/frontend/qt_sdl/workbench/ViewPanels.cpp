@@ -42,9 +42,7 @@ static QString ByteCount(u32 n) { return n == 1 ? QString("1 byte") : QString("%
 
 static QFont MonoFont()
 {
-    QFont f("Consolas");
-    f.setStyleHint(QFont::Monospace);
-    f.setPointSize(9);
+    QFont f = WBColor::MonoFont();
     return f;
 }
 
@@ -810,13 +808,15 @@ void DisasmPanel::contextMenuEvent(QContextMenuEvent* e)
     u32 a = i >= 0 ? Rows[i].Addr : W->Cursor();
     const DisasmRow* r = i >= 0 ? &Rows[i] : nullptr;
     QMenu m(this);
-    m.addAction("Rename\tN", [=]() { W->RenameAt(a); });
-    m.addAction("Comment\t;", [=]() { W->CommentAt(a); });
-    m.addAction("Define function\tP", [=]() { W->DefineFunctionAt(a); });
-    m.addAction("Define data\tD", [=]() { W->DefineDataAt(a); });
-    m.addAction("Add bookmark", [=]() { W->AddBookmarkAt(a); });
+    // the window's commands, on the clicked row
+    W->SetMenuTarget(m, W->Cpu(), a);
+    m.addAction(W->Action("rename"));
+    m.addAction(W->Action("comment"));
+    m.addAction(W->Action("define_function"));
+    m.addAction(W->Action("define_data"));
+    m.addAction(W->Action("add_bookmark"));
     m.addSeparator();
-    m.addAction("Toggle breakpoint\tF9", [=]() { W->ToggleBreakpointAt(a); });
+    m.addAction(W->Action("toggle_breakpoint"));
     bool hasBp = false, bpOn = false;
     for (const WorkbenchWindow::ExecBpMark& b : W->ExecBreakpoints)
         if (r && b.Addr >= r->Addr && b.Addr < r->Addr + r->Size) { hasBp = true; bpOn = b.Enabled; }
@@ -827,8 +827,9 @@ void DisasmPanel::contextMenuEvent(QContextMenuEvent* e)
     }
     if (r && !r->Explain.isEmpty())
         m.addAction("Explain instruction", [this, text = r->Explain]() { QMessageBox::information(this, "Instruction", text); });
-    m.addAction("Run to here\tF4", [=]() { W->RunToAddr(a); });
-    m.addAction("Cross-references\tX", [=]() { W->ShowXrefs(a); });
+    m.addAction(W->Action("run_to_cursor"));
+    m.addAction(W->Action("xrefs"));
+    m.addAction(W->Action("build_compare"));
     if (r && r->HasTarget) m.addAction(QString("Follow to %1").arg(r->Target, 8, 16, QChar('0')), [=]() { W->GoTo(r->Target); });
     if (r && r->Literal && r->LiteralValid) m.addAction(QString("Follow literal %1").arg(r->LiteralValue, 8, 16, QChar('0')), [=, v = r->LiteralValue]() { W->GoTo(v); });
     m.addSeparator();
@@ -844,13 +845,13 @@ void DisasmPanel::contextMenuEvent(QContextMenuEvent* e)
     QAction* only = m.addAction("Decode only confirmed code", [this](bool on) { OnlyConfirmed = on; Fetch(); });
     only->setCheckable(true);
     only->setChecked(OnlyConfirmed);
-    m.addAction("Mode gutter legend...", [this]()
+    m.addAction("Mode gutter legend", [this]()
     {
         QMessageBox::information(this, "Mode gutter",
             "A  ARM      T  Thumb      M  both (rare)      D  data      ?  unknown\n\n"
             "Solid: confirmed by the recording (executed in that mode; or read, or a literal pool, and never executed).\n"
             "Outlined: inferred from a knowledge-store function, defined as a data object, or set by an override.\n"
-            "Dashed amber: from analysis. While paused, Debug > Mark unreached code follows code that has\n"
+            "Dashed amber: from analysis. While paused, Analysis > Mark unreached code follows code that has\n"
             "already run and marks the instructions and literal pools it has not reached. The marks stay\n"
             "until they are cleared or the command is run again. They are not written to the knowledge store.\n"
             "Red !: an override contradicts what was recorded.\n\n"
@@ -1243,16 +1244,20 @@ void MemoryPanel::contextMenuEvent(QContextMenuEvent* e)
 {
     u32 a = W->SelStart(), n = W->SelSize();
     QMenu m(this);
-    m.addAction(QString("Track this value (%1)").arg(ByteCount(n)), [=]() { W->TrackValue(a, n); });
-    m.addAction("Write breakpoint", [=]() { W->AddWatchpoint(a, n, (int)BreakKind::Write); });
-    m.addAction("Read breakpoint", [=]() { W->AddWatchpoint(a, n, (int)BreakKind::Read); });
-    m.addAction("Access breakpoint", [=]() { W->AddWatchpoint(a, n, (int)BreakKind::Access); });
+    // the window's commands, on the selected bytes
+    W->SetMenuTarget(m, W->Cpu(), a, n);
+    m.addAction(W->Action("track_value"));
+    QMenu* watch = m.addMenu(QString("Add watchpoint (%1)").arg(ByteCount(n)));
+    watch->addAction("On write", [=]() { W->AddWatchpoint(a, n, (int)BreakKind::Write); });
+    watch->addAction("On read", [=]() { W->AddWatchpoint(a, n, (int)BreakKind::Read); });
+    watch->addAction("On read or write", [=]() { W->AddWatchpoint(a, n, (int)BreakKind::Access); });
     m.addSeparator();
-    m.addAction("Define data\tD", [=]() { W->DefineDataAt(a, n > 1 ? n : 0); });
-    m.addAction("Comment\t;", [=]() { W->CommentAt(a, n); });
-    m.addAction("Rename / label\tN", [=]() { W->RenameAt(a); });
-    m.addAction("Cross-references\tX", [=]() { W->ShowXrefs(a); });
-    m.addAction("Disassemble here", [=]() { W->GoTo(a); });
+    m.addAction(W->Action("rename"));
+    m.addAction(W->Action("comment"));
+    m.addAction(W->Action("define_data"));
+    m.addAction(W->Action("add_bookmark"));
+    m.addAction(W->Action("xrefs"));
+    m.addAction(W->Action("goto_disasm"));
     m.addAction("View as graphics", [=]()
     {
         // the graphics file whose copy holds the selection, else the selected bytes as tiles

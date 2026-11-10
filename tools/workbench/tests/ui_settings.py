@@ -24,7 +24,9 @@ from dswb import Client  # noqa: E402
 from ui_person_flow import find_window, focus, key, press, dialog  # noqa: E402
 
 FAILS = []
-ENABLE_API, ALLOW_MEMORY_WRITE = 6, 8     # Tab presses from the first field: the dialog's focus order
+# Tab presses from the first field, in the dialog's focus order: knowledge store, source tree, compare
+# command, Change in Compare setup, editor command, author, history cap, then Enable the API
+ENABLE_API, ALLOW_MEMORY_WRITE = 7, 9
 
 
 def check(cond, what):

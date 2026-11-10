@@ -69,8 +69,9 @@ Disassembly's mode gutter, the Inspector, the Functions list and the API.
 **Tables and trees.** Double-click goes to the row's address. Right-click offers the same actions
 everywhere (Functions, Annotations, Bookmarks, Call stack, Call graph, Cross-references, Write
 history, Overlays, Search, Breakpoints, a register holding an address, and the coverage map): go to
-the Disassembly or Memory, rename, comment, bookmark, cross-references, Write history, Data origin,
-track origin from here and copy the address, under the panel's own actions.
+the Disassembly or Memory, rename, comment, add bookmark, cross-references, show write history, show
+data origin, track value origin and copy the address, under the panel's own actions. They are the
+menu bar's commands, with the same names and keys.
 
 **Layout.**
 * **View menu:** lists the panels by purpose (Code, Runtime, Tracing, Project). Each item's tooltip,
@@ -126,7 +127,7 @@ melonDS [options] game.nds
 ```
 
 In the main window, open the workbench from **System → Decomp workbench...** (Ctrl+Shift+W).
-**System → Recording** (Ctrl+Shift+R) toggles recording.
+**System → Start recording** (Ctrl+R, the same key as in the workbench) starts and stops recording.
 
 Recording, write history and data origin are on from boot. `--record` on its own still means
 recording only. `--no-record` turns all three off.
@@ -229,7 +230,7 @@ Files stored as they are aren't indexed, because copying keeps their labels.
 Seeding costs about 15% speed while files are loading, and nothing otherwise.
 
 For a precise answer to "does this come from file X?", track only that file: turn off *All ROM
-files*, then use **Track this file** in the Archive panel, or `archive_file` sources in
+files*, then use **Add as origin source** in the Game archive panel, or `archive_file` sources in
 `recording.configure`. The vehicle parameter test below does this.
 
 ### Session files
@@ -256,7 +257,7 @@ end, melonDS writes a `.dswbs` file to `<knowledge store dir>/sessions/`.
     TrackMania race (2.07 million writes) take 63 MB, and ending the session takes half a second.
   * **Disk budget:** `history_keep_mb` (default 2048 MB per game) deletes the oldest `.dswbh`
     files first, never the newest. Session files are never deleted.
-  * Saving without stopping (File > Save recording session now, or `recording.configure` with
+  * Saving without stopping (Recording > Save session now, or `recording.configure` with
     `save_session`) copies the history's used part instead, and the session goes on. Two saves in the
     same second and frame get `_2`, `_3` on the name.
   * **Searching:** the Write history panel's *History of* list, or `writes.list` with `session`
@@ -306,7 +307,7 @@ background (about half a second for TrackMania):
     share most of their bytes.
   * Among alternatives, the file whose bytes the game most recently read from the card wins.
 * **Data origin.** Bytes read from inside `vfs.zip` are labelled with the archived file
-  (`/vfs.zip:<path>`). The Archive panel's **Track this file** button, or an `archive_file`
+  (`/vfs.zip:<path>`). The Game archive panel's **Add as origin source** button, or an `archive_file`
   source in `recording.configure`, follows one file only.
 * **Card reads.** Reads of `vfs.zip` name the archived file and the part read, e.g.
   `Graphics/Cars/Stadium/11/lod1.nsbmd, compressed data +0x8908`.
@@ -320,11 +321,11 @@ background (about half a second for TrackMania):
 **Where to see it:**
 
 * **Data origin and Inspector panels:** an *Archived file* section for the selection.
-* **Archive panel** (bottom tab):
+* **Game archive panel** (View → Project):
   * every archived file, with a filter;
   * **Locate in RAM** (Enter or double-click) shows where the file is in RAM and which code
     read it from the card.
-* **Navigate → Locate archived file...** (Ctrl+Shift+F) asks for a path and moves the cursor
+* **Navigate → Locate file in game archive...** (Ctrl+Shift+F) asks for a path and moves the cursor
   and selection to the file's largest copy in RAM.
 * **API:**
   * `origin.get` has `archive`, `archive_truncated` and `archive_status` fields (at most 256 runs
@@ -370,17 +371,18 @@ down to the files inside.
   files are known by content only.
 * **Data origin.** Bytes read from a container are labelled with the file inside. Once the game
   unpacks a `.carc` or a packed nested container, the files found inside it take their own labels
-  over the container's. **Track this file** in the Containers panel, or a `container_file`
+  over the container's. **Add as origin source** in the NARC/SDAT files panel, or a `container_file`
   source, tracks one file.
 * **Limits.** 512 MB of contents in all; files over 16 MB (streams) are listed and mapped but not
   searched for by content.
 
 Where it shows:
 
-* **Containers panel** (bottom tab): the containers, the files of the one selected (name, kind,
-  size, form, ROM offset) with a filter, **Locate in RAM** and **Track this file**.
+* **NARC/SDAT files panel** (View → Project): the containers, the files of the one selected (name, kind,
+  size, form, ROM offset) with a filter, **Locate in RAM**, **Add as origin source** and **Show graphics**,
+  the same as the Game archive panel.
 * **Data origin and Inspector panels:** a *File in a container* section for the selection.
-* **Navigate → Locate file in a container...** asks for a `/file.narc:name` path.
+* **Navigate → Locate file in NARC/SDAT...** asks for a `/file.narc:name` path.
 * **API:**
   * `container.list` lists the containers and their files, filtered by container or by name;
   * `container.locate` takes a path and returns the file, its RAM copies and the card reads of its
@@ -418,7 +420,7 @@ in RAM by content.
   layer is the struct-field underline, now also switchable.
 * **Inspector.** Shows the field at the cursor ("NCLR palette 2, colour 7: 0x7FFF = #FFFFFF") with a
   colour swatch, or the tile drawn with its palette.
-* **Graphics panel** (View, or **Show graphics** in the Archive and Containers panels, or **View as
+* **Graphics panel** (View, or **Show graphics** in the Game archive and NARC/SDAT files panels, or **View as
   graphics** in the Memory view's menu). It shows palettes, tiles, maps, cells and textures.
   * **Palette.** Picks the same-named palette in the same container first, then the colours in
     palette RAM now, then the first palette found.
@@ -439,35 +441,52 @@ its end.
 * Left: Functions and Bookmarks.
 * Centre: Disassembly and Memory.
 * Right: Registers, Inspector and Annotations.
-* Bottom tabs: Call stack, Call graph, Cross-references, Coverage map, Write history, Data
-  origin, Overlays, Source and diff, Decompiler, Search, Archive, Containers, Breakpoints and
-  Recording.
+* Bottom tabs: Call stack, Cross-references, Write history, Data origin, Breakpoints, Source
+  and diff, and Search. The other panels (Call graph, Coverage map, Overlays, Compare setup,
+  Decompiler, Game archive, NARC/SDAT files, Graphics, Recording, Getting started) keep their
+  place there, closed: open them from the View menu or **Window → Panels...**.
 
-**View → Reset layout** restores this layout.
+**Window → Reset layout** restores this layout for the current workspace.
+
+Every command has one name and one key, the same in the menu bar, the debug toolbar and the
+right-click menus (which show the key next to the command). A right-click command acts on the
+row or cell clicked; from the menu bar or a key, it acts on the cursor, or the selection when it
+is a range. Names end in "..." only when the command asks for more before it acts.
+
+The debugger's keys stay off the game window's: there, F1 to F9 load savestates, Shift+F1 to
+Shift+F9 save them and F12 undoes a load. While a text box in a panel has the focus, the
+single-letter keys (N, ;, P, D, G, L, X) type into it.
 
 | Key | Action |
 |---|---|
-| G / Ctrl+G | Go to an address, a name, or `pc` |
-| Esc / Alt+← , Alt+→ | Back / forward |
+| G | Go to an address, a name, or `pc` |
+| Alt+← , Alt+→ (or the mouse's back and forward buttons) | Back / forward |
 | L | Lock the disassembly to the PC |
-| Ctrl+T | Switch CPU (ARM9 / ARM7) |
+| Ctrl+T | Switch CPU (ARM9 / ARM7); clicking the CPU in the status bar does the same |
 | X | Cross-references |
-| Ctrl+Shift+F | Locate a file of the game archive in RAM |
+| Ctrl+Shift+F | Locate a file in the game archive |
 | N | Rename (function, label, register) |
 | ; | Comment (selection or cursor) |
 | P | Define or edit function |
 | D | Define data (selection or cursor) |
-| Ctrl+B | Bookmark |
+| Ctrl+B | Add bookmark |
 | Ctrl+Z / Ctrl+Y | Undo / redo knowledge store edits |
-| F5 / Shift+F5 | Pause or resume / break |
-| F7 or F11, F8, F4 | Step one instruction, run one frame, run to cursor |
-| F9 | Toggle breakpoint |
-| Ctrl+R | Recording on/off |
-| Ctrl+Shift+B | Compare function with the original (Build) |
-| Ctrl+Shift+E | Open the function's source in the editor |
-| Build → Compare setup | The compare script, compiler settings, and a test run |
+| Ctrl+F5 | Continue (from a pause or a break) |
+| Ctrl+Shift+F5 | Break: stop in the debugger at the next instruction |
+| F11 / F10 | Step into / step over |
+| Ctrl+F10 | Run to cursor |
+| Ctrl+F11 | Run one frame |
+| Ctrl+F9 | Toggle breakpoint |
+| Ctrl+R | Start or stop recording (the same key in the game window) |
+| Ctrl+Shift+H / Ctrl+Shift+D | Record write history / data origin |
+| Ctrl+Shift+R | Reset game with tracking |
+| Ctrl+Shift+B | Build and compare function |
+| Ctrl+Shift+E | Open source in editor |
 | Ctrl+Shift+I | Import static analysis JSON |
 
+**Debug → Pause** has no key: it pauses the emulator at the end of a frame, while **Break**
+stops in the debugger at an instruction, where stepping works. The status bar shows which:
+`PAUSED`, or `BREAK:` and the reason in red. **Continue** resumes either.
 Annotations can target an address, a range, a function, a data object, a type field, a
 register within a function, an overlay or a savestate.
 
@@ -507,14 +526,14 @@ Settings are in **File → Workbench settings**:
 | Setting | Meaning |
 |---|---|
 | Source root | Root of the decompiled C tree |
-| Compare command | Empty: the project's compare script (`compare/compare.py`, copied from the template the first time). Set under **Build → Compare setup**, with this computer's Python, objdiff-cli and compiler paths. The placeholders, the per-module compiler settings (`compare.json`) and the output contract are in [compare/README.md](compare/README.md). Each attempt is kept in `build_result`, and the function's status follows the latest result |
+| Compare command | Shown here; set on the Run tab of **Build → Compare setup**, with this computer's Python, objdiff-cli and compiler paths. Empty: the project's compare script (`compare/compare.py`, copied from the template the first time). The placeholders, the per-module compiler settings (`compare.json`) and the output contract are in [compare/README.md](compare/README.md). Each attempt is kept in `build_result`, and the function's status follows the latest result |
 | Editor command | For example `code -g {file}:{line}` |
 | Author name | Name shown on your edits |
 | API enabled, port, memory write | API settings |
 
 ### Static analysis import
 
-**File → Import static analysis** reads a JSON file with any of these keys:
+**Analysis → Import static analysis** reads a JSON file with any of these keys:
 
 ```json
 {"tool": "ghidra",
@@ -584,7 +603,7 @@ ports and a per-launch token. The first request on each connection must be
 | `kb.function.update`, `kb.function.delete`, `kb.data.delete`, `kb.label.delete`, `kb.type.delete`, `kb.bookmark.delete` | Change or delete; a deleted function takes its build results, annotations and evidence with it, and one undo restores all of it |
 | `kb.build.compare`, `kb.build.record` | Run the configured compare command for a function (as the Source and diff panel's Compare does; `record: false` for a dry run), or record a result from elsewhere. The command must have been approved in the workbench first |
 | `build.setup.check`, `build.selftest` | The Compare setup checklist rows, and the toolchain self-test (see [compare/README.md](compare/README.md)) |
-| `kb.import.static_analysis` | Import a static analysis export, as File → Import static analysis does |
+| `kb.import.static_analysis` | Import a static analysis export, as Analysis → Import static analysis does |
 | `kb.undo`, `kb.redo` | The agent's own changes only |
 | `ui.show` | Point the window at an address, a selection, a panel or a CPU, and bring it forward. `addr` moves the cursor (follow-PC turns off, and Back returns to where the person was). `sel_addr` / `sel_size` highlight a range, which write history, data origin, the inspector, cross-references and coverage follow; on its own that leaves the cursor where it is. `panel` is a short name (`disasm`, `memory`, `history`, `origin`, …) or a dock name (`dock_disasm`). `note` is a status-bar message. `cpu` on its own follows that CPU's PC |
 | `ui.capture` | PNG of the workbench window, or of one panel (`max_width` defaults to 1600, `0` keeps the native size). It does not raise the window. A minimized window, or a panel that is closed, is an error. The game's own picture stays `screen.capture` |

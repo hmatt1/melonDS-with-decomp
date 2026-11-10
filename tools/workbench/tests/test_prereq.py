@@ -105,10 +105,10 @@ def main():
                 time.sleep(0.1)
             check(hwnd is not None, "the workbench window is open")
             focus(hwnd)
-            key(ord("D"), ("ctrl", "shift"))  # Recording > Data origin
+            key(ord("D"), ("ctrl", "shift"))  # Recording > Record data origin
             time.sleep(1.0)
             st = c.status_get().recording
-            check(st.enabled and st.data_origin, "Recording > Data origin turns data origin on and starts recording with it")
+            check(st.enabled and st.data_origin, "Recording > Record data origin turns data origin on and starts recording with it")
 
             print("reset game with tracking")
             c.execution_control("run_frames", count=30)
