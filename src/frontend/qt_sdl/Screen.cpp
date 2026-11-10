@@ -86,7 +86,7 @@ ScreenPanel::ScreenPanel(QWidget* parent) : QWidget(parent)
     
     loadConfig();
     setFilter(false);   // blur is the pixel grid shader's, in DS pixels
-    setPixelGrid(mainWindow->getWindowConfig().GetBool("PixelGrid"));
+    setPixelGrid(emuInstance->getLocalConfig().GetBool("PixelGrid"));
     for (int i = 0; i < kNumGridParams; i++)
         gridParam[i] = (float)mainWindow->getWindowConfig().GetDouble(kGridParams[i].key);
     subpixelLayout = mainWindow->getWindowConfig().GetInt("SubpixelLayout");
@@ -771,6 +771,8 @@ ScreenPanelNative::ScreenPanelNative(QWidget* parent) : ScreenPanel(parent)
 
     screenTrans[0].reset();
     screenTrans[1].reset();
+
+    // the plain display draws the pixel grid with the software filter (made when first needed)
 }
 
 ScreenPanelNative::~ScreenPanelNative()
@@ -827,15 +829,40 @@ void ScreenPanelNative::paintEvent(QPaintEvent* event)
             memcpy(screen[1].scanLine(0), bottomBuffer, 256 * 192 * 4);
         }
         bufferLock.unlock();
+        emuInstance->renderLock.unlock();
 
         QRect screenrc(0, 0, 256, 192);
+
+        const bool useSoft = pixelGrid;   // grid off: the plain picture
+        if (useSoft && !softFilter)
+            softFilter = std::make_unique<SoftPixelFilter>(emuInstance->getLocalConfig().GetInt("PixelGridThreads"));
+        if (useSoft)
+        {
+            // filter at the whole zoom closest to the screen's size in device pixels, so the
+            // result is drawn 1:1 (the grid lines land on whole pixels, as with the shader)
+            const QTransform& t = screenTrans[0];
+            float scale = std::sqrt(float(t.m11() * t.m11() + t.m12() * t.m12())) * devicePixelRatioF();
+            int n = std::clamp((int)std::lround(scale), 1, 16);
+            for (int k = 0; k < 2; k++)
+                if (filtered[k].width() != 256 * n)
+                    filtered[k] = QImage(256 * n, 192 * n, QImage::Format_RGB32);
+            SoftFilterParams p;
+            p.grid = true;
+            p.gridDark = gridParam[0]; p.gridDarkH = gridParam[1]; p.gridWidth = gridParam[2]; p.gridSoft = gridParam[3];
+            p.subStrength = gridParam[4]; p.subKeep = gridParam[5];
+            p.blurX = gridParam[6]; p.blurY = gridParam[7]; p.halo = gridParam[8];
+            p.blurReachX = blurReach[0]; p.blurReachY = blurReach[1];
+            p.subpixel = subpixelLayout;
+            const uint32_t* src[2] = {(const uint32_t*)screen[0].constBits(), (const uint32_t*)screen[1].constBits()};
+            uint32_t* dst[2] = {(uint32_t*)filtered[0].bits(), (uint32_t*)filtered[1].bits()};
+            softFilter->process(src, dst, (int)filtered[0].bytesPerLine(), n, p);
+        }
 
         for (int i = 0; i < numScreens; i++)
         {
             painter.setTransform(screenTrans[i]);
-            painter.drawImage(screenrc, screen[screenKind[i]]);
+            painter.drawImage(screenrc, useSoft ? filtered[screenKind[i]] : screen[screenKind[i]]);
         }
-        emuInstance->renderLock.unlock();
     }
 
     osdUpdate();

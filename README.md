@@ -51,6 +51,25 @@ See [BUILD.md](./BUILD.md) for build instructions.
  * LCD refresh time (used by some games for blending effects)
  * any feature you can eventually ask for that isn't outright stupid
 
+## Pixel grid
+
+View > **Pixel grid** (Alt+F) draws the DS screens the way a real DS screen looks: thin lines
+between pixels, the coloured LED stripes of each pixel (DS Lite, DSi or DSi XL layout) and an
+optional blur. View > **Pixel grid settings...** sets how dark the lines are, the stripe
+layout and strength, and the blur. The setting applies to every window of an instance.
+
+What draws it follows Config > **Video settings**:
+
+* an OpenGL display, or the OpenGL (Classic) or OpenGL (Compute shader) renderer: the OpenGL
+  screen shader;
+* the Software renderer without the OpenGL display: a software version of the same filter,
+  on the CPU. It is the fallback, so the grid works without OpenGL; it looks the same at
+  whole-number zooms.
+
+The software filter runs on 2 threads by default, one per screen. More threads split each screen
+into bands of rows: set `PixelGridThreads` under `[Instance0]` in `melonDS.toml`. At 4x zoom with
+the DSi XL stripes and blur it takes about 9 ms per frame on 2 threads, about 4 ms on 7.
+
 ## Credits
 
  * Martin for GBAtek, a good piece of documentation

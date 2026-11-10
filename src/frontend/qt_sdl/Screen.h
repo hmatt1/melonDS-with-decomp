@@ -25,6 +25,8 @@
 #include <map>
 
 #include <QWidget>
+#include <memory>
+#include "SoftPixelFilter.h"
 #include <QImage>
 #include <QMutex>
 #include <QScreen>
@@ -186,6 +188,9 @@ private:
     void* bottomBuffer;
 
     QImage screen[2];
+    // software pixel grid (View > Software pixel grid): the shader's look without OpenGL
+    std::unique_ptr<SoftPixelFilter> softFilter;
+    QImage filtered[2];
     QTransform screenTrans[kMaxScreenTransforms];
 };
 

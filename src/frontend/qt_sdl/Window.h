@@ -190,6 +190,7 @@ private slots:
     void onOpenNewWindow();
     void onChangeScreenFiltering(bool checked);
     void onChangePixelGrid(bool checked);
+    void updatePixelGridMenu();
     void onChangeShowOSD(bool checked);
     void onChangeLimitFramerate(bool checked);
     void onChangeAudioSync(bool checked);
@@ -323,7 +324,7 @@ public:
     QAction** actScreenAspectBot;
     QAction* actNewWindow;
     QAction* actScreenFiltering;
-    QAction* actPixelGrid;
+    QAction* actPixelGrid = nullptr;   // null without a menu bar (hasMenu false)
     QAction* actShowOSD;
     QAction* actLimitFramerate;
     QAction* actAudioSync;

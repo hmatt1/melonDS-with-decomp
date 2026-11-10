@@ -392,6 +392,8 @@ void EmuInstance::emuStop(StopReason reason)
 
 bool EmuInstance::usesOpenGL()
 {
+    // the pixel grid is drawn by the OpenGL screen shader (see MainWindow::createScreenPanel)
+    // Config > Video settings alone decides; the pixel grid follows it (software as fallback)
     return globalCfg.GetBool("Screen.UseGL") ||
            (globalCfg.GetInt("3D.Renderer") != renderer3D_Software);
 }

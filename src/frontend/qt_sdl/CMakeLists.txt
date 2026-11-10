@@ -6,6 +6,7 @@ set(SOURCES_QT_SDL
     main.cpp
     main_shaders.h
     Screen.cpp
+    SoftPixelFilter.cpp
     Window.cpp
     EmuInstance.cpp
     EmuInstanceAudio.cpp

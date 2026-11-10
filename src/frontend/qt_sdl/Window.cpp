@@ -604,10 +604,12 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
             actNewWindow = menu->addAction("Open new window");
             connect(actNewWindow, &QAction::triggered, this, &MainWindow::onOpenNewWindow);
 
-            actHelloWindow = menu->addAction("Pixel grid settings...");
-
             menu->addSeparator();
 
+            actHelloWindow = menu->addAction("Pixel grid settings...");
+
+            // On or off only. What draws it follows Config > Video settings: the OpenGL shader with
+            // an OpenGL display or OpenGL 3D renderer, else the software filter (the fallback).
             actPixelGrid = menu->addAction("Pixel grid");
             actPixelGrid->setCheckable(true);
             actPixelGrid->setShortcut(QKeySequence(Qt::AltModifier | Qt::Key_F));
@@ -1023,7 +1025,7 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
                 actScreenAspectBot[i]->setChecked(true);
         }
 
-        actPixelGrid->setChecked(windowCfg.GetBool("PixelGrid"));
+        updatePixelGridMenu();
         actShowOSD->setChecked(showOSD);
 
         actLimitFramerate->setChecked(emuInstance->doLimitFPS);
@@ -1126,8 +1128,11 @@ void MainWindow::createScreenPanel()
     panel = nullptr;
     if (oldpanel) delete oldpanel;
 
-    hasOGL = globalCfg.GetBool("Screen.UseGL") ||
-            (globalCfg.GetInt("3D.Renderer") != renderer3D_Software);
+    // One decision for every window of the instance: a window's OpenGL context is shared
+    // with the first window's, so they must all use OpenGL or none. The OpenGL pixel grid
+    // needs it; the software one draws on the plain display (SoftPixelFilter).
+    hasOGL = emuInstance->usesOpenGL();
+    updatePixelGridMenu();
 
     if (hasOGL)
     {
@@ -2429,10 +2434,25 @@ void MainWindow::onOpenNewWindow()
     emuInstance->createWindow();
 }
 
+void MainWindow::updatePixelGridMenu()
+{
+    if (!actPixelGrid) return;
+    actPixelGrid->setChecked(emuInstance->getLocalConfig().GetBool("PixelGrid"));
+    actPixelGrid->setToolTip(hasOGL ? "Drawn by the OpenGL screen shader (Config > Video settings uses OpenGL)"
+                                    : "Drawn in software on the CPU (Config > Video settings uses software)");
+}
+
 void MainWindow::onChangePixelGrid(bool checked)
 {
-    windowCfg.SetBool("PixelGrid", checked);
-    panel->setPixelGrid(checked);
+    // one setting for all windows of the instance; each screen keeps its implementation
+    emuInstance->getLocalConfig().SetBool("PixelGrid", checked);
+    Config::Save();
+    for (int i = 0; i < kMaxWindows; i++)
+        if (auto* w = emuInstance->getWindow(i))
+        {
+            if (w->panel) w->panel->setPixelGrid(checked);
+            w->updatePixelGridMenu();
+        }
 }
 
 void MainWindow::onChangeScreenFiltering(bool checked)

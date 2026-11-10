@@ -50,6 +50,7 @@ DefaultList<int> DefaultInts =
 {
     {"Instance*.Keyboard", -1},
     {"Instance*.Window*.BlurReachX", 1},
+    {"Instance*.PixelGridThreads", 2},    // software pixel grid: 2 = one per screen
     {"Instance*.Window*.SubpixelLayout", 3},   // DSi XL
     {"Instance*.Window*.BlurReachY", 1},
     {"Instance*.Joystick", -1},
@@ -103,7 +104,7 @@ DefaultList<bool> DefaultBools =
     {"3D.GL.HiresCoordinates", true},
     {"LimitFPS", true},
     {"Instance*.Window*.ShowOSD", true},
-    {"Instance*.Window*.PixelGrid", true},
+    {"Instance*.PixelGrid", true},   // all windows; drawn by OpenGL or, as fallback, in software
     {"Emu.DirectBoot", true},
     {"Instance*.DS.Battery.LevelOkay", true},
     {"Instance*.DSi.Battery.Charging", true},
