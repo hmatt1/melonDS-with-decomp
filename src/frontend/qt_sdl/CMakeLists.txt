@@ -287,8 +287,15 @@ else()
 endif()
 target_link_libraries(melonDS PRIVATE core)
 target_link_libraries(melonDS PRIVATE PkgConfig::SDL2 PkgConfig::LibArchive PkgConfig::Zstd PkgConfig::Faad PkgConfig::SQLite3 ZLIB::ZLIB)
-# workbench: Qt Advanced Docking System (MSYS2: mingw-w64-ucrt-x86_64-qt-advanced-docking-system)
-find_package(qtadvanceddocking-qt6 REQUIRED)
+# workbench: Qt Advanced Docking System, vendored in vendor/qtads (see VENDORED.md).
+# Always linked static, so build/melonDS runs without a libqtadvanceddocking next to it.
+# block() keeps BUILD_STATIC/BUILD_EXAMPLES from leaking into melonDS's own options.
+block()
+    set(BUILD_STATIC ON)
+    set(BUILD_EXAMPLES OFF)
+    set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+    add_subdirectory("${CMAKE_SOURCE_DIR}/vendor/qtads" "${CMAKE_BINARY_DIR}/qtads" EXCLUDE_FROM_ALL)
+endblock()
 target_link_libraries(melonDS PRIVATE ads::qtadvanceddocking-qt6)
 target_link_libraries(melonDS PRIVATE ${QT_LINK_LIBS} ${CMAKE_DL_LIBS})
 if (BUILD_STATIC AND MINGW)
