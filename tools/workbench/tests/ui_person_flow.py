@@ -235,7 +235,7 @@ def main():
         focus(hwnd)
 
         print("find and name the function")
-        key(ord("G"), ("ctrl",))
+        key(ord("G"))
         dialog("Go to")
         type_text("%08x" % m["arm_func"])
         press("enter")
@@ -305,7 +305,7 @@ def main():
         check(q(FN, (m["arm_func"],))[0][0] == "Test_ArmSum", "Ctrl+Y redoes it")
 
         print("data")
-        key(ord("G"), ("ctrl",))
+        key(ord("G"))
         dialog("Go to")
         type_text("%08x" % m["data_table"])
         press("enter")
@@ -321,19 +321,19 @@ def main():
         check(rows and rows[0][0] == "gTestTable", "D defines the data object: %s" % rows)
 
         print("breakpoint and bookmark")
-        key(ord("G"), ("ctrl",))
+        key(ord("G"))
         dialog("Go to")
         type_text("%08x" % m["arm_func"])
         press("enter")
         time.sleep(0.5)
         focus(hwnd)
-        press("f9")
+        press("f9", ("ctrl",))
         time.sleep(0.6)
         bl = c.breakpoints_list().breakpoints
-        check(any(b.addr == m["arm_func"] and b.kind == "exec" for b in bl), "F9 sets an execute breakpoint at the cursor")
-        press("f9")
+        check(any(b.addr == m["arm_func"] and b.kind == "exec" for b in bl), "Ctrl+F9 sets an execute breakpoint at the cursor")
+        press("f9", ("ctrl",))
         time.sleep(0.6)
-        check(not any(b.addr == m["arm_func"] for b in c.breakpoints_list().breakpoints), "F9 again removes it")
+        check(not any(b.addr == m["arm_func"] for b in c.breakpoints_list().breakpoints), "Ctrl+F9 again removes it")
         key(ord("B"), ("ctrl",))
         dialog("Bookmark")
         press("enter")
@@ -342,7 +342,7 @@ def main():
         check(len(q("SELECT id FROM bookmark")) >= 1, "Ctrl+B adds a bookmark")
 
         print("source, compare and decompiler")
-        key(ord("G"), ("ctrl",))
+        key(ord("G"))
         dialog("Go to")
         type_text("%08x" % m["arm_func"])
         press("enter")
@@ -361,7 +361,7 @@ def main():
         check(rows and rows[0][0] == "src/test.c", "source file recorded for the function: %s" % rows)
         STATUS = ("SELECT s.status, s.last_score FROM function_status s JOIN function f ON f.id = s.function_id "
                   "JOIN module m ON m.id = f.module_id WHERE m.load_address + f.offset = ?")
-        key(ord("B"), ("ctrl", "shift"))   # Build > Compare
+        key(ord("B"), ("ctrl", "shift"))   # Build > Build and compare function
         time.sleep(3.0)
         rows = q(STATUS, (m["arm_func"],))
         check(rows == [("partially_matched", 82.5)], "Compare records a build result and the status derives from it: %s" % rows)
@@ -376,7 +376,7 @@ def main():
         text = "int FUN_%08x(void)\n{\n    return DAT_%08x[0] + DAT_%08x[1];\n}\n" % (m["arm_func"], m["data_table"], m["data_table"])
         with open(js, "w") as f:
             json.dump({"tool": "ghidra", "decompiled": [{"addr": "0x%08x" % m["arm_func"], "text": text}]}, f)
-        key(ord("I"), ("ctrl", "shift"))    # File > Import static analysis
+        key(ord("I"), ("ctrl", "shift"))    # Analysis > Import static analysis
         dlg = dialog("Static analysis export")
         check(dlg is not None, "Ctrl+Shift+I opens the import dialog")
         if dlg:
@@ -392,8 +392,8 @@ def main():
         check(rows == [("ghidra",)], "decompiler output imported: %s" % rows)
 
         print("game archive")
-        key(ord("F"), ("ctrl", "shift"))     # Navigate > Locate archived file
-        dlg = dialog("Locate archived file")
+        key(ord("F"), ("ctrl", "shift"))     # Navigate > Locate file in game archive
+        dlg = dialog("Locate file in game archive")
         check(dlg is not None, "Ctrl+Shift+F asks for a file in the game archive")
         key(ord("A"), ("ctrl",))
         type_text("models/test.nsbmd")

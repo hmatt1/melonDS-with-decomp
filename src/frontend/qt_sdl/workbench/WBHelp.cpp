@@ -53,10 +53,10 @@ const FeatureRow FeatureTable[] = {
      "Data loaded from the moment it is turned on; earlier data has no origin, except files recognised by their content",
      "Data origin panel, Inspector, origin.get", WBNeed::DataOrigin},
     {"Breakpoints and stepping", "The interpreter (JIT off)", "Any time", "Breakpoints panel, Debug menu", WBNeed::Interpreter},
-    {"Game archive", "A detected archive (TrackMania's vfs.zip)", "Always, by content; card reads only while recording",
-     "Archive panel, archived-file labels", WBNeed::Archive},
-    {"Containers", "NARC or SDAT files in the ROM (packed whole or not, nested or not)", "Always, by content; card reads only while recording",
-     "Containers panel, labels of the files inside containers", WBNeed::Containers},
+    {"Game archive", "The game's own archive, if one is detected (a vfs.zip, vfs.bin or vfs.dat)", "Always, by content; card reads only while recording",
+     "Game archive panel, archived-file labels", WBNeed::Archive},
+    {"NARC/SDAT files", "NARC or SDAT files in the ROM (packed whole or not, nested or not)", "Always, by content; card reads only while recording",
+     "NARC/SDAT files panel, labels of the files inside them", WBNeed::Containers},
 };
 }
 
@@ -98,8 +98,8 @@ GettingStartedPanel::GettingStartedPanel(WorkbenchWindow* w) : WBPanel(w)
     View = new QTextBrowser(this);
     View->setOpenLinks(false);
     QPushButton* rec = RecBtn = new QPushButton("Start recording", this);
-    QPushButton* hist = HistBtn = new QPushButton("Turn on write history", this);
-    QPushButton* origin = OriginBtn = new QPushButton("Turn on data origin", this);
+    QPushButton* hist = HistBtn = new QPushButton("Record write history", this);
+    QPushButton* origin = OriginBtn = new QPushButton("Record data origin", this);
     QPushButton* reset = new QPushButton("Reset game with tracking...", this);
     QCheckBox* show = new QCheckBox("Show at startup", this);
     show->setChecked(!Config::GetGlobalTable().GetBool("Workbench.GettingStartedDismissed"));
@@ -133,9 +133,9 @@ void GettingStartedPanel::Refresh()
     bool can = s.Available && s.EmuState != WBStatus::NoGame;
     RecBtn->setText(s.Recording ? "Recording is on" : "Start recording");
     RecBtn->setEnabled(can && !s.Recording);
-    HistBtn->setText(s.History ? "Write history is on" : "Turn on write history");
+    HistBtn->setText(s.History ? "Write history is on" : "Record write history");
     HistBtn->setEnabled(can && !s.History);
-    OriginBtn->setText(s.Origin ? "Data origin is on" : "Turn on data origin");
+    OriginBtn->setText(s.Origin ? "Data origin is on" : "Record data origin");
     OriginBtn->setEnabled(can && !s.Origin);
     QString h =
         "<h3>Getting started</h3>"

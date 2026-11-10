@@ -16,6 +16,8 @@
     with melonDS. If not, see http://www.gnu.org/licenses/.
 */
 
+#include <algorithm>
+#include <cstring>
 #include <memory>
 #include <QAbstractButton>
 #include <QChildEvent>
@@ -55,6 +57,7 @@
 #include "Panels.h"
 #include "Dialogs.h"
 #include "WBColors.h"
+#include "WBText.h"
 #include "WBHost.h"
 #include "WBQueries.h"
 #include "ApiServer.h"
@@ -65,6 +68,12 @@
 #include <QAbstractItemView>
 #include <QClipboard>
 #include <QKeyEvent>
+#include <QMouseEvent>
+#include <QLineEdit>
+#include <QTextEdit>
+#include <QPlainTextEdit>
+#include <QAbstractSpinBox>
+#include <QComboBox>
 
 using namespace melonDS;
 using namespace melonDS::WB;
@@ -709,7 +718,7 @@ void WorkbenchWindow::BuildPanels()
     AddDock("Source and diff", "dock_source", new SourcePanel(this));
     AddDock("Decompiler", "dock_decompiler", new DecompilerPanel(this));
     AddDock("Search", "dock_search", new SearchPanel(this));
-    AddDock("Archive", "dock_archive", ArchiveView = new ArchivePanel(this));
+    AddDock("Game archive", "dock_archive", ArchiveView = new ArchivePanel(this));
     connect(ArchiveView, &ArchivePanel::located, this, [this](int member, u32 addr, u32 size)
     {
         if (member != NavigateToArchived) return;
@@ -718,7 +727,7 @@ void WorkbenchWindow::BuildPanels()
         GoTo(addr);
         SetSelection(addr, size);
     });
-    AddDock("Containers", "dock_containers", ContainersView = new ContainersPanel(this));
+    AddDock("NARC/SDAT files", "dock_containers", ContainersView = new ContainersPanel(this));
     connect(ContainersView, &ContainersPanel::located, this, [this](int global, u32 addr, u32 size)
     {
         if (global != NavigateToContained) return;
@@ -790,6 +799,13 @@ void WorkbenchWindow::DefaultLayout()
         if (!bottom) bottom = DockMgr->addDockWidget(ads::BottomDockWidgetArea, dock(n), mem);
         else DockMgr->addDockWidgetTabToArea(dock(n), bottom);
     }
+    // the bottom group opens with the panels most sessions use; the others keep their place there and
+    // open from the View menu or Window > Panels
+    static const char* const open[] = {"dock_callstack", "dock_xrefs", "dock_history", "dock_origin", "dock_breakpoints",
+                                       "dock_source", "dock_search"};
+    for (const char* n : tabs)
+        if (std::find_if(std::begin(open), std::end(open), [n](const char* o) { return strcmp(o, n) == 0; }) == std::end(open))
+            dock(n)->toggleView(false);
     dock(tabs[0])->setAsCurrentTab();
     ads::CDockAreaWidget* left = DockMgr->addDockWidget(ads::LeftDockWidgetArea, dock("dock_functions"));
     DockMgr->addDockWidget(ads::BottomDockWidgetArea, dock("dock_bookmarks"), left);
@@ -804,11 +820,69 @@ void WorkbenchWindow::DefaultLayout()
         if (root->count() == 3) root->setSizes({300, 840, 360});
 }
 
+QAction* WorkbenchWindow::Action(const QString& id) const
+{
+    QAction* a = Actions.value(id);
+    Q_ASSERT_X(a, "WorkbenchWindow::Action", qPrintable(id));
+    return a;
+}
+
+QString WorkbenchWindow::KeyText(const QString& id) const
+{
+    QAction* a = Actions.value(id);
+    return a ? a->shortcut().toString(QKeySequence::NativeText) : QString();
+}
+
+WorkbenchWindow::CmdTarget WorkbenchWindow::Target() const
+{
+    if (HasMenuTarget) return MenuTarget;
+    CmdTarget t;
+    t.Cpu = CurCpu;
+    t.Addr = SelLen > 1 ? SelAddr : CurAddr;
+    t.Size = SelLen > 1 ? SelLen : 1;
+    return t;
+}
+
+void WorkbenchWindow::SetMenuTarget(QMenu& m, int cpu, u32 addr, u32 size)
+{
+    HasMenuTarget = true;
+    MenuTarget.Cpu = cpu < 0 ? CurCpu : (cpu & 1);
+    MenuTarget.Addr = addr;
+    MenuTarget.Size = std::max<u32>(size, 1);
+    // a command runs while the menu still exists (exec has not returned), so the target lasts exactly
+    // as long as the menu
+    connect(&m, &QObject::destroyed, this, [this]() { HasMenuTarget = false; });
+}
+
+void WorkbenchWindow::UseTargetCpu(const CmdTarget& t)
+{
+    if (t.Cpu != CurCpu) SetCpu(t.Cpu);
+}
+
 void WorkbenchWindow::BuildMenus()
 {
+    // Every command is made here once, with its id, name and key. Names end in "..." only when the
+    // command asks for more before it acts (a dialog or a prompt).
+    auto add = [this](QMenu* menu, const char* id, const QString& text, std::function<void()> fn,
+                      QList<QKeySequence> keys = {}) -> QAction*
+    {
+        QAction* a = new QAction(text, this);
+        a->setObjectName(QString("act_") + id);
+        if (!keys.isEmpty()) a->setShortcuts(keys);
+        a->setShortcutVisibleInContextMenu(true);
+        connect(a, &QAction::triggered, this, [fn]() { fn(); });
+        if (menu) menu->addAction(a);
+        Actions.insert(id, a);
+        return a;
+    };
+    auto onTarget = [this](std::function<void(const CmdTarget&)> f) -> std::function<void()>
+    {
+        return [this, f]() { CmdTarget t = Target(); UseTargetCpu(t); f(t); };
+    };
+
     QMenuBar* mb = menuBar();
     QMenu* file = mb->addMenu("&File");
-    file->addAction("Open knowledge store...", this, [this]()
+    add(file, "open_kb", "Open knowledge store...", [this]()
     {
         QString p = QFileDialog::getOpenFileName(this, "Knowledge store", H->ProjectDir(), "SQLite (*.db *.sqlite);;All files (*)");
         if (p.isEmpty()) return;
@@ -818,148 +892,133 @@ void WorkbenchWindow::BuildMenus()
         if (!H->KB().Open(p, H->Core().Rom, H->Settings().AuthorName, err)) ShowError("Open knowledge store", err);
         else emit H->knowledgeChanged();
     });
-    QAction* imp = file->addAction("Import static analysis (JSON)...", this, &WorkbenchWindow::ImportStaticAnalysis);
-    imp->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_I));
+    add(file, "open_project", "Open project folder", [this]() { QDir().mkpath(H->ProjectDir()); QDesktopServices::openUrl(QUrl::fromLocalFile(H->ProjectDir())); });
     file->addSeparator();
-    file->addAction("Save recording session now", this, [this]() { H->SaveSessionNow(); });
-    file->addAction("Open project folder", this, [this]() { QDir().mkpath(H->ProjectDir()); QDesktopServices::openUrl(QUrl::fromLocalFile(H->ProjectDir())); });
-    file->addSeparator();
-    file->addAction("Workbench settings...", this, &WorkbenchWindow::OpenSettings);
-    file->addAction("Close", this, &QWidget::close);
+    add(file, "settings", "Workbench settings...", [this]() { OpenSettings(); });
+    add(file, "close", "Close", [this]() { close(); });
 
     QMenu* edit = mb->addMenu("&Edit");
-    ActUndo = edit->addAction("Undo", this, [this]() { QString e; if (!KB().Undo(e)) Notice(e, 3000); });
-    ActUndo->setShortcut(QKeySequence::Undo);
-    ActRedo = edit->addAction("Redo", this, [this]() { QString e; if (!KB().Redo(e)) Notice(e, 3000); });
-    ActRedo->setShortcut(QKeySequence::Redo);
+    ActUndo = add(edit, "undo", "Undo", [this]() { QString e; if (!KB().Undo(e)) Notice(e, 3000); }, {QKeySequence::Undo});
+    ActRedo = add(edit, "redo", "Redo", [this]() { QString e; if (!KB().Redo(e)) Notice(e, 3000); }, {QKeySequence::Redo});
     edit->addSeparator();
-    QAction* a;
-    a = edit->addAction("Rename...", this, [this]() { RenameAt(CurAddr); });
-    a->setShortcut(QKeySequence(Qt::Key_N));
-    a = edit->addAction("Comment...", this, [this]() { CommentAt(SelLen > 1 ? SelAddr : CurAddr, SelLen > 1 ? SelLen : 1); });
-    a->setShortcut(QKeySequence(Qt::Key_Semicolon));
-    a = edit->addAction("Define function...", this, [this]() { DefineFunctionAt(CurAddr); });
-    a->setShortcut(QKeySequence(Qt::Key_P));
-    a = edit->addAction("Define data...", this, [this]() { DefineDataAt(SelLen > 1 ? SelAddr : CurAddr, SelLen > 1 ? SelLen : 0); });
-    a->setShortcut(QKeySequence(Qt::Key_D));
-    a = edit->addAction("Add bookmark", this, [this]() { AddBookmarkAt(CurAddr); });
-    a->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_B));
-    edit->addAction("Types...", this, [this]() { TypeEditorDialog d(this); d.exec(); });
+    add(edit, "rename", "Rename...", onTarget([this](const CmdTarget& t) { RenameAt(t.Addr); }), {QKeySequence(Qt::Key_N)});
+    add(edit, "comment", "Comment...", onTarget([this](const CmdTarget& t) { CommentAt(t.Addr, t.Size); }), {QKeySequence(Qt::Key_Semicolon)});
+    add(edit, "define_function", "Define function...", onTarget([this](const CmdTarget& t) { DefineFunctionAt(t.Addr); }), {QKeySequence(Qt::Key_P)});
+    add(edit, "define_data", "Define data...", onTarget([this](const CmdTarget& t) { DefineDataAt(t.Addr, t.Size > 1 ? t.Size : 0); }), {QKeySequence(Qt::Key_D)});
+    add(edit, "add_bookmark", "Add bookmark...", onTarget([this](const CmdTarget& t) { AddBookmarkAt(t.Addr); }), {QKeySequence(Qt::CTRL | Qt::Key_B)});
+    edit->addSeparator();
+    add(edit, "types", "Types...", [this]() { TypeEditorDialog d(this); d.exec(); });
 
     QMenu* nav = mb->addMenu("&Navigate");
-    a = nav->addAction("Go to address...", this, &WorkbenchWindow::PromptGoTo);
-    a->setShortcuts({QKeySequence(Qt::Key_G), QKeySequence(Qt::CTRL | Qt::Key_G)});
-    a = nav->addAction("Back", this, &WorkbenchWindow::Back);
-    a->setShortcuts({QKeySequence(Qt::ALT | Qt::Key_Left), QKeySequence(Qt::Key_Escape)});
-    a = nav->addAction("Forward", this, &WorkbenchWindow::Forward);
-    a->setShortcut(QKeySequence(Qt::ALT | Qt::Key_Right));
-    ActLock = nav->addAction("Lock to PC", this, [this](bool on) { SetLockToPC(on); });
+    add(nav, "goto", "Go to address...", [this]() { PromptGoTo(); }, {QKeySequence(Qt::Key_G)});
+    add(nav, "back", "Back", [this]() { Back(); }, {QKeySequence(Qt::ALT | Qt::Key_Left)});
+    add(nav, "forward", "Forward", [this]() { Forward(); }, {QKeySequence(Qt::ALT | Qt::Key_Right)});
+    nav->addSeparator();
+    auto open = [this](const CmdTarget& t, const char* panel) { SetLockToPC(false); GoTo(t.Addr); ShowPanel(panel); };
+    add(nav, "goto_disasm", "Go to disassembly", onTarget([open](const CmdTarget& t) { open(t, "dock_disasm"); }));
+    add(nav, "goto_memory", "Go to memory", onTarget([open](const CmdTarget& t) { open(t, "dock_memory"); }));
+    add(nav, "xrefs", "Cross-references", onTarget([this](const CmdTarget& t) { ShowXrefs(t.Addr); }), {QKeySequence(Qt::Key_X)});
+    nav->addSeparator();
+    ActLock = add(nav, "lock_pc", "Lock to PC", [this]() { SetLockToPC(ActLock->isChecked()); }, {QKeySequence(Qt::Key_L)});
     ActLock->setCheckable(true);
     ActLock->setChecked(LockPC);
-    ActLock->setShortcut(QKeySequence(Qt::Key_L));
-    a = nav->addAction("Switch CPU (ARM9/ARM7)", this, [this]() { SetCpu(CurCpu ^ 1); });
-    a->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_T));
-    a = nav->addAction("Locate archived file...", this, &WorkbenchWindow::PromptLocateArchived);
-    a->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F));
-    nav->addAction("Locate file in a container...", this, &WorkbenchWindow::PromptLocateContained);
-    a = nav->addAction("Cross-references", this, [this]() { ShowXrefs(SelLen > 1 ? SelAddr : CurAddr); });
-    a->setShortcut(QKeySequence(Qt::Key_X));
+    add(nav, "switch_cpu", "Switch CPU (ARM9/ARM7)", [this]() { SetCpu(CurCpu ^ 1); }, {QKeySequence(Qt::CTRL | Qt::Key_T)});
+    nav->addSeparator();
+    add(nav, "locate_archived", "Locate file in game archive...", [this]() { PromptLocateArchived(); }, {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F)});
+    add(nav, "locate_contained", "Locate file in NARC/SDAT...", [this]() { PromptLocateContained(); });
 
+    // The debugger's keys stay off the game window's (F1-F9 and Shift+F1-F9 are its savestates, F12
+    // undoes a state load): a key does one thing whichever window has it
     QMenu* dbg = mb->addMenu("&Debug");
     dbg->setToolTipsVisible(true);
-    ActPause = dbg->addAction("Pause", this, [this]()
-    {
-        if (H->Core().Dbg.InBreak() || !H->EmuRunning()) H->Resume();
-        else H->Pause();
-    });
-    ActPause->setShortcut(QKeySequence(Qt::Key_F5));
-    ActAnalyze = dbg->addAction("Mark unreached code", this, [this]()
-    {
-        if (H->AnalysisRunning()) H->CancelStaticAnalysis();
-        else H->RunStaticAnalysis();
-    });
-    ActClearAnalysis = dbg->addAction("Clear unreached marks", this, [this]()
+    ActContinue = add(dbg, "continue", "Continue", [this]() { H->Resume(); }, {QKeySequence(Qt::CTRL | Qt::Key_F5)});
+    ActContinue->setToolTip("Run from a pause or a break");
+    ActPause = add(dbg, "pause", "Pause", [this]() { H->Pause(); });
+    ActPause->setToolTip("Pause the emulator at the end of the frame");
+    ActBreak = add(dbg, "break", "Break", [this]() { H->BreakNow(CurCpu); }, {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F5)});
+    ActBreak->setToolTip("Stop in the debugger at the next instruction");
+    dbg->addSeparator();
+    ActStepInto = add(dbg, "step_into", "Step into", [this]() { H->Step(CurCpu, 1); }, {QKeySequence(Qt::Key_F11)});
+    ActStepOver = add(dbg, "step_over", "Step over", [this]() { H->StepOver(CurCpu); }, {QKeySequence(Qt::Key_F10)});
+    ActRunTo = add(dbg, "run_to_cursor", "Run to cursor", onTarget([this](const CmdTarget& t) { RunToAddr(t.Addr); }), {QKeySequence(Qt::CTRL | Qt::Key_F10)});
+    ActFrame = add(dbg, "run_frame", "Run one frame", [this]() { H->RunFrames(1, nullptr); }, {QKeySequence(Qt::CTRL | Qt::Key_F11)});
+    dbg->addSeparator();
+    ActToggleBp = add(dbg, "toggle_breakpoint", "Toggle breakpoint", onTarget([this](const CmdTarget& t) { ToggleBreakpointAt(t.Addr); }), {QKeySequence(Qt::CTRL | Qt::Key_F9)});
+    BuildDebugBar();
+
+    QMenu* ana = mb->addMenu("&Analysis");
+    ana->setToolTipsVisible(true);
+    add(ana, "import_analysis", "Import static analysis (JSON)...", [this]() { ImportStaticAnalysis(); }, {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_I)});
+    ana->addSeparator();
+    ActAnalyze = add(ana, "mark_unreached", "Mark unreached code", [this]() { H->RunStaticAnalysis(); });
+    ActCancelAnalysis = add(ana, "cancel_analysis", "Cancel static analysis", [this]() { H->CancelStaticAnalysis(); });
+    ActCancelAnalysis->setToolTip("Stop this walk. The marks already shown stay.");
+    ActClearAnalysis = add(ana, "clear_unreached", "Clear unreached marks", [this]()
     {
         H->ClearStaticAnalysis();
         ClearAnalysisHold();
     });
     ActClearAnalysis->setToolTip("Remove the marks from the last run.");
-    ActBreak = dbg->addAction("Break", this, [this]() { H->BreakNow(CurCpu); });
-    ActBreak->setShortcut(QKeySequence(Qt::SHIFT | Qt::Key_F5));
-    ActBreak->setToolTip("Stop at the next instruction");
-    ActStepInto = dbg->addAction("Step into", this, [this]() { H->Step(CurCpu, 1); });
-    ActStepInto->setShortcuts({QKeySequence(Qt::Key_F7), QKeySequence(Qt::Key_F11)});
-    ActStepOver = dbg->addAction("Step over", this, [this]() { H->StepOver(CurCpu); });
-    ActStepOver->setShortcut(QKeySequence(Qt::Key_F10));
-    ActFrame = dbg->addAction("Run one frame", this, [this]() { H->RunFrames(1, nullptr); });
-    ActFrame->setShortcut(QKeySequence(Qt::Key_F8));
-    ActRunTo = dbg->addAction("Run to cursor", this, [this]() { RunToAddr(CurAddr); });
-    ActRunTo->setShortcut(QKeySequence(Qt::Key_F4));
-    ActToggleBp = dbg->addAction("Toggle breakpoint", this, [this]() { ToggleBreakpointAt(CurAddr); });
-    ActToggleBp->setShortcut(QKeySequence(Qt::Key_F9));
-    BuildDebugBar();
 
     QMenu* build = mb->addMenu("&Build");
-    a = build->addAction("Compare function with the original", this, [this]()
+    add(build, "build_compare", "Build and compare function", onTarget([this](const CmdTarget& t)
     {
-        for (WBPanel* p : Panels)
-            if (SourcePanel* sp = qobject_cast<SourcePanel*>(p))
-            {
-                ShowPanel("dock_source");
-                sp->CompareAt(CurAddr);
-            }
-    });
-    a->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_B));
-    a = build->addAction("Open the function's source in the editor", this, [this]()
+        if (SourcePanel* sp = FindPanel<SourcePanel>())
+        {
+            ShowPanel("dock_source");
+            sp->CompareAt(t.Addr);
+        }
+    }), {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_B)});
+    add(build, "open_source", "Open source in editor", onTarget([this](const CmdTarget& t)
     {
-        for (WBPanel* p : Panels)
-            if (SourcePanel* sp = qobject_cast<SourcePanel*>(p)) sp->OpenEditorAt(CurAddr);
-    });
-    a->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_E));
+        if (SourcePanel* sp = FindPanel<SourcePanel>()) sp->OpenEditorAt(t.Addr);
+    }), {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_E)});
     build->addSeparator();
-    build->addAction("Compare setup...", this, [this]()
+    add(build, "compare_setup", "Compare setup", [this]()
     {
         ShowPanel("dock_compare_setup");
         if (CompareSetupPanel* sp = FindPanel<CompareSetupPanel>()) sp->ShowTab(0);
     });
 
     QMenu* rec = mb->addMenu("&Recording");
-    ActRec = rec->addAction("Recording", this, [this](bool on) { H->SetRecording(on); });
-    ActRec->setCheckable(true);
-    ActRec->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_R));
-    ActHist = rec->addAction("Write history", this, [this](bool on) { H->SetWriteHistory(on); });
-    ActHist->setCheckable(true);
-    ActHist->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_H));
-    ActOrigin = rec->addAction("Data origin", this, [this](bool on) { H->SetDataOrigin(on); });
-    ActOrigin->setCheckable(true);
-    ActOrigin->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_D));
     rec->setToolTipsVisible(true);
+    ActRec = add(rec, "recording", "Start recording", [this]() { H->SetRecording(!H->Status().Recording); }, {QKeySequence(Qt::CTRL | Qt::Key_R)});
+    ActHist = add(rec, "write_history", "Record write history", [this]() { H->SetWriteHistory(ActHist->isChecked()); }, {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_H)});
+    ActHist->setCheckable(true);
+    ActOrigin = add(rec, "data_origin", "Record data origin", [this]() { H->SetDataOrigin(ActOrigin->isChecked()); }, {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_D)});
+    ActOrigin->setCheckable(true);
     QMenu* also = rec->addMenu("When recording starts, also turn on");
-    a = also->addAction("Write history", this, [this](bool on) { H->Settings().AlsoHistory = on; H->SaveSettings(); });
+    QAction* a = also->addAction("Record write history", this, [this](bool on) { H->Settings().AlsoHistory = on; H->SaveSettings(); });
     a->setCheckable(true);
     a->setChecked(H->Settings().AlsoHistory);
-    a = also->addAction("Data origin", this, [this](bool on) { H->Settings().AlsoOrigin = on; H->SaveSettings(); });
+    a = also->addAction("Record data origin", this, [this](bool on) { H->Settings().AlsoOrigin = on; H->SaveSettings(); });
     a->setCheckable(true);
     a->setChecked(H->Settings().AlsoOrigin);
     rec->addSeparator();
-    a = rec->addAction("Reset game with tracking...", this, [this]() { ResetWithTracking(); });
-    a->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R));
+    add(rec, "track_value", "Track value origin...", onTarget([this](const CmdTarget& t) { TrackValue(t.Addr, t.Size); }));
+    add(rec, "save_session", "Save session now", [this]() { H->SaveSessionNow(); });
+    rec->addSeparator();
+    add(rec, "reset_tracking", "Reset game with tracking...", [this]() { ResetWithTracking(); }, {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R)});
+    // right-click only: open a tracing panel on an address
+    add(nullptr, "show_history", "Show write history", onTarget([this](const CmdTarget& t) { SetSelection(t.Addr, t.Size); ShowPanel("dock_history"); }));
+    add(nullptr, "show_origin", "Show data origin", onTarget([this](const CmdTarget& t) { SetSelection(t.Addr, t.Size); ShowPanel("dock_origin"); }));
 
     QMenu* view = mb->addMenu("&View");
     BuildViewMenu(view);
     view->addSeparator();
-    ActEmbed = view->addAction("Game screen in the workbench", this, [this](bool on)
+    ActEmbed = add(view, "embed_game", "Game screen in the workbench", [this]()
     {
+        bool on = ActEmbed->isChecked();
         Config::Table cfg = Config::GetGlobalTable();
         cfg.SetBool("Workbench.EmbeddedScreen", on);
         Config::Save();
         SetEmbeddedScreen(on);
-    });
+    }, {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_G)});
     ActEmbed->setCheckable(true);
-    ActEmbed->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_G));
     ActEmbed->setToolTip("Run the game in the Game screen panel instead of its own window");
-    ActHideMain = view->addAction("Hide the separate game window", this, [this](bool on)
+    ActHideMain = add(view, "hide_game_window", "Hide the separate game window", [this]()
     {
+        bool on = ActHideMain->isChecked();
         Config::Table cfg = Config::GetGlobalTable();
         cfg.SetBool("Workbench.HideMainWindow", on);
         Config::Save();
@@ -968,16 +1027,15 @@ void WorkbenchWindow::BuildMenus()
     ActHideMain->setCheckable(true);
     ActHideMain->setEnabled(false);
 
-    QMenu* help = mb->addMenu("&Help");
-    help->addAction("Getting started", this, [this]() { ShowPanel("dock_start"); });
-    help->addAction("Feature requirements...", this, [this]() { ShowFeatureRequirements(); });
-
     QMenu* win = mb->addMenu("&Window");
     WorkspaceMenu = win->addMenu("Workspaces");
-    a = win->addAction("Panels...", this, [this]() { ShowPanelPalette(); });
-    a->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P));
+    add(win, "panels", "Panels...", [this]() { ShowPanelPalette(); }, {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P)});
     win->addSeparator();
-    win->addAction("Reset layout", this, [this]() { if (!Workspaces.empty()) { RestoreLayout(Workspaces[CurWorkspace].Default); SaveLayout(); } });
+    add(win, "reset_layout", "Reset layout", [this]() { if (!Workspaces.empty()) { RestoreLayout(Workspaces[CurWorkspace].Default); SaveLayout(); } });
+
+    QMenu* help = mb->addMenu("&Help");
+    add(help, "getting_started", "Getting started", [this]() { ShowPanel("dock_start"); });
+    add(help, "feature_requirements", "Feature requirements", [this]() { ShowFeatureRequirements(); });
 
     for (QAction* act : findChildren<QAction*>())
         act->setShortcutContext(Qt::WindowShortcut);
@@ -1012,7 +1070,10 @@ void WorkbenchWindow::BuildStatusBar()
     LblPause = badge("PAUSED", WBColor::Select().name());
     LblFrames = new QLabel(this);
     LblSpeed = new QLabel(this);
-    LblPC = new QLabel(this);
+    LblPC = new QToolButton(this);
+    LblPC->setAutoRaise(true);
+    LblPC->setCursor(Qt::PointingHandCursor);
+    connect(LblPC, &QToolButton::clicked, this, [this]() { Action("switch_cpu")->trigger(); });
     LblKB = new QLabel(this);
     statusBar()->addWidget(LblFrames);
     statusBar()->addWidget(LblSpeed);
@@ -1078,8 +1139,17 @@ void WorkbenchWindow::UpdateStatus()
                       : "Data origin is off. Click to turn it on.\n\n" + WBHost::Covers(WBNeed::DataOrigin));
     bool paused = s.EmuState == WBStatus::Paused || s.EmuState == WBStatus::Break;
     LblPause->setVisible(paused || s.EmuState == WBStatus::NoGame);
-    LblPause->setText(s.EmuState == WBStatus::Break ? QString("BREAK (%1)").arg(QString::fromStdString(s.BreakInfo.Reason))
-                      : s.EmuState == WBStatus::NoGame ? "NO GAME" : "PAUSED");
+    // a pause (the emulator stopped at a frame's end) and a break (the debugger stopped at an
+    // instruction) look different: Continue resumes both, but only a break can step
+    {
+        QString text = s.EmuState == WBStatus::Break ? "BREAK: " + WBHost::BreakReasonText(s.BreakInfo.Reason)
+                       : s.EmuState == WBStatus::NoGame ? "NO GAME" : "PAUSED";
+        QColor bg = s.EmuState == WBStatus::Break ? WBColor::Red() : s.EmuState == WBStatus::NoGame ? WBColor::Off() : WBColor::Select();
+        QString style = QString("QLabel { background: %1; color: %2; font-weight: bold; padding: 1px 6px; border-radius: 3px; }")
+                            .arg(bg.name(), WBColor::Text().name());
+        if (LblPause->styleSheet() != style) LblPause->setStyleSheet(style);
+        if (LblPause->text() != text) LblPause->setText(text);
+    }
     LblFrames->setText(s.Recording ? QString("frames recorded: %1").arg(s.FramesRecorded) : QString("frame %1").arg(s.Frame));
     LblSpeed->setText(s.EmuState == WBStatus::Running ? QString("%1 fps").arg(s.Fps, 0, 'f', 1) : QString());
     QString funcName;
@@ -1088,6 +1158,8 @@ void WorkbenchWindow::UpdateStatus()
             funcName = f->Name.isEmpty() ? QString("sub_%1").arg(f->Addr, 8, 16, QChar('0')) : f->Name;
     LblPC->setText(QString("%1 PC %2%3").arg(CurCpu ? "ARM7" : "ARM9").arg(s.PC[CurCpu], 8, 16, QChar('0'))
                    .arg(funcName.isEmpty() ? QString() : "  " + funcName));
+    LblPC->setToolTip(QString("Every panel shows the %1. Click to switch to the %2 (Navigate > Switch CPU, %3).")
+                          .arg(CurCpu ? "ARM7" : "ARM9", CurCpu ? "ARM9" : "ARM7", KeyText("switch_cpu")));
     LblKB->setText(KB().IsOpen() ? QString("KB: %1").arg(KB().Path()) : QString("no knowledge store"));
     QString title = "melonDS Decomp Workbench";
     if (!s.RomTitle.isEmpty()) title += " - " + s.RomTitle + " (" + s.RomCode + ")";
@@ -1102,27 +1174,29 @@ void WorkbenchWindow::UpdateStatus()
         a->setEnabled(avail && game);
         a->setToolTip(why);
     }
-    ActRec->setChecked(s.Recording);
+    ActRec->setText(s.Recording ? "Stop recording" : "Start recording");
+    if (s.Recording) ActRec->setEnabled(true);
     ActHist->setChecked(s.History);
     ActOrigin->setChecked(s.Origin);
     if (ActPause)
     {
-        ActPause->setText(paused ? "Resume" : "Pause");
-        ActPause->setEnabled(game);
+        ActPause->setEnabled(game && s.EmuState == WBStatus::Running);
+        ActContinue->setEnabled(game && paused);
         bool step = game && avail;
         for (QAction* act : {ActBreak, ActStepInto, ActStepOver, ActFrame, ActRunTo, ActToggleBp})
             if (act) act->setEnabled(step);
+        ActBreak->setEnabled(step && s.EmuState != WBStatus::Break);
     }
     if (ActAnalyze)
     {
         bool busy = H->AnalysisRunning();
-        ActAnalyze->setEnabled(busy || (game && paused));
-        ActAnalyze->setText(busy ? "Cancel static analysis" : "Mark unreached code");
+        ActAnalyze->setEnabled(!busy && game && paused);
+        ActCancelAnalysis->setEnabled(busy);
         QString tip = "While paused, follow code that has already run and mark the instructions and literal pools it has not reached. "
                       "The marks stay until they are cleared or this command is run again. They are not written to the knowledge store.";
-        if (busy) tip = "Stop this walk. The marks already shown stay.";
+        if (busy) tip = "A walk is running. Analysis > Cancel static analysis stops it.";
         else if (!game) tip = "No game is running.";
-        else if (!paused) tip = "Pause the game first (F5).";
+        else if (!paused) tip = QString("Pause the game first (Debug > Pause, or Break: %1).").arg(KeyText("break"));
         ActAnalyze->setToolTip(tip);
     }
     if (ActClearAnalysis) ActClearAnalysis->setEnabled(H->HasAnalysis() && !H->AnalysisRunning());
@@ -1236,31 +1310,61 @@ bool WorkbenchWindow::eventFilter(QObject* o, QEvent* e)
             QTimer::singleShot(0, this, [this, btn]() { if (btn) StampButton(btn); });
         }
     }
-    // The game window uses some of the same keys (F9 loads a state, Ctrl+Shift+R toggles recording).
-    // Two shortcuts for one key are ambiguous, so neither action runs. While the key is going to the
-    // workbench, run its action here and accept the event so the game window does not take it.
+    // The workbench runs its own commands' keys here, so the embedded game window's menus (which share
+    // the window) never make a key ambiguous: an ambiguous key runs nothing.
     if (e->type() == QEvent::ShortcutOverride)
     {
         QWidget* w = qobject_cast<QWidget*>(o);
         if (w && (w == this || isAncestorOf(w)) && !(GameWin && (w == GameWin || GameWin->isAncestorOf(w))))
         {
             auto* ke = static_cast<QKeyEvent*>(e);
+            // N, P, G, ; and the like are letters while a text box has the focus
+            bool textInput = qobject_cast<QLineEdit*>(w) || qobject_cast<QTextEdit*>(w) || qobject_cast<QPlainTextEdit*>(w)
+                             || qobject_cast<QAbstractSpinBox*>(w);
+            if (auto* cb = qobject_cast<QComboBox*>(w)) textInput = cb->isEditable();
+            bool plain = !(ke->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier));
+            if (textInput && plain && !ke->text().isEmpty() && ke->text().at(0).isPrint())
+                return QMainWindow::eventFilter(o, e);
             QKeySequence seq((ke->modifiers() & ~Qt::KeypadModifier) | ke->key());
+            auto inGame = [this](QObject* a)
+            {
+                for (QObject* p = a; p; p = p->parent())
+                    if (p == GameWin) return true;
+                return false;
+            };
             bool owned = false;
             QAction* hit = nullptr;
             for (QAction* a : findChildren<QAction*>())
+            {
+                if (GameWin && inGame(a)) continue;
                 for (const QKeySequence& s : a->shortcuts())
                     if (s == seq)
                     {
                         owned = true;
                         if (a->isEnabled()) hit = a;
                     }
+            }
             if (owned)
             {
-                if (hit && w == QApplication::focusWidget() && !ke->isAutoRepeat()) hit->trigger();
+                // holding a step key keeps stepping
+                bool repeats = hit == ActStepInto || hit == ActStepOver || hit == ActFrame;
+                if (hit && w == QApplication::focusWidget() && (!ke->isAutoRepeat() || repeats)) hit->trigger();
                 e->accept();
                 return true;
             }
+        }
+    }
+    // the mouse's back and forward buttons move through the navigation history
+    if (e->type() == QEvent::MouseButtonPress)
+    {
+        auto* me = static_cast<QMouseEvent*>(e);
+        QWidget* w = qobject_cast<QWidget*>(o);
+        if ((me->button() == Qt::BackButton || me->button() == Qt::ForwardButton) && w && isAncestorOf(w)
+            && !(GameWin && (w == GameWin || GameWin->isAncestorOf(w))))
+        {
+            if (me->button() == Qt::BackButton) Back();
+            else Forward();
+            return true;
         }
     }
     // keys typed into the embedded game go to the game: the workbench's shortcuts stay out of the way,
@@ -1287,14 +1391,14 @@ void WorkbenchWindow::ResetWithTracking()
     // reset the console with tracking armed, so loading at boot is covered (PR-4)
     WBStatus s = H->Status();
     if (s.EmuState == WBStatus::NoGame) { ShowError("Reset game with tracking", H->Missing(WBNeed::Game)); return; }
-    if (!s.Available) { ShowError("Reset game with tracking", H->Missing(WBNeed::Interpreter) + " Use the Recording panel or Turn off the JIT first."); return; }
+    if (!s.Available) { ShowError("Reset game with tracking", H->Missing(WBNeed::Interpreter) + " Turn the JIT recompiler off in Config > Emu settings first."); return; }
     QDialog dlg(this);
     dlg.setWindowTitle("Reset game with tracking");
     auto* lay = new QVBoxLayout(&dlg);
     lay->addWidget(new QLabel("The game restarts with these on, so everything it loads from boot is recorded.", &dlg));
-    auto* rec = new QCheckBox("Recording (coverage, calls, card reads)", &dlg);
-    auto* hist = new QCheckBox("Write history", &dlg);
-    auto* origin = new QCheckBox("Data origin", &dlg);
+    auto* rec = new QCheckBox("Record (coverage, calls, card reads)", &dlg);
+    auto* hist = new QCheckBox("Record write history", &dlg);
+    auto* origin = new QCheckBox("Record data origin", &dlg);
     rec->setChecked(true);
     hist->setChecked(s.History || H->Settings().AlsoHistory);
     origin->setChecked(s.Origin || H->Settings().AlsoOrigin);
@@ -1307,11 +1411,12 @@ void WorkbenchWindow::ResetWithTracking()
     auto* form = new QFormLayout();
     auto* fileMB = new QSpinBox(&dlg);
     fileMB->setRange(0, 65536);
-    fileMB->setSuffix(" MB");
-    fileMB->setSpecialValueText("in memory");
+    fileMB->setSingleStep(256);
+    fileMB->setSuffix(WBText::HistoryFileSuffix);
+    fileMB->setSpecialValueText(WBText::HistoryInMemory);
     fileMB->setValue((int)H->Settings().HistoryFileMB);
-    fileMB->setToolTip("Write history in a file of this size (1 GB holds about 33 million writes); in memory keeps 4 million");
-    form->addRow("Write history capacity:", fileMB);
+    fileMB->setToolTip(WBText::HistoryFileTip);
+    form->addRow("Write history:", fileMB);
     lay->addLayout(form);
     auto* keep = new QRadioButton("Keep the current session going", &dlg);
     auto* fresh = new QRadioButton("Save the current session and start a new one", &dlg);
@@ -1351,6 +1456,7 @@ void WorkbenchWindow::BuildDebugBar()
     bar->setObjectName("DebugBar");
     bar->setMovable(false);
     bar->setFloatable(false);
+    bar->addAction(ActContinue);
     bar->addAction(ActPause);
     bar->addAction(ActBreak);
     bar->addAction(ActStepInto);
@@ -1568,7 +1674,7 @@ void WorkbenchWindow::DefineDataAt(u32 addr, u32 size)
 
 void WorkbenchWindow::ToggleBreakpointAt(u32 addr)
 {
-    if (H->Core().JITActive()) { ShowError("Breakpoint", "Breakpoints need the interpreter. Turn the JIT recompiler off in Emu settings."); return; }
+    if (H->Core().JITActive()) { ShowError("Breakpoint", "Breakpoints need the interpreter. Turn the JIT recompiler off in Config > Emu settings."); return; }
     int cpu = CurCpu;
     H->RunSync([this, addr, cpu]()
     {
@@ -1593,7 +1699,7 @@ void WorkbenchWindow::ToggleBreakpointAt(u32 addr)
 
 void WorkbenchWindow::AddWatchpoint(u32 addr, u32 size, int kind)
 {
-    if (H->Core().JITActive()) { ShowError("Watchpoint", "Watchpoints need the interpreter. Turn the JIT recompiler off in Emu settings."); return; }
+    if (H->Core().JITActive()) { ShowError("Watchpoint", "Watchpoints need the interpreter. Turn the JIT recompiler off in Config > Emu settings."); return; }
     int cpu = CurCpu;
     H->RunSync([this, addr, size, kind, cpu]()
     {
@@ -1632,12 +1738,12 @@ void WorkbenchWindow::TrackValue(u32 addr, u32 size)
 {
     if (!H->Status().Recording || !H->Status().Origin)
     {
-        if (QMessageBox::question(this, "Track this value", "Data origin tracking is off. Turn recording and data origin on now?") != QMessageBox::Yes) return;
+        if (QMessageBox::question(this, "Track value origin", "Data origin tracking is off. Turn recording and data origin on now?") != QMessageBox::Yes) return;
         if (!H->Status().Recording) H->SetRecording(true);
         H->SetDataOrigin(true);
     }
     bool ok;
-    QString name = QInputDialog::getText(this, "Track this value", "Label for values derived from these bytes:", QLineEdit::Normal,
+    QString name = QInputDialog::getText(this, "Track value origin", "Label for values derived from these bytes:", QLineEdit::Normal,
                                          QString("%1+%2").arg(KB().NameAt(CurCpu, addr, OverlayContext(addr), true).isEmpty() ? QString("%1").arg(addr, 8, 16, QChar('0')) : KB().NameAt(CurCpu, addr, OverlayContext(addr), true)).arg(size), &ok);
     if (!ok) return;
     int cpu = CurCpu;
@@ -1658,13 +1764,13 @@ void WorkbenchWindow::TrackRegister(int reg)
 {
     if (!H->Status().Recording || !H->Status().Origin)
     {
-        if (QMessageBox::question(this, "Track this value", "Data origin tracking is off. Turn recording and data origin on now?") != QMessageBox::Yes) return;
+        if (QMessageBox::question(this, "Track value origin", "Data origin tracking is off. Turn recording and data origin on now?") != QMessageBox::Yes) return;
         if (!H->Status().Recording) H->SetRecording(true);
         H->SetDataOrigin(true);
     }
     int cpu = CurCpu;
     bool ok;
-    QString name = QInputDialog::getText(this, "Track this value", "Label:", QLineEdit::Normal, QString("r%1 @%2").arg(reg).arg(H->Status().PC[cpu], 8, 16, QChar('0')), &ok);
+    QString name = QInputDialog::getText(this, "Track value origin", "Label:", QLineEdit::Normal, QString("r%1 @%2").arg(reg).arg(H->Status().PC[cpu], 8, 16, QChar('0')), &ok);
     if (!ok) return;
     H->RunSync([this, reg, cpu, name]()
     {
@@ -1690,23 +1796,19 @@ void WorkbenchWindow::AddBookmarkAt(u32 addr)
 
 void WorkbenchWindow::AddressActions(QMenu& m, int cpu, u32 addr, u32 size)
 {
-    // on the row's CPU, and at the address rather than following the PC
-    auto on = [this, cpu](std::function<void()> f)
-    {
-        return [this, cpu, f]() { if (cpu >= 0 && cpu != CurCpu) SetCpu(cpu); f(); };
-    };
-    auto open = [this, addr](const char* panel) { SetLockToPC(false); GoTo(addr); ShowPanel(panel); };
-    m.addAction("Go to disassembly", on([=]() { open("dock_disasm"); }));
-    m.addAction("Go to memory", on([=]() { open("dock_memory"); }));
+    // the window's own commands, acting on the row's address and CPU rather than the cursor
+    SetMenuTarget(m, cpu, addr, size);
+    m.addAction(Action("goto_disasm"));
+    m.addAction(Action("goto_memory"));
     m.addSeparator();
-    m.addAction("Rename...\tN", on([=]() { RenameAt(addr); }));
-    m.addAction("Comment...\t;", on([=]() { CommentAt(addr, size); }));
-    m.addAction("Add bookmark", on([=]() { AddBookmarkAt(addr); }));
-    m.addAction("Cross-references\tX", on([=]() { ShowXrefs(addr); }));
+    m.addAction(Action("rename"));
+    m.addAction(Action("comment"));
+    m.addAction(Action("add_bookmark"));
+    m.addAction(Action("xrefs"));
     m.addSeparator();
-    m.addAction("Write history", on([=]() { SetSelection(addr, size); ShowPanel("dock_history"); }));
-    m.addAction("Data origin", on([=]() { SetSelection(addr, size); ShowPanel("dock_origin"); }));
-    m.addAction("Track origin from here", on([=]() { TrackValue(addr, size); }));
+    m.addAction(Action("show_history"));
+    m.addAction(Action("show_origin"));
+    m.addAction(Action("track_value"));
     m.addSeparator();
     m.addAction("Copy address", [addr]() { QApplication::clipboard()->setText(QString("%1").arg(addr, 8, 16, QChar('0'))); });
 }
@@ -1719,10 +1821,13 @@ void WorkbenchWindow::AddRowMenu(QAbstractItemView* view, RowAddress at, std::fu
         QModelIndex idx = view->indexAt(pos);
         if (!idx.isValid()) return;
         QMenu m(view);
-        if (extra) extra(m, idx);
         u32 a = 0, n = 1;
         int cpu = -1;
-        if (at && at(idx, a, n, cpu))
+        bool hasAddr = at && at(idx, a, n, cpu);
+        // the panel's own items may use the window's commands too, on the row's address
+        if (hasAddr) SetMenuTarget(m, cpu, a, std::max<u32>(n, 1));
+        if (extra) extra(m, idx);
+        if (hasAddr)
         {
             if (!m.isEmpty()) m.addSeparator();
             AddressActions(m, cpu, a, std::max<u32>(n, 1));
@@ -1750,12 +1855,12 @@ void WorkbenchWindow::PromptLocateArchived()
 {
     if (!ArchiveView) return;
     QStringList paths = ArchiveView->Paths();
-    if (paths.isEmpty()) { ShowError("Locate archived file", "No game archive is available: " + H->ArchiveStatus()); return; }
+    if (paths.isEmpty()) { ShowError("Locate file in game archive", "No game archive is available: " + H->ArchiveStatus()); return; }
     bool ok;
-    QString t = QInputDialog::getItem(this, "Locate archived file", "File in the game archive:", paths, 0, true, &ok);
+    QString t = QInputDialog::getItem(this, "Locate file in game archive", "File in the game archive:", paths, 0, true, &ok);
     if (!ok || t.trimmed().isEmpty()) return;
     int i = ArchiveView->IndexOf(t);
-    if (i < 0) { ShowError("Locate archived file", "Not in the archive: " + t); return; }
+    if (i < 0) { ShowError("Locate file in game archive", "Not in the archive: " + t); return; }
     LocateArchived(i, true);
 }
 
@@ -1771,12 +1876,12 @@ void WorkbenchWindow::PromptLocateContained()
 {
     if (!ContainersView) return;
     QStringList paths = ContainersView->Paths();
-    if (paths.isEmpty()) { ShowError("Locate file in a container", H->Missing(WBNeed::Containers)); return; }
+    if (paths.isEmpty()) { ShowError("Locate file in NARC/SDAT", H->Missing(WBNeed::Containers)); return; }
     bool ok;
-    QString t = QInputDialog::getItem(this, "Locate file in a container", "File inside a NARC or SDAT (/file.narc:name):", paths, 0, true, &ok);
+    QString t = QInputDialog::getItem(this, "Locate file in NARC/SDAT", "File inside a NARC or SDAT (/file.narc:name):", paths, 0, true, &ok);
     if (!ok || t.trimmed().isEmpty()) return;
     int g = ContainersView->IndexOf(t);
-    if (g < 0) { ShowError("Locate file in a container", "No such file in a container: " + t); return; }
+    if (g < 0) { ShowError("Locate file in NARC/SDAT", "No such file in a container: " + t); return; }
     LocateContained(g, true);
 }
 

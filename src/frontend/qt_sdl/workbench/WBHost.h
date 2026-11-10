@@ -300,6 +300,7 @@ public:
     WorkbenchWindow* Window(bool create = true);
     void ShowWindow();
     QString TitlePrefix() const;
+    static QString BreakReasonText(const std::string& reason);   // a break's reason as the status bars show it
     ApiServer* Api() { return Server; }
     void StartApi(int port, bool memwrite);
     int OverlayLoadedAt(melonDS::u32 addr) const;   // recorder's overlay owner (cpu 0), -1 = static/unknown

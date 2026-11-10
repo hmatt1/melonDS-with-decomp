@@ -46,9 +46,7 @@ QTableWidgetItem* Cell(const QString& text, const QVariant& data = QVariant());
 
 static QFont Mono()
 {
-    QFont f("Consolas");
-    f.setStyleHint(QFont::Monospace);
-    f.setPointSize(9);
+    QFont f = WBColor::MonoFont();
     return f;
 }
 
@@ -88,7 +86,7 @@ CompareChecklist::CompareChecklist(WorkbenchWindow* w, QWidget* parent) : QFrame
     Collapse = new QToolButton(this);
     Collapse->setAutoRaise(true);
     Collapse->setText("Hide");
-    QPushButton* open = new QPushButton("Compare setup...", this);
+    QPushButton* open = new QPushButton("Compare setup", this);
     QHBoxLayout* top = new QHBoxLayout();
     top->addWidget(Title, 1);
     top->addWidget(open);
@@ -107,7 +105,7 @@ CompareChecklist::CompareChecklist(WorkbenchWindow* w, QWidget* parent) : QFrame
         Body->setVisible(!Collapsed);
         Collapse->setText(Collapsed ? "Show" : "Hide");
     });
-    connect(open, &QPushButton::clicked, this, [this]() { W->ShowPanel("dock_compare_setup"); });
+    connect(open, &QPushButton::clicked, this, [this]() { W->Action("compare_setup")->trigger(); });
     if (CompareSetupPanel* sp = W->FindPanel<CompareSetupPanel>())
         connect(sp, &CompareSetupPanel::setupChanged, this, [this]() { Check(FuncId, true); });
 }
@@ -253,7 +251,7 @@ CompareSetupPanel::CompareSetupPanel(WorkbenchWindow* w) : WBPanel(w)
     Script = new CodeEditor(st, CodeEditor::Python);
     ScriptState = new QLabel(st);
     ScriptState->setWordWrap(true);
-    QPushButton* save = new QPushButton("Save", st);
+    QPushButton* save = new QPushButton("Save script", st);
     QPushButton* reset = new QPushButton("Reset to template...", st);
     QPushButton* changes = new QPushButton("Show changes from template", st);
     QHBoxLayout* sb = new QHBoxLayout();
@@ -278,9 +276,9 @@ CompareSetupPanel::CompareSetupPanel(WorkbenchWindow* w) : WBPanel(w)
     QPushButton* saveCfg = new QPushButton("Save compare.json", cfgTab);
     QWidget* local = new QWidget(cfgTab);
     Python = new QLineEdit(local);
-    Python->setPlaceholderText("python (on PATH)");
+    Python->setPlaceholderText("Python on PATH");
     Objdiff = new QLineEdit(local);
-    Objdiff->setPlaceholderText("objdiff-cli (on PATH)");
+    Objdiff->setPlaceholderText("objdiff-cli on PATH");
     Timeout = new QSpinBox(local);
     Timeout->setRange(5, 3600);
     Timeout->setSuffix(" s");
@@ -290,7 +288,7 @@ CompareSetupPanel::CompareSetupPanel(WorkbenchWindow* w) : WBPanel(w)
     QPushButton* addComp = new QPushButton("Add", local);
     QPushButton* browseComp = new QPushButton("Browse...", local);
     QPushButton* delComp = new QPushButton("Remove", local);
-    QPushButton* saveLocal = new QPushButton("Save paths", local);
+    QPushButton* saveLocal = new QPushButton("Save tool paths", local);
     auto browseRow = [this](QLineEdit* e, const QString& title, const QString& filter)
     {
         QPushButton* b = new QPushButton("Browse...", e->parentWidget());
@@ -305,9 +303,9 @@ CompareSetupPanel::CompareSetupPanel(WorkbenchWindow* w) : WBPanel(w)
         return h;
     };
     QFormLayout* form = new QFormLayout(local);
-    form->addRow("Python", browseRow(Python, "Locate python.exe", "Python (python.exe python3.exe);;Programs (*.exe)"));
-    form->addRow("objdiff-cli", browseRow(Objdiff, "Locate objdiff-cli", "objdiff-cli (objdiff-cli*.exe);;Programs (*.exe)"));
-    form->addRow("Timeout", Timeout);
+    form->addRow("Python:", browseRow(Python, "Locate python.exe", "Python (python.exe python3.exe);;Programs (*.exe)"));
+    form->addRow("objdiff-cli:", browseRow(Objdiff, "Locate objdiff-cli", "objdiff-cli (objdiff-cli*.exe);;Programs (*.exe)"));
+    form->addRow("Timeout:", Timeout);
     QHBoxLayout* cb = new QHBoxLayout();
     cb->addWidget(addComp);
     cb->addWidget(browseComp);
@@ -379,7 +377,7 @@ CompareSetupPanel::CompareSetupPanel(WorkbenchWindow* w) : WBPanel(w)
     OutStderr->setFont(Mono());
     OutResult = new QTextBrowser(rt);
     QHBoxLayout* cmdRow = new QHBoxLayout();
-    cmdRow->addWidget(new QLabel("Command", rt));
+    cmdRow->addWidget(new QLabel("Command:", rt));
     cmdRow->addWidget(Command, 1);
     cmdRow->addWidget(saveCmd);
     QHBoxLayout* runRow = new QHBoxLayout();
@@ -506,7 +504,7 @@ void CompareSetupPanel::ResetScript()
 void CompareSetupPanel::ShowChanges()
 {
     auto diff = WBCmp::LineDiff(QString::fromUtf8(WBHost::CompareScriptTemplate()), Script->toPlainText());
-    QString html = "<pre style='font-family:Consolas'>";
+    QString html = QString("<pre style=\"font-family:'%1'\">").arg(Mono().family());
     int changed = 0, lastShown = -10;
     for (int i = 0; i < (int)diff.size(); i++)
     {
@@ -688,7 +686,7 @@ void CompareSetupPanel::ShowRun(const WBHost::CompareRun& r, bool selfTest)
         h += "<p><b>log</b></p><pre>" + o.value("log").toString().toHtmlEscaped() + "</pre>";
     if (o.contains("diff") && o.value("diff").isArray())
     {
-        h += "<p><b>diff</b></p><table cellspacing=0 style='font-family:Consolas'>";
+        h += QString("<p><b>diff</b></p><table cellspacing=0 style=\"font-family:'%1'\">").arg(Mono().family());
         for (const QJsonValue& v : o.value("diff").toArray())
         {
             QJsonObject d = v.toObject();

@@ -62,7 +62,7 @@ const PanelInfo PanelTable[] = {
     {"dock_disasm", "Code", "Code at the cursor in its recorded ARM or Thumb mode, with execution counts", "dock_disasm"},
     {"dock_decompiler", "Code", "Decompiler output stored for the function at the cursor", "dock_callstack"},
     {"dock_source", "Code", "The function's source file, and how it compares with the original", "dock_callstack"},
-    {"dock_compare_setup", "Code", "The compare script, compiler settings and a test run (Build > Compare setup)", "dock_callstack"},
+    {"dock_compare_setup", "Code", "The compare script, compiler settings and a test run", "dock_callstack"},
     {"dock_functions", "Code", "Functions in the knowledge store, and executed code outside them", "dock_functions"},
     {"dock_xrefs", "Code", "Code and data that refer to an address", "dock_callstack"},
     {"dock_callgraph", "Code", "Callers and callees of the function at the cursor (needs Recording or saved sessions)", "dock_callstack"},
@@ -78,7 +78,7 @@ const PanelInfo PanelTable[] = {
     {"dock_bookmarks", "Project", "Saved addresses", "dock_functions"},
     {"dock_annotations", "Project", "Comments, tags and register notes by people and agents", "dock_registers"},
     {"dock_overlays", "Project", "The ROM's overlays, and when each was loaded", "dock_callstack"},
-    {"dock_archive", "Project", "Files inside the game archive (TrackMania's vfs.zip), and where they are in RAM", "dock_callstack"},
+    {"dock_archive", "Project", "Files inside the game's own archive (a vfs.zip, vfs.bin or vfs.dat), and where they are in RAM", "dock_callstack"},
     {"dock_containers", "Project", "Files inside NARC and SDAT containers (nested and packed ones too), and where they are in RAM", "dock_callstack"},
     {"dock_graphics", "Project", "Palettes, tiles, maps, cells and textures of the game's graphics files, in the ROM or in RAM", "dock_callstack"},
     {"dock_search", "Project", "Search memory for bytes, strings or changing values", "dock_callstack"},
@@ -124,8 +124,8 @@ bool WorkbenchWindow::ResolvePanel(const QString& name, QString& dock, QString& 
         {"decompiler", "dock_decompiler"},
         {"search", "dock_search"},
         {"graphics", "dock_graphics"}, {"gfx", "dock_graphics"}, {"textures", "dock_graphics"},
-        {"archive", "dock_archive"},
-        {"containers", "dock_containers"}, {"narc", "dock_containers"}, {"sdat", "dock_containers"},
+        {"archive", "dock_archive"}, {"gamearchive", "dock_archive"},
+        {"containers", "dock_containers"}, {"narc", "dock_containers"}, {"sdat", "dock_containers"}, {"narc/sdatfiles", "dock_containers"}, {"narcsdatfiles", "dock_containers"},
         {"breakpoint", "dock_breakpoints"}, {"breakpoints", "dock_breakpoints"},
         {"recording", "dock_recording"},
         {"start", "dock_start"}, {"gettingstarted", "dock_start"},
@@ -274,8 +274,8 @@ void NeedBanner::Update(WBPanel* p)
     if (!H->Missing(WBNeed::Interpreter).isEmpty() && !rom) { fix = WBNeed::Interpreter; button = "Turn off the JIT..."; }
     else if (!H->Missing(WBNeed::Game).isEmpty() && !rom) button.clear();
     else if (need == WBNeed::Recording) button = "Start recording";
-    else if (need == WBNeed::WriteHistory) button = "Turn on write history";
-    else if (need == WBNeed::DataOrigin) button = "Turn on data origin";
+    else if (need == WBNeed::WriteHistory) button = "Record write history";
+    else if (need == WBNeed::DataOrigin) button = "Record data origin";
     QString feature = need == WBNeed::Recording ? "Recording" : need == WBNeed::WriteHistory ? "Write history"
                       : need == WBNeed::DataOrigin ? "Data origin" : need == WBNeed::Interpreter ? "the interpreter" : need == WBNeed::Containers ? "NARC or SDAT files" : "a game archive";
     QString covers = WBHost::Covers(fix == WBNeed::Interpreter ? WBNeed::Interpreter : need);
@@ -502,7 +502,7 @@ void WorkbenchWindow::RebuildWorkspaceMenu()
         a->setShortcutContext(Qt::WindowShortcut);
     }
     WorkspaceMenu->addSeparator();
-    WorkspaceMenu->addAction("Save current as...", this, [this]()
+    WorkspaceMenu->addAction("Save workspace as...", this, [this]()
     {
         bool ok;
         QString name = QInputDialog::getText(this, "Save workspace", "Name:", QLineEdit::Normal, QString(), &ok).trimmed();
@@ -518,7 +518,7 @@ void WorkbenchWindow::RebuildWorkspaceMenu()
         SaveLayout();
         RebuildWorkspaceMenu();
     });
-    QAction* a = WorkspaceMenu->addAction("Rename...", this, [this]()
+    QAction* a = WorkspaceMenu->addAction("Rename workspace...", this, [this]()
     {
         bool ok;
         QString name = QInputDialog::getText(this, "Rename workspace", "Name:", QLineEdit::Normal, Workspaces[CurWorkspace].Name, &ok).trimmed();
@@ -529,7 +529,7 @@ void WorkbenchWindow::RebuildWorkspaceMenu()
         RebuildWorkspaceMenu();
     });
     a->setEnabled(!Workspaces[CurWorkspace].BuiltIn);
-    a = WorkspaceMenu->addAction("Delete", this, [this]()
+    a = WorkspaceMenu->addAction("Delete workspace...", this, [this]()
     {
         if (QMessageBox::question(this, "Delete workspace", "Delete the workspace \"" + Workspaces[CurWorkspace].Name + "\"?") != QMessageBox::Yes) return;
         Workspaces.erase(Workspaces.begin() + CurWorkspace);
@@ -538,13 +538,8 @@ void WorkbenchWindow::RebuildWorkspaceMenu()
         RebuildWorkspaceMenu();
     });
     a->setEnabled(!Workspaces[CurWorkspace].BuiltIn);
-    WorkspaceMenu->addAction("Reset to default", this, [this]()
-    {
-        RestoreLayout(Workspaces[CurWorkspace].Default);
-        SaveLayout();
-    });
     WorkspaceMenu->addSeparator();
-    WorkspaceMenu->addAction("Export...", this, [this]()
+    WorkspaceMenu->addAction("Export workspace...", this, [this]()
     {
         QString p = QFileDialog::getSaveFileName(this, "Export workspace", H->ProjectDir() + "/" + Workspaces[CurWorkspace].Name + ".json", "Workspace (*.json)");
         if (p.isEmpty()) return;
@@ -555,7 +550,7 @@ void WorkbenchWindow::RebuildWorkspaceMenu()
         QFile f(p);
         if (!f.open(QIODevice::WriteOnly) || f.write(QJsonDocument(QJsonArray{o}).toJson()) < 0) ShowError("Export workspace", f.errorString());
     });
-    WorkspaceMenu->addAction("Import...", this, [this]()
+    WorkspaceMenu->addAction("Import workspace...", this, [this]()
     {
         QString p = QFileDialog::getOpenFileName(this, "Import workspace", H->ProjectDir(), "Workspace (*.json)");
         if (p.isEmpty()) return;

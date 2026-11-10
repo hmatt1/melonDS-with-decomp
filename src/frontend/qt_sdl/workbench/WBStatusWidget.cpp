@@ -66,10 +66,13 @@ void WBStatusWidget::refresh()
     PaintBadge(Hist, WBColor::Off(), !hist ? WBColor::Muted() : s.HistoryWrapped ? WBColor::Amber() : WBColor::Text());
     bool origin = s.Recording && s.Origin;
     PaintBadge(Origin, origin ? WBColor::ChipOrigin() : WBColor::Off(), origin ? WBColor::Text() : WBColor::Muted());
-    Rec->setToolTip(!s.Recording && !s.Available ? "JIT" : QString());
+    Rec->setToolTip(!s.Recording && !s.Available ? "Recording needs the interpreter. Turn the JIT recompiler off in Config > Emu settings." : QString());
     bool paused = s.EmuState == WBStatus::Paused || s.EmuState == WBStatus::Break;
+    // the same texts and colours as the workbench's status bar
+    if (paused)
+        PaintBadge(Pause, s.EmuState == WBStatus::Break ? WBColor::Red() : WBColor::Select(), WBColor::Text());
     Pause->setVisible(paused);
-    Pause->setText(s.EmuState == WBStatus::Break ? "BREAK" : "PAUSED");
+    Pause->setText(s.EmuState == WBStatus::Break ? "BREAK: " + WBHost::BreakReasonText(s.BreakInfo.Reason) : "PAUSED");
     QString t = QString("%1 frames recorded").arg(s.FramesRecorded);
     if (s.History) t += QString(" | history %1 / %2").arg(s.HistoryCount).arg(s.HistoryCap);
     if (s.EmuState == WBStatus::Running) t += QString(" | %1 fps").arg(s.Fps, 0, 'f', 1);

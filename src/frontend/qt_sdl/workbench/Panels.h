@@ -22,6 +22,7 @@
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QFrame>
+#include <QHBoxLayout>
 #include "WBHost.h"
 #include "WBClassify.h"
 #include <QComboBox>
@@ -345,6 +346,7 @@ private:
     void MouseDoubleClick(QMouseEvent* e);
     void ContextMenu(QContextMenuEvent* e);
     void OpenAt(melonDS::u32 addr, const QString& panel);
+    int RegionCpu() const;         // the CPU whose names and commands a region uses
     void FetchHover();
     void ShowHoverTip(QHelpEvent* e);
 
@@ -439,54 +441,71 @@ private:
 QString ArchiveSegmentsHtml(WorkbenchWindow* W, const std::vector<WBApi::ArchiveSegment>& segs, bool compact, bool containers = false);
 void FollowLink(WorkbenchWindow* W, const QUrl& u);
 
-// Files of a game archive in the ROM (TrackMania DS's vfs.zip): list, filter, and find where a file is
-// in RAM and which code loaded it
-class ArchivePanel : public WBPanel
+// The game archive and NARC/SDAT panels share this: a filtered table of files in the ROM, the commands on
+// the selected file (Locate in RAM, Add as origin source, Show graphics), and where a file is in RAM and
+// which code read it from the card
+class FileListPanel : public WBPanel
+{
+    Q_OBJECT
+public:
+    FileListPanel(WorkbenchWindow* w);
+    void Refresh() override {}
+    virtual void Locate(int id) = 0;
+    virtual QString FilePath(int id) const = 0;     // as the Graphics panel and data origin name the file
+signals:
+    void located(int id, melonDS::u32 addr, melonDS::u32 size);   // largest RAM copy (size 0: not in RAM)
+protected:
+    QHBoxLayout* MakeTools(const QString& filterHint);   // the filter and the buttons; Table must exist
+    virtual bool AddSource(int id) = 0;             // data origin: values from the file's bytes carry its name
+    int CurrentId() const;
+    void ApplyFilter();
+    void SelectRow(int id);                         // clears the filter if it hides the row
+    QString Link(melonDS::u32 a) const;             // an address link, with its name
+    QString InFunction(melonDS::u32 pc) const;      // " in <function>", or empty
+    QString RamCopiesHtml(const std::vector<WBApi::ArchiveSegment>& ram, melonDS::u32 size) const;
+    QString LoadHtml(const WBApi::ProvenanceInfo& l, const QString& what) const;
+    void ShowLocated(int id, const QString& html, const std::vector<WBApi::ArchiveSegment>& ram);
+    QLabel* Status;
+    QLineEdit* Filter;
+    QTableWidget* Table = nullptr;                  // the files; made by the panel
+    QTextBrowser* Result;
+    int Shown = -1;                                 // file being located
+};
+
+// Files of the game's own archive (a vfs.zip, vfs.bin or vfs.dat in the ROM)
+class ArchivePanel : public FileListPanel
 {
     Q_OBJECT
 public:
     ArchivePanel(WorkbenchWindow* w);
     bool Need(WBNeed& need, QString& what) const override { need = WBNeed::Archive; what = "the files of a game archive"; return true; }
-    void Refresh() override {}
     void Reload();                          // archive detected or changed
-    void Locate(int member);
+    void Locate(int member) override;
+    QString FilePath(int member) const override;
     QStringList Paths() const;
     int IndexOf(const QString& path) const;
-signals:
-    void located(int member, melonDS::u32 addr, melonDS::u32 size);   // largest RAM copy (size 0: not in RAM)
-private:
-    void ApplyFilter();
-    QLabel* Status;
-    QLineEdit* Filter;
-    QTableWidget* Table;
-    QTextBrowser* Result;
-    int Shown = -1;
+protected:
+    bool AddSource(int member) override;
 };
 
-// NARC and SDAT files in the ROM and the files inside them: list, filter, and find where a file is
-class ContainersPanel : public WBPanel
+// NARC and SDAT files in the ROM and the files inside them
+class ContainersPanel : public FileListPanel
 {
     Q_OBJECT
 public:
     ContainersPanel(WorkbenchWindow* w);
     bool Need(WBNeed& need, QString& what) const override { need = WBNeed::Containers; what = "NARC or SDAT files"; return true; }
-    void Refresh() override {}
     void Reload();                          // containers indexed or changed
-    void Locate(int global);                // a file inside a container, by its global id
+    void Locate(int global) override;       // a file inside a container, by its global id
+    QString FilePath(int global) const override;
     QStringList Paths() const;              // "/file.narc:name" of every file inside a container
     int IndexOf(const QString& path) const; // global id, -1 if none
-signals:
-    void located(int global, melonDS::u32 addr, melonDS::u32 size);   // largest RAM copy (size 0: not in RAM)
+protected:
+    bool AddSource(int global) override;
 private:
     void ShowContainer(int container);
-    void ApplyFilter();
-    QLabel* Status;
-    QLineEdit* Filter;
     QTableWidget* List;                     // the containers
-    QTableWidget* Table;                    // the files of the selected container
-    QTextBrowser* Result;
     int Current = -1;                       // container shown in Table
-    int Shown = -1;                         // global id being located
 };
 
 class OverlaysPanel : public WBPanel

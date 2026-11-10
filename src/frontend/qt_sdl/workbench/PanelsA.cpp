@@ -53,9 +53,7 @@ QTableWidget* MakeTable(QWidget* parent, const QStringList& headers)
     t->verticalHeader()->setDefaultSectionSize(18);
     t->horizontalHeader()->setStretchLastSection(true);
     t->setWordWrap(false);
-    QFont f("Consolas");
-    f.setStyleHint(QFont::Monospace);
-    f.setPointSize(9);
+    QFont f = WBColor::MonoFont();
     t->setFont(f);
     // until rows arrive, columns as wide as their headers (not 100 px each, which cuts the last ones off)
     t->horizontalHeader()->resizeSections(QHeaderView::ResizeToContents);
@@ -113,7 +111,8 @@ RegistersPanel::RegistersPanel(WorkbenchWindow* w) : WBPanel(w)
             u32 v = Last[c].r.size() > (size_t)row ? Last[c].r[row] : 0;
             QMenu m(this);
             if (LooksLikeAddress(v)) W->AddressActions(*m.addMenu(QString("At %1").arg(Hex8(v))), c, v & (row == 15 ? ~1u : ~0u), 4);
-            m.addAction("Track this value (data origin)", [=]() { if (W->Cpu() != c) W->SetCpu(c); W->TrackRegister(row); });
+            m.addAction(QString("Track %1's origin...").arg(row == 13 ? "sp" : row == 14 ? "lr" : row == 15 ? "pc" : QString("r%1").arg(row)),
+                        [=]() { if (W->Cpu() != c) W->SetCpu(c); W->TrackRegister(row); });
             m.addAction("Annotate register in this function", [=]()
             {
                 if (W->Cpu() != c) W->SetCpu(c);
@@ -123,7 +122,7 @@ RegistersPanel::RegistersPanel(WorkbenchWindow* w) : WBPanel(w)
                 a.Register = regs[row];
                 u32 pc = Last[c].r.size() > 15 ? Last[c].r[15] : 0;
                 const WBKB::Function* f = W->KB().FunctionAt(c, pc, W->OverlayContext(pc));
-                if (!f) { W->ShowError("Register annotation", "The PC is not inside a known function. Define the function first (P)."); return; }
+                if (!f) { W->ShowError("Register annotation", QString("The PC is not inside a known function. Define the function first (Edit > Define function, %1).").arg(W->KeyText("define_function"))); return; }
                 a.FunctionId = f->Id;
                 a.HasAddr = true;
                 a.Addr = pc;
@@ -142,7 +141,10 @@ RegistersPanel::RegistersPanel(WorkbenchWindow* w) : WBPanel(w)
     QVBoxLayout* v = new QVBoxLayout(this);
     v->setContentsMargins(0, 0, 0, 0);
     v->addWidget(Tabs);
+    // the tabs are the window's CPU, both ways (Navigate > Switch CPU)
+    Tabs->setCurrentIndex(w->Cpu());
     connect(w, &WorkbenchWindow::cpuChanged, this, [this](int c) { Tabs->setCurrentIndex(c); });
+    connect(Tabs, &QTabWidget::currentChanged, this, [this](int c) { if (c >= 0 && c != W->Cpu()) W->SetCpu(c); });
 }
 
 void RegistersPanel::Refresh()
@@ -422,11 +424,11 @@ AnnotationsPanel::AnnotationsPanel(WorkbenchWindow* w) : WBPanel(w)
     Kind->setItemData(Kind->count() - 2, "Ranges set to decode as ARM, Thumb or data (Disassembly > Treat as)", Qt::ToolTipRole);
     Kind->setItemData(Kind->count() - 1, "Overrides the recording disagrees with: marked data but executed, or executed in the other mode", Qt::ToolTipRole);
     Tag = new QLineEdit(this);
-    Tag->setPlaceholderText("tag");
+    Tag->setPlaceholderText("Tag");
     InView = new QCheckBox("near cursor", this);
     Table = MakeTable(this, {"Target", "Where", "Comment", "Tags", "Author", "Updated"});
-    QPushButton* add = new QPushButton("Add", this);
-    QPushButton* edit = new QPushButton("Edit", this);
+    QPushButton* add = new QPushButton("Add...", this);
+    QPushButton* edit = new QPushButton("Edit...", this);
     QPushButton* del = new QPushButton("Delete", this);
     QHBoxLayout* f = new QHBoxLayout();
     f->addWidget(Author);
@@ -663,13 +665,14 @@ FunctionsPanel::FunctionsPanel(WorkbenchWindow* w) : WBPanel(w)
     FilterBtn[FiltSeen]->setChecked(true);
     FilterBtn[FiltOutside]->setStyleSheet(QString("QPushButton { color: %1; } QPushButton:checked { background: %2; }").arg(WBColor::Amber().name(), WBColor::Unowned().name()));
     Filter = new QLineEdit(this);
-    Filter->setPlaceholderText("filter by name or address");
+    Filter->setPlaceholderText("Filter by name or address");
     Table = MakeTable(this, {"Name", "Address", "Size", "Mode", "Times run", "Match %"});
     Table->setItemDelegateForColumn(5, new MatchDelegate(Table));
-    QPushButton* nw = new QPushButton("New", this);
+    QPushButton* nw = new QPushButton("Add...", this);
     nw->setToolTip("For code that never ran, an unusual prologue, an overlay, or a branch that is not a call. Entries that ran are created automatically.");
-    QPushButton* rn = new QPushButton("Rename", this);
-    QPushButton* ed = new QPushButton("Edit / resize", this);
+    QPushButton* rn = new QPushButton("Rename...", this);
+    QPushButton* ed = new QPushButton("Edit...", this);
+    ed->setToolTip("Change the function's size, mode, signature and source file");
     QHBoxLayout* b = new QHBoxLayout();
     b->addWidget(nw);
     b->addWidget(rn);
@@ -691,11 +694,12 @@ FunctionsPanel::FunctionsPanel(WorkbenchWindow* w) : WBPanel(w)
     {
         a = i.sibling(i.row(), 1).data(Qt::UserRole).toUInt();
         return true;
-    }, [this](QMenu& m, const QModelIndex& i)
+    }, [this](QMenu& m, const QModelIndex&)
     {
-        u32 a = i.sibling(i.row(), 1).data(Qt::UserRole).toUInt();
-        bool known = W->KB().FunctionAt(W->Cpu(), a, W->OverlayContext(a)) != nullptr;
-        m.addAction(known ? "Edit function...\tP" : "Define function here\tP", [this, a]() { W->DefineFunctionAt(a); });
+        // the window's commands, on the row (AddRowMenu set it as their target)
+        m.addAction(W->Action("define_function"));
+        m.addAction(W->Action("build_compare"));
+        m.addAction(W->Action("open_source"));
     });
     auto sel = [this]() -> u32 { int r = Table->currentRow(); return r < 0 ? W->Cursor() : (u32)Table->item(r, 1)->data(Qt::UserRole).toUInt(); };
     connect(nw, &QPushButton::clicked, this, [this, sel]() { W->DefineFunctionAt(sel()); });
@@ -840,11 +844,10 @@ void FunctionsPanel::Refresh()
 BookmarksPanel::BookmarksPanel(WorkbenchWindow* w) : WBPanel(w)
 {
     List = new QListWidget(this);
-    QFont f("Consolas");
-    f.setStyleHint(QFont::Monospace);
-    f.setPointSize(9);
+    QFont f = WBColor::MonoFont();
     List->setFont(f);
-    QPushButton* add = new QPushButton("Add at cursor", this);
+    QPushButton* add = new QPushButton("Add bookmark...", this);
+    add->setToolTip("Bookmark the cursor's address");
     QPushButton* del = new QPushButton("Delete", this);
     QHBoxLayout* b = new QHBoxLayout();
     b->addWidget(add);
@@ -919,6 +922,10 @@ CallStackPanel::CallStackPanel(WorkbenchWindow* w) : WBPanel(w)
     v->setContentsMargins(0, 0, 0, 0);
     v->addWidget(Note);
     v->addWidget(Tabs);
+    // the tabs are the window's CPU, both ways (Navigate > Switch CPU)
+    Tabs->setCurrentIndex(w->Cpu());
+    connect(w, &WorkbenchWindow::cpuChanged, this, [this](int c) { Tabs->setCurrentIndex(c); });
+    connect(Tabs, &QTabWidget::currentChanged, this, [this](int c) { if (c >= 0 && c != W->Cpu()) W->SetCpu(c); });
 }
 
 void CallStackPanel::Refresh()

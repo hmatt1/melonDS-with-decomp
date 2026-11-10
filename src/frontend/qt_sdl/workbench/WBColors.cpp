@@ -17,6 +17,7 @@
 */
 
 #include <QFile>
+#include <QFontDatabase>
 
 #include "WBColors.h"
 #include "Platform.h"
@@ -379,5 +380,16 @@ QColor Field() { return Pal.Field; }
 QColor Decode() { return Pal.Decode; }
 QColor FunctionBar() { return Pal.FunctionBar; }
 QColor FunctionEnd() { return Pal.FunctionEnd; }
+
+QFont MonoFont()
+{
+    static const QString family = QFontDatabase::families().contains("Consolas")
+                                      ? QString("Consolas") : QFontDatabase::systemFont(QFontDatabase::FixedFont).family();
+    QFont f(family);
+    f.setStyleHint(QFont::Monospace);
+    f.setFixedPitch(true);
+    f.setPointSize(9);
+    return f;
+}
 
 }

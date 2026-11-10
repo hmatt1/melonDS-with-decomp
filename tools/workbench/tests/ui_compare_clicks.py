@@ -192,7 +192,7 @@ def main():
         c.ui_show(addr=leaf, panel="source")
         time.sleep(2)
         capture(c, "compare_clicks_ready.png")
-        check(click(WINDOW, "Compare"), "Compare clicked")
+        check(click(WINDOW, "Build and compare"), "Build and compare clicked")
         time.sleep(1)
         check(not uia("exists", "Run this compare command?", timeout=2)[0], "no second confirmation for the same command")
         end = time.time() + 30
@@ -205,7 +205,7 @@ def main():
         script = os.path.join(kbdir, "compare", "compare.py")
         with open(script, "a") as f:
             f.write("\n# an edit\n")
-        check(click(WINDOW, "Compare"), "Compare clicked again")
+        check(click(WINDOW, "Build and compare"), "Build and compare clicked again")
         check(uia("exists", "Run this compare command?", timeout=10)[0], "the changed script is confirmed first")
         check(click("Run this compare command?", "Cancel"), "Cancel")
         time.sleep(2)
@@ -227,7 +227,7 @@ def main():
             check("# an edit" not in f.read(), "the project's script is the template again")
         c.ui_show(addr=leaf, panel="source")
         time.sleep(1)
-        check(click(WINDOW, "Compare"), "Compare clicked")
+        check(click(WINDOW, "Build and compare"), "Build and compare clicked")
         check(not uia("exists", "Run this compare command?", timeout=3)[0], "the approved command runs without asking")
         end = time.time() + 30
         while time.time() < end and len(attempts(c, leaf)) < 2:

@@ -373,7 +373,7 @@ void WBHost::RunStaticAnalysis()
     WBStatus st = Status();
     if (st.EmuState != WBStatus::Paused && st.EmuState != WBStatus::Break)
     {
-        emit notice("Pause the game first (F5).");
+        emit notice("Pause the game first (Debug > Pause, or Debug > Break).");
         return;
     }
     if (!WB.GetNDS()) return;

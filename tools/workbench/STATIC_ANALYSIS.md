@@ -1,6 +1,6 @@
 # Static analysis
 
-Debug → **Mark unreached code** follows code the recording has already reached and marks the
+Analysis → **Mark unreached code** follows code the recording has already reached and marks the
 instructions and literal pools it has not. The marks use the same ARM, Thumb, and data
 classifications, labeled **from analysis** (dashed amber in the disassembly gutter, the memory
 view, and the coverage map’s **From analysis** layer). The walk identifies code the recording
@@ -31,11 +31,11 @@ a mark, it moves to the first marked instruction on the current CPU.
 When that option is on, the summary says the disassembly is set to confirmed code only, and
 that the coverage map still shows the marks.
 
-**File → Import static analysis (JSON)…** loads a knowledge-store file. The Debug commands are
-**Mark unreached code** and **Clear unreached marks**. The tooltip says the marks stay until
-they are cleared or the command is run again, and that they are not written to the knowledge
-store. When the item is disabled, the tooltip says “Pause the game first (F5).” or
-“No game is running.”
+The Analysis menu holds **Import static analysis (JSON)…**, which loads a knowledge-store file,
+and **Mark unreached code**, **Cancel static analysis** (enabled only while a walk runs) and
+**Clear unreached marks**. The tooltip says the marks stay until they are cleared or the command
+is run again, and that they are not written to the knowledge store. When the item is disabled,
+the tooltip says to pause the game first (Debug → Pause, or Break), or “No game is running.”
 
 ## Later: bytes that were overwritten
 

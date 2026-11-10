@@ -42,9 +42,7 @@ private:
 
 CodeEditor::CodeEditor(QWidget* parent, Language lang) : QPlainTextEdit(parent)
 {
-    QFont f("Consolas");
-    f.setStyleHint(QFont::Monospace);
-    f.setPointSize(9);
+    QFont f = WBColor::MonoFont();
     setFont(f);
     setLineWrapMode(QPlainTextEdit::NoWrap);
     setTabStopDistance(fontMetrics().horizontalAdvance(' ') * 4);
