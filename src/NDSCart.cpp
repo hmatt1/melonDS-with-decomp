@@ -17,6 +17,7 @@
 */
 
 #include <string.h>
+#include "workbench/Workbench.h"
 #include <inttypes.h>
 #include <assert.h>
 #include "NDS.h"
@@ -795,7 +796,10 @@ void NDSCartSlot::Interface::WriteROMCnt(u32 val, u32 mask)
            datasize);*/
 
     if (Parent.CartActive && Parent.CPUSelect == Num)
+    {
+        if (Parent.NDS.WB) Parent.NDS.WB->CardCommand(ROMCommand);
         Parent.Cart->ROMCommandStart(Parent, ROMCommand);
+    }
 
     // reset the FIFO
     ROMDataPosCPU = 0;
@@ -999,6 +1003,8 @@ u32 NDSCartSlot::Interface::ReadROMData()
     u32 ret = ROMData[ROMDataPosCPU];
     if (ROMCnt & (1<<30))
         return ret;
+
+    if (Parent.NDS.WBMemHooks) Parent.NDS.WB->CardData(ret);
 
     ROMDataPosCPU ^= 1;
     if (ROMDataCount > 0)

@@ -1,0 +1,6 @@
+build/
+*.elf
+*.nds
+*.map
+*.ml7
+*.sav

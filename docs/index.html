@@ -1,0 +1,883 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>melonDS Decomp Workbench</title>
+  <meta name="description" content="A fork of the melonDS Nintendo DS emulator with a second window for decompiling DS games: how to install it, and how to use it, one task at a time.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23b34700'/%3E%3Ctext x='16' y='21' font-family='monospace' font-size='14' font-weight='700' fill='white' text-anchor='middle'%3EWB%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="#top"><span class="brand-mark">WB</span><span class="brand-text">melonDS Decomp Workbench</span></a>
+    <nav class="site-nav" aria-label="Site">
+      <a href="#install">Install</a>
+      <a href="#guide">Guide</a>
+      <a href="#keys">Keys</a>
+      <a href="https://github.com/hmatt1/melonDS-with-decomp">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="page with-sidebar">
+    <nav class="toc" aria-label="Contents">
+      <h2>Contents</h2>
+      <ol>
+        <li><a href="#top">Overview</a></li>
+        <li class="toc-group">Install</li>
+        <li><a href="#download">Download for Windows</a></li>
+        <li><a href="#source">Build from source</a></li>
+        <li><a href="#first-run">First run</a></li>
+        <li><a href="#options">Command-line options</a></li>
+        <li><a href="#files">Where files go</a></li>
+        <li><a href="#python">The Python client</a></li>
+        <li class="toc-group">Use cases</li>
+        <li><a href="#guide">About this guide</a></li>
+        <li><a href="#uc0"><span class="num">0</span>Start the workbench</a></li>
+        <li><a href="#uc1"><span class="num">1</span>Who writes my struct's fields?</a></li>
+        <li><a href="#uc2"><span class="num">2</span>Stop when a field is written</a></li>
+        <li><a href="#uc3"><span class="num">3</span>Find a value in RAM</a></li>
+        <li><a href="#uc4"><span class="num">4</span>Where does this data come from?</a></li>
+        <li><a href="#uc5"><span class="num">5</span>Callers and cross-references</a></li>
+        <li><a href="#uc6"><span class="num">6</span>Name things as you learn them</a></li>
+        <li><a href="#uc7"><span class="num">7</span>Which code has run?</a></li>
+        <li><a href="#uc8"><span class="num">8</span>Check a decompiled function</a></li>
+        <li><a href="#uc9"><span class="num">9</span>Script it</a></li>
+        <li><a href="#uc10"><span class="num">10</span>Keep a recording</a></li>
+        <li class="toc-group">Reference</li>
+        <li><a href="#keys">Keys</a></li>
+      </ol>
+    </nav>
+
+    <div class="content">
+      <section class="hero" id="top">
+        <span class="eyebrow">melonDS fork for DS decompilation</span>
+        <h1>See what the game does to every byte</h1>
+        <p class="lede">The Decomp Workbench is melonDS with a second window for decompiling Nintendo DS
+          games. While the game runs, it records which code ran, which code wrote what, and where data
+          came from. Your names, types and comments go in a knowledge store, one SQLite file per game.</p>
+        <div class="actions">
+          <a class="button primary" href="#install">Install</a>
+        </div>
+      </section>
+
+      <figure class="shot">
+        <div class="frame" data-pending="the workbench window in its default layout, next to the running game">
+          <img src="img/default-layout.png" alt="The workbench window: functions on the left, disassembly and memory in the middle, registers and the inspector on the right, and a group of tabs at the bottom" width="1600" height="1198">
+        </div>
+      </figure>
+
+      <div class="cards">
+        <div class="card">
+          <h3>A recording engine</h3>
+          <p>Coverage, call stacks, every write with its writer and old and new value, and the origin of
+            data from the ROM through copies, unpacking and arithmetic.</p>
+        </div>
+        <div class="card">
+          <h3>A decompilation window</h3>
+          <p>Disassembly, memory with typed structs, an inspector, cross-references, a call graph, a
+            coverage map, value scans and a build-and-compare loop.</p>
+        </div>
+        <div class="card">
+          <h3>An API for scripts and agents</h3>
+          <p>A local JSON-RPC server with a generated Python client. Anything a panel can do, the API
+            can do too.</p>
+        </div>
+      </div>
+
+<section class="part" id="install">
+        <h2>Install</h2>
+        <p>On Windows, download one file and run it. On Linux and macOS, build from source: the build
+          works like melonDS's own, with a few extra libraries.</p>
+        <div class="note info">
+          <span class="note-title">No games included</span>
+          <p>The workbench comes with no game ROMs and no SDK material. Bring your own dump of a game you own.</p>
+        </div>
+
+      
+      
+
+      <section id="download">
+        <h3>Download for Windows</h3>
+        <p>The <a href="https://github.com/hmatt1/melonDS-with-decomp/releases/latest">latest release</a>
+          has <code>melonDS-decomp-workbench-windows-x64.exe</code>: one executable, with no DLLs or installer.</p>
+        <ol class="steps">
+          <li>Download the <code>.exe</code> and put it in a folder of its own, such as <code>C:\melonDS-workbench</code>.
+            Its settings, knowledge stores and recordings are written next to it.</li>
+          <li>Run it. The file isn't signed, so Windows SmartScreen may warn you: choose
+            <span class="ui">More info</span>, then <span class="ui">Run anyway</span>.</li>
+          <li>Continue with <a href="#first-run">First run</a>.</li>
+        </ol>
+        <div class="note warn">
+          <span class="note-title">Older builds use different keys</span>
+          <p>This site describes the current source. A build from before November 2026 uses the old
+            debugger keys (<kbd>F5</kbd> pause, <kbd>F7</kbd> step, <kbd>F9</kbd> breakpoint). Those keys
+            clashed with the game window's savestate keys, so they changed. If a key from the guide
+            does nothing, check the Debug menu, which always shows the right key.</p>
+        </div>
+      </section>
+
+      <section id="source">
+        <h3>Build from source</h3>
+        <p>The source is <a href="https://github.com/hmatt1/melonDS-with-decomp">hmatt1/melonDS-with-decomp</a>,
+          branch <code>decomp-workbench</code> (the default). On top of
+          <a href="https://github.com/hmatt1/melonDS-with-decomp/blob/decomp-workbench/BUILD.md">melonDS's own dependencies</a>,
+          the workbench needs:</p>
+        <ul>
+          <li><strong>Qt 6</strong>: the workbench window doesn't build with Qt 5.</li>
+          <li><strong>Qt Advanced Docking System</strong> (ADS), built for Qt 6. CMake looks for the
+            <code>qtadvanceddocking-qt6</code> package.</li>
+          <li><strong>SQLite 3</strong> and <strong>zlib</strong>.</li>
+          <li><strong>Python 3</strong> at build time: the API types and the Python client are generated
+            from a shared schema.</li>
+        </ul>
+        <p>The build makes <code>build/melonDS</code> (<code>melonDS.exe</code> on Windows) and the unit
+          tests, <code>build/wbtests</code>.</p>
+
+        <h4 id="windows">Windows (MSYS2)</h4>
+        <ol class="steps">
+          <li>Install <a href="https://www.msys2.org/">MSYS2</a> and open the <strong>MSYS2 UCRT64</strong> terminal.
+            Run <code>pacman -Syu</code>, and reopen the terminal if it asks you to.</li>
+          <li>Install the tools and libraries:
+<pre><code>pacman -S git mingw-w64-ucrt-x86_64-{toolchain,cmake,ninja,python,SDL2,libarchive,enet,zstd,faad2,sqlite3,zlib}
+pacman -S mingw-w64-ucrt-x86_64-{qt6-base,qt6-svg,qt6-multimedia,qt6-tools,qt-advanced-docking-system}</code></pre></li>
+          <li>Clone and build:
+<pre><code>git clone https://github.com/hmatt1/melonDS-with-decomp
+cd melonDS-with-decomp
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build</code></pre></li>
+          <li>Run <code>build/melonDS.exe</code> from the same terminal, so it finds the MSYS2 DLLs.</li>
+        </ol>
+
+        <h4 id="linux">Linux</h4>
+        <ol class="steps">
+          <li>Install melonDS's dependencies (Qt 6 version) as
+            <a href="https://github.com/hmatt1/melonDS-with-decomp/blob/decomp-workbench/BUILD.md#linux">BUILD.md</a>
+            lists them for your distribution, plus SQLite, zlib and Python. On Ubuntu 24.04:
+<pre><code>sudo apt install cmake extra-cmake-modules libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev \
+  libarchive-dev libenet-dev libzstd-dev libfaad-dev qt6-{base,base-private,multimedia,svg}-dev \
+  libsqlite3-dev zlib1g-dev python3 git</code></pre></li>
+          <li>Build and install ADS for Qt 6, unless your distribution packages it:
+<pre><code>git clone https://github.com/githubuser0xFFFF/Qt-Advanced-Docking-System
+cmake -S Qt-Advanced-Docking-System -B ads-build -DBUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release
+cmake --build ads-build -j$(nproc)
+sudo cmake --install ads-build</code></pre></li>
+          <li>Clone and build the workbench:
+<pre><code>git clone https://github.com/hmatt1/melonDS-with-decomp
+cd melonDS-with-decomp
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)</code></pre></li>
+        </ol>
+
+        <h4 id="macos">macOS</h4>
+        <p>Follow melonDS's <a href="https://github.com/hmatt1/melonDS-with-decomp/blob/decomp-workbench/BUILD.md#macos">macOS steps</a>
+          with this repository instead of melonDS's. Also install <code>brew install sqlite python</code>,
+          and build and install ADS as in the Linux step 2. Add Homebrew's SQLite to the CMake prefix path:</p>
+<pre><code>cmake -B build -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6);$(brew --prefix libarchive);$(brew --prefix sqlite)"
+cmake --build build -j$(sysctl -n hw.logicalcpu)</code></pre>
+        <div class="note info">
+          <span class="note-title">Not tested on macOS</span>
+          <p>The workbench is developed on Windows and Linux. If the macOS build breaks, please
+            <a href="https://github.com/hmatt1/melonDS-with-decomp/issues">open an issue</a>.</p>
+        </div>
+      </section>
+
+      <section id="first-run">
+        <h3>First run</h3>
+        <ol class="steps">
+          <li><strong>Turn the JIT off.</strong> In melonDS's <span class="menu">Config &gt; Emu settings</span>,
+            untick the JIT recompiler (the game resets). Recording, breakpoints and stepping need the
+            interpreter. While the JIT is on, recording stays off and the Recording panel says why.</li>
+          <li><strong>Open the workbench</strong> with a game:
+<pre><code>melonDS -w path/to/game.nds</code></pre>
+            From a melonDS that is already running, use <span class="menu">System &gt; Decomp workbench...</span>
+            (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd>).</li>
+          <li><strong>Read Getting started.</strong> It opens in the bottom tab group the first time,
+            and says what Recording, Write history and Data origin give you. All three are on from boot.</li>
+          <li>Continue with the <a href="#guide">guide</a>, starting at <a href="#uc0">use case 0</a>.</li>
+        </ol>
+      </section>
+
+      <section id="options">
+        <h3>Command-line options</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Option</th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td><code>-w</code>, <code>--workbench</code></td><td>Open the workbench window on startup</td></tr>
+              <tr><td><code>--api</code></td><td>Start the control and query API on 127.0.0.1 (<a href="#uc9">use case 9</a>)</td></tr>
+              <tr><td><code>--api-port &lt;port&gt;</code></td><td>Port of the read endpoint; the control endpoint is the next port (default 47800 and 47801)</td></tr>
+              <tr><td><code>--api-memory-write</code></td><td>Allow <code>memory.write</code> through the API</td></tr>
+              <tr><td><code>--record</code></td><td>Turn on recording only (write history and data origin stay off unless their own flags are set)</td></tr>
+              <tr><td><code>--write-history</code>, <code>--data-origin</code></td><td>Turn on recording and that feature</td></tr>
+              <tr><td><code>--no-record</code></td><td>Leave recording, write history and data origin off, for full speed</td></tr>
+              <tr><td><code>--no-write-history</code>, <code>--no-data-origin</code></td><td>Leave one of them off</td></tr>
+              <tr><td><code>--kb &lt;path&gt;</code></td><td>Use this knowledge store for this run (not saved to the settings)</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="files">
+        <h3>Where files go</h3>
+        <p>Paths are relative to melonDS's settings folder: the folder of <code>melonDS.exe</code> on
+          Windows, <code>~/.config/melonDS</code> on Linux.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>File</th><th>What it is</th></tr></thead>
+            <tbody>
+              <tr><td><code>workbench/&lt;GAMECODE&gt;_&lt;sha1&gt;/knowledge.db</code></td><td>The knowledge store: your names, types, comments and bookmarks, one per game (SQLite)</td></tr>
+              <tr><td><code>workbench/&lt;GAMECODE&gt;_&lt;sha1&gt;/sessions/*.dswbs</code></td><td>Saved recording sessions (<a href="#uc10">use case 10</a>)</td></tr>
+              <tr><td><code>workbench/history.dswbh</code></td><td>The write history file, when history is kept in a file instead of memory</td></tr>
+              <tr><td><code>workbench/api.json</code></td><td>The API's ports and token, written when the API starts</td></tr>
+              <tr><td><code>workbench-colors.toml</code></td><td>The workbench's colours: edit it and the window updates</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="python">
+        <h3>The Python client</h3>
+        <p>The client is in <code>tools/workbench/python</code> in the source. It needs no installation:
+          put that folder on <code>sys.path</code>, or run scripts from the repository with
+          <code>PYTHONPATH=tools/workbench/python</code>. <a href="#uc9">Use case 9</a> has an example.</p>
+      </section>
+    
+      </section>
+
+      
+      
+
+      <section class="part" id="guide">
+        <h2>Using the workbench</h2>
+        <p>One section per thing you will want to do, with the steps. The full reference is
+          <a href="https://github.com/hmatt1/melonDS-with-decomp/blob/decomp-workbench/tools/workbench/README.md"><code>tools/workbench/README.md</code></a>
+          in the source.</p>
+        <div class="note info">
+          <span class="note-title">About the pictures</span>
+          <p>The screenshots are of the workbench running its own test ROM,
+            <code>tools/workbench/testrom/wbtest.nds</code>, which is in the source and free to show. Its
+            code is known, but the use cases treat it as a game you know nothing about:
+            <code>gUnkCar</code> and <code>struct UnkCar</code> are names given while working through
+            them, as the steps show. <code>docs/tools/capture.py</code> takes every picture again.</p>
+        </div>
+      </section>
+
+      <!-- ============================================================ 0 -->
+      <section class="usecase" id="uc0">
+        <h2><span class="uc-num">0</span> &ndash; Start the workbench</h2>
+
+        <div class="note tip">
+          <span class="note-title">What is on from the start</span>
+          <p>Recording, write history and data origin are all on from boot. The status bar shows them as
+            badges (<span class="n-inline">8</span> in the picture below): <code>REC</code>, <code>HIST</code>
+            (how full the write history is), <code>ORIGIN</code>, and <code>PAUSED</code> or
+            <code>BREAK</code>. Click a badge to turn that feature on or off.</p>
+        </div>
+        <div class="note warn">
+          <span class="note-title">The JIT must be off</span>
+          <p>Recording and breakpoints need the interpreter. Turn the JIT off in melonDS's
+            <span class="menu">Config &gt; Emu settings</span> (the game resets). With the JIT on,
+            recording stays off and the Recording panel says so.</p>
+        </div>
+
+        <ol class="steps">
+          <li>Start melonDS with the workbench window open:
+<pre><code>melonDS -w path/to/game.nds</code></pre>
+            Add <code>--api</code> if a script or an agent should drive it (<a href="#uc9">use case 9</a>).
+            From a running melonDS: <span class="menu">System &gt; Decomp workbench...</span>
+            (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd>).</li>
+          <li>Load a save state near the part of the game you are working on
+            (<span class="menu">File &gt; Load state</span> in the game window, or <kbd>F1</kbd>&ndash;<kbd>F8</kbd>
+            there). The game keeps running in its own window. Loading a save state keeps the write history
+            and cross-references recorded so far, but data origin is lost for data the state brought with it
+            (<a href="#uc4">use case 4</a>).</li>
+          <li>Pause when you want to look at something: <span class="menu">Debug &gt; Pause</span>, or the
+            <span class="ui">Pause</span> button above the panels. <span class="ui">Continue</span>
+            (<kbd>Ctrl</kbd>+<kbd>F5</kbd>) runs on. <span class="ui">Break</span>
+            (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F5</kbd>) stops in the debugger at the next
+            instruction instead, so you can step.</li>
+        </ol>
+
+        <div class="note tip">
+          <span class="note-title">Workspaces</span>
+          <p><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>1</kbd> to <kbd>6</kbd> switch between the built-in
+            layouts: Default, Decomp, Debug, Data tracing, Coverage and Minimal. Data tracing
+            (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>4</kbd>) gives Memory and the Inspector the most room;
+            Debug (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>3</kbd>) puts Call stack and Breakpoints under the
+            disassembly. <span class="menu">Window &gt; Reset layout</span> puts the current workspace back
+            as it was.</p>
+        </div>
+
+        <p>The <strong>Inspector</strong> (<span class="n-inline">6</span>) is the panel to keep an eye on.
+          It describes the byte at the cursor: its value in every width, whether it is code or data, how
+          often it was executed, read and written this session, the last writer, the last few writes, and
+          where the data came from.</p>
+
+        <figure class="shot" id="fig-default-layout">
+          <div class="frame" data-pending="the default layout, with the eight areas numbered">
+            <img src="img/default-layout.png" alt="The default layout of the workbench window" width="1600" height="1198">
+            <span class="callout" style="--x:6.6%;--y:5.7%">1</span>
+            <span class="callout" style="--x:27%;--y:5.8%">2</span>
+            <span class="callout" style="--x:26%;--y:51.9%">3</span>
+            <span class="callout" style="--x:55.6%;--y:72.2%">4</span>
+            <span class="callout" style="--x:82%;--y:5.8%">5</span>
+            <span class="callout" style="--x:82%;--y:41.3%">6</span>
+            <span class="callout" style="--x:41%;--y:3.9%">7</span>
+            <span class="callout" style="--x:21.5%;--y:97.4%">8</span>
+          </div>
+          <figcaption>The default layout. <span class="n">1</span> Functions, <span class="n">2</span> Disassembly,
+            <span class="n">3</span> Memory, <span class="n">4</span> the bottom tab group (Call stack,
+            Cross-references, Write history, Data origin, Source and diff, Search and Breakpoints),
+            <span class="n">5</span> Registers, <span class="n">6</span> Inspector, <span class="n">7</span> the
+            debug buttons, <span class="n">8</span> the status badges and, at the right, the CPU every panel
+            shows (click it, or press <kbd>Ctrl</kbd>+<kbd>T</kbd>, to switch between ARM9 and ARM7).</figcaption>
+        </figure>
+
+        <p><strong>Navigation.</strong> <kbd>G</kbd> goes to an address, a name or <code>pc</code>.
+          <kbd>Alt</kbd>+<kbd>&larr;</kbd> goes back and <kbd>Alt</kbd>+<kbd>&rarr;</kbd> forward, as do the
+          mouse's back and forward buttons. Double-click an address in any table to go there. Right-click any
+          row for the same set of commands, acting on that row: <span class="ui">Go to disassembly</span>,
+          <span class="ui">Go to memory</span>, <span class="ui">Rename...</span>,
+          <span class="ui">Comment...</span>, <span class="ui">Add bookmark...</span>,
+          <span class="ui">Cross-references</span>, <span class="ui">Show write history</span>,
+          <span class="ui">Show data origin</span> and <span class="ui">Track value origin...</span>. They are
+          the menu bar's commands, with the same names and keys.</p>
+        <p><strong>Finding a panel.</strong> Panels not in the default tabs (Call graph, Coverage map,
+          Graphics, Game archive, NARC/SDAT files, Recording and more) open from the
+          <span class="menu">View</span> menu. <span class="menu">Window &gt; Panels...</span>
+          (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>) finds any panel: type part of its name or of what
+          it shows, then <kbd>Enter</kbd>.</p>
+        <p><strong>Typing in a panel.</strong> The one-letter keys (<kbd>N</kbd>, <kbd>;</kbd>, <kbd>P</kbd>,
+          <kbd>D</kbd>, <kbd>G</kbd>, <kbd>L</kbd>, <kbd>X</kbd>) type normally while a text box such as a
+          filter has the focus; click the Disassembly or Memory view to use them as commands again.</p>
+      </section>
+
+      <!-- ============================================================ 1 -->
+      <section class="usecase" id="uc1">
+        <h2><span class="uc-num">1</span> &ndash; Who writes the fields of my unk struct?</h2>
+        <p>You have a struct in RAM full of <code>unk</code> fields and want to know, for each field, which
+          code writes it, how wide the write is and what values it gets. The address comes from the code you
+          are decompiling, or from a value scan (<a href="#uc3">use case 3</a>). The example below starts
+          with a guess at where the struct begins, <code>020267c0</code>; <a href="#uc2">use case 2</a> shows
+          how to check that guess.</p>
+
+        <figure class="shot">
+          <div class="frame" data-pending="the Inspector on one of gUnkCar's fields">
+            <img src="img/inspector.png" alt="The Inspector panel describing gUnkCar.unk0c" width="402" height="425">
+          </div>
+          <figcaption>The Inspector on <code>gUnkCar.unk0c</code>: its value in every width, how often it
+            was read and written this session, the last writer and reader, and the most recent writes with
+            their frame, CPU, writer, and old and new value.</figcaption>
+        </figure>
+
+        <ol class="steps">
+          <li><strong>Go to the struct.</strong> Press <kbd>G</kbd> and type its address, here
+            <code>020267c0</code>.</li>
+          <li><strong>Give it a type.</strong> <span class="menu">Edit &gt; Types...</span> opens the type
+            editor. Write the struct as C, with the fields you can guess and padding for the rest, and press
+            <span class="ui">Save</span>:
+<pre><code>struct UnkCar {
+    u32 unk00; u32 unk04; u32 unk08; u32 unk0c; u32 unk10;
+    u32 unk14; u32 unk18; u32 unk1c; u32 unk20; u32 unk24;
+};</code></pre></li>
+          <li><strong>Place it.</strong> Select the struct's bytes in the Memory view (drag from the first byte
+            to the last, here <code>0x28</code> bytes), press <kbd>D</kbd> (<span class="menu">Edit &gt; Define
+            data...</span>), choose <code>UnkCar</code> as the type and give it a name, here
+            <code>gUnkCar</code>. The dialog fills in the address and the size (<code>0x28</code>) from the
+            selection. Its Type box is narrow: your struct is in the list but shown cut short, above the plain
+            types. The Memory view now underlines each field and lists their names beside the row, and the
+            Disassembly names each field (<code>; gUnkCar.unk0c</code>).</li>
+        </ol>
+
+        <figure class="shot">
+          <div class="frame" data-pending="the Memory view after Define data: fields underlined and named">
+            <img src="img/memory-define-data.png" alt="The Memory view with the struct's fields underlined and named" width="937" height="231">
+          </div>
+          <figcaption>The Memory view after Define data: the struct's bytes, from <code>020267c0</code>, each
+            field underlined, and the field names of each row beside it.</figcaption>
+        </figure>
+
+        <ol class="steps" start="4" style="counter-reset: step 3">
+          <li><strong>Read the writes.</strong> With the struct's bytes still selected, open the
+            <span class="ui">Write history</span> tab. The upper table ranks the most-written addresses of the
+            whole recording, not only the selection; ignore it here. The table <em>Writes at the selected
+            address</em> lists the newest writes into the selection, with frame, CPU, writer PC, function,
+            field address, size and old and new value.</li>
+        </ol>
+
+        <figure class="shot">
+          <div class="frame" data-pending="Write history for the struct's bytes">
+            <img src="img/write-history.png" alt="The Write history panel listing writes into gUnkCar" width="937" height="308">
+          </div>
+          <figcaption>Write history for the selection. In the lower table, each write's frame, CPU, the code that
+            wrote it and its function, the field, the width of the write and the old and new values.</figcaption>
+        </figure>
+
+        <p>Among these newest writes, <code>unk0c</code> (<code>020267cc</code>) and <code>unk1c</code>
+          (<code>020267dc</code>) are written every frame, 4 bytes wide, by <code>sub_02001540</code>, and
+          <code>unk0c</code> goes up by one each time (<code>184</code> to <code>185</code>): it looks like a
+          frame counter. The table shows only the latest writes; Cross-references (<a href="#uc5">use case 5</a>)
+          counts every writer over the session. A field written at two widths is often a union or two
+          <code>u16</code>s; a field written at one width by many functions is usually a real field of that
+          type.</p>
+
+        <ol class="steps" start="5" style="counter-reset: step 4">
+          <li><strong>Name what you learn.</strong> Change the field names in
+            <span class="menu">Edit &gt; Types...</span> and save; every view picks them up
+            (<a href="#uc6">use case 6</a>).</li>
+          <li><strong>Who reads it.</strong> Press <kbd>X</kbd> in the struct: Cross-references lists the
+            readers as well as the writers (<a href="#uc5">use case 5</a>). With a field selected, it lists the
+            references to that field (<em>References to 020267cc &lt;gUnkCar.unk0c&gt;</em>).</li>
+        </ol>
+
+        <div class="note tip">
+          <span class="note-title">One field only</span>
+          <p>Select a single field in the Memory view instead of the whole struct (a click selects one byte;
+            drag across the field for all of it): the Inspector then shows that field's own writers, and Write
+            history lists only its writes.</p>
+        </div>
+        <p>The history keeps about four million writes in memory. <code>HIST</code> in the status bar shows how
+          full it is; when it is full, the oldest writes go first. To keep more, keep the history in a file
+          (<a href="#uc10">use case 10</a>).</p>
+      </section>
+
+      <!-- ============================================================ 2 -->
+      <section class="usecase" id="uc2">
+        <h2><span class="uc-num">2</span> &ndash; Stop the game when a field is written</h2>
+        <p>Write history tells you what happened. A watchpoint stops the game at the write, so you can see the
+          registers and the call stack at that moment.</p>
+
+        <figure class="shot">
+          <div class="frame" data-pending="the Memory view's right-click menu, with Add watchpoint open">
+            <img src="img/memory-context-menu.png" alt="The Memory view's right-click menu with the Add watchpoint submenu" width="337" height="460">
+          </div>
+          <figcaption>Right-click on the selection in the Memory view: <span class="ui">Add watchpoint (4 bytes)
+            &gt; On write</span>. The menu's other commands are the menu bar's, with their keys:
+            <span class="ui">Define data...</span> (<kbd>D</kbd>) was used in <a href="#uc1">use case 1</a>.</figcaption>
+        </figure>
+
+        <ol class="steps">
+          <li>In the Memory view, select the field's bytes (here the four bytes of <code>unk0c</code>).</li>
+          <li>Right-click and choose <span class="ui">Add watchpoint (4 bytes) &gt; On write</span>. It appears in
+            the Breakpoints tab.</li>
+          <li>If the game is paused, continue it (<kbd>Ctrl</kbd>+<kbd>F5</kbd>). The game stops at the next
+            write to those bytes, and the status bar says <code>BREAK: watchpoint</code> in red. When several
+            functions write a field, the first break may come from any of them: press
+            <kbd>Ctrl</kbd>+<kbd>F5</kbd> again to go on to the next writer.<br>
+            The picture shows the break in <code>sub_02001540</code>. The <code>&gt;</code> marker is on the
+            instruction after the store; the store itself is the line above it,
+            <code>str r5, [r6, #0xC]</code> at <code>02001b14</code>: a 32-bit write.</li>
+          <li>Press <kbd>G</kbd> and type <code>pc</code>. The store that triggered the break is the instruction
+            just above the PC marker: the watchpoint fires after the write has happened.</li>
+        </ol>
+
+        <figure class="shot">
+          <div class="frame" data-pending="the Disassembly stopped at the watchpoint, the store marked">
+            <img src="img/break-disasm.png" alt="The Disassembly stopped after the store that wrote the field" width="937" height="559">
+          </div>
+          <figcaption>Stopped at the watchpoint: the PC marker <code>&gt;</code> is at <code>02001b16</code>,
+            just after the store <code>str r5, [r6, #0xC]</code> that wrote the field.</figcaption>
+        </figure>
+
+        <ol class="steps" start="5" style="counter-reset: step 4">
+          <li>The <span class="ui">Call stack</span> tab shows how the game got there. Double-click a row's
+            <em>Called from</em> cell to go to the call; double-clicking the <em>Function</em> cell goes to the
+            function's start. The Registers panel names what each register points into: here
+            <code>r6 -&gt; gUnkCar</code>.</li>
+        </ol>
+
+        <figure class="shot">
+          <div class="frame" data-pending="the Call stack at the break">
+            <img src="img/callstack.png" alt="The Call stack panel at the watchpoint" width="937" height="308">
+          </div>
+          <figcaption>The call stack at the break: <code>sub_02001540</code>, where the store is, called from
+            <code>02001d24</code>. The test ROM runs its whole main loop in this one function.</figcaption>
+        </figure>
+
+        <figure class="shot">
+          <div class="frame" data-pending="the Registers panel at the break">
+            <img src="img/registers.png" alt="The Registers panel at the break, r6 pointing at gUnkCar" width="402" height="424">
+          </div>
+          <figcaption>The Registers panel at the break: <code>r6 = 020267c0</code>, which the panel names
+            <code>gUnkCar</code>.</figcaption>
+        </figure>
+
+        <div class="note warn">
+          <span class="note-title">Where does the struct start?</span>
+          <p>The store is <code>[r6, #0xC]</code>, and the Registers panel shows <code>r6 = 020267c0</code>.
+            <code>020267c0 + 0xC = 020267cc</code>: the code treats <code>020267c0</code> as the struct's base,
+            so the guess in <a href="#uc1">use case 1</a> was right, and <code>unk0c</code> is at offset
+            <code>0xC</code>. A store's base register and offset are the best evidence for where a struct begins.
+            Had the base been another address, you would move the data object (select from the new base,
+            <kbd>D</kbd>) and renumber the fields.</p>
+        </div>
+
+        <ol class="steps" start="6" style="counter-reset: step 5">
+          <li><kbd>F11</kbd> steps one instruction and <kbd>F10</kbd> steps over a call.
+            <kbd>Ctrl</kbd>+<kbd>F11</kbd> runs one frame (it stops early at a breakpoint or watchpoint), and
+            <kbd>Ctrl</kbd>+<kbd>F10</kbd> runs to the cursor. In the Breakpoints tab,
+            <span class="ui">Edit condition...</span> makes the watchpoint stop only for some values, and
+            <span class="ui">Disable</span> keeps it for later.</li>
+        </ol>
+
+        <figure class="shot">
+          <div class="frame" data-pending="the Breakpoints tab with the watchpoint, hit once">
+            <img src="img/breakpoints.png" alt="The Breakpoints panel listing the watchpoint" width="937" height="308">
+          </div>
+          <figcaption>The Breakpoints tab, with the write watchpoint on <code>gUnkCar.unk0c</code>, 4 bytes,
+            hit once.</figcaption>
+        </figure>
+      </section>
+
+      <!-- ============================================================ 3 -->
+      <section class="usecase" id="uc3">
+        <h2><span class="uc-num">3</span> &ndash; Find a value in RAM</h2>
+        <p>You see a number on the screen, say a score that goes from 999 to 1000, and want to find where the
+          game keeps it. This is the value scan in the Search tab.</p>
+
+        <ol class="steps">
+          <li>Pause while the score shows 999.</li>
+          <li>In <span class="menu">Search &gt; Value scan</span>, pick the width (<code>u32</code> is a good
+            first guess; try <code>u16</code> if nothing is found), <em>equal to</em>, type 999, and press
+            <span class="ui">First scan</span>.</li>
+          <li>Play until the score is 1000 and pause. Choose <em>equal to</em>, 1000, and press
+            <span class="ui">Next scan</span>.</li>
+          <li>Repeat until only a few addresses are left. When you don't know the value (a hidden timer),
+            start with <em>unknown</em> (first scan) and narrow with <em>increased</em>, <em>decreased</em>,
+            <em>changed</em> or <em>unchanged</em>.</li>
+          <li>Double-click a result to go to it, then continue with <a href="#uc1">use case 1</a> or
+            <a href="#uc2">2</a> on that address.</li>
+        </ol>
+
+        <figure class="shot">
+          <div class="frame" data-pending="a value scan narrowed to a few candidates">
+            <img src="img/value-scan.png" alt="The Search panel's Value scan tab with five results" width="937" height="308">
+          </div>
+          <figcaption>A value scan for a value with no number to type: <em>unknown</em>, then
+            <em>increased</em> three times, 30 frames apart. Five candidates are left, among them
+            <code>020267cc</code>, <code>gUnkCar.unk0c</code> from <a href="#uc1">use case 1</a>, the frame
+            counter.</figcaption>
+        </figure>
+
+        <p>The <span class="ui">Bytes</span> tab finds a byte pattern (<code>12 34 ?? 56</code>) with
+          <span class="ui">Find bytes</span>; the <span class="ui">String</span> tab finds text in ASCII,
+          Shift-JIS or UTF-16 with <span class="ui">Find string</span>.</p>
+        <p>DS games often keep numbers as <code>fx32</code> (fixed point, 12 fraction bits); it is in the width
+          list. A displayed score may be stored as a count of digits or in BCD, so if neither width finds it,
+          try <em>changed</em> scans instead.</p>
+      </section>
+
+      <!-- ============================================================ 4 -->
+      <section class="usecase" id="uc4">
+        <h2><span class="uc-num">4</span> &ndash; Where does this data come from?</h2>
+        <p>Some bytes in RAM are a copy of a file from the ROM, unpacked or not; some are computed from such a
+          file. Data origin follows the data from the ROM through copies, unpacking and arithmetic.</p>
+
+        <ol class="steps">
+          <li>Select the bytes in the Memory view.</li>
+          <li>Open the <span class="ui">Data origin</span> tab. It names the ROM file and the offset in it, the
+            code that loaded it, the frame, and for computed data the instruction that combined the values. The
+            Inspector shows a short version of the same.</li>
+        </ol>
+
+        <figure class="shot">
+          <div class="frame" data-pending="Data origin for 32 bytes loaded from a graphics file">
+            <img src="img/data-origin.png" alt="The Data origin panel tracing a field back to a ROM file" width="937" height="308">
+          </div>
+          <figcaption>Data origin for the 4 bytes of <code>gUnkCar.unk04</code> at <code>020267c4</code>:
+            computed by code at <code>020016f6</code> in <code>sub_02001540</code>, from data of the ROM file
+            <code>/packed.lz</code>, which code at <code>0200bfa0</code> read from the card to
+            <code>020272e0</code> in frame 0. On the right, the ROM files tracked as sources.</figcaption>
+        </figure>
+
+        <div class="note warn">
+          <span class="note-title">After a save state</span>
+          <p>Loading a save state clears data origin for everything but code and unchanged ROM files: the
+            emulator can't know where the state's data came from. For full origin, use
+            <span class="menu">Recording &gt; Reset game with tracking...</span>
+            (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>) and play to the same point.</p>
+        </div>
+
+        <ol class="steps" start="3" style="counter-reset: step 2">
+          <li>To follow a single value or file only: right-click in the Memory view and choose
+            <span class="ui">Track value origin...</span>; or select a file in the
+            <span class="ui">NARC/SDAT files</span> panel (the files inside the ROM's NARC and SDAT archives)
+            or the <span class="ui">Game archive</span> panel, and press
+            <span class="ui">Add as origin source</span>.</li>
+        </ol>
+
+        <p>The Memory view's <span class="menu">Layers &gt; File structure</span> marks the parts of a known
+          graphics file in RAM (header, palette, tiles, map), and the Graphics panel draws such files: pick the
+          file from the panel's own list (its filter box takes part of a name, such as <code>ncgr</code>).</p>
+
+        <figure class="shot">
+          <div class="frame" data-pending="the File structure layer over the graphics file loaded above">
+            <img src="img/file-structure.png" alt="The Memory view with the File structure layer naming the parts of graphics files" width="937" height="231">
+          </div>
+          <figcaption>The File structure layer on two graphics files in RAM: the side labels name each part,
+            here an NSCR's headers and map, then an NCGR's headers and its 8 tiles. Hovering a byte names its
+            part too.</figcaption>
+        </figure>
+      </section>
+
+      <!-- ============================================================ 5 -->
+      <section class="usecase" id="uc5">
+        <h2><span class="uc-num">5</span> &ndash; Who calls a function, and who touches an address?</h2>
+
+        <ol class="steps">
+          <li>Put the cursor on an address (a field, or a function's first instruction) and press
+            <kbd>X</kbd>. The Cross-references tab lists every instruction seen calling, reading or writing it,
+            with counts. These are observed at run time, so they include accesses through pointers that static
+            analysis can't see.</li>
+          <li>Open the <span class="ui">Call graph</span> panel (<span class="menu">View &gt; Call graph</span>)
+            and put the cursor in a function: the panel shows its callers and callees. It follows the cursor only
+            while it is showing, so open it first. Expand a row to go further up or down.</li>
+          <li>The Functions panel on the left lists every function that has run, with its size, mode (ARM or
+            Thumb) and how often it ran. Type in its filter box to find one.</li>
+        </ol>
+
+        <div class="fig-row">
+          <figure class="shot">
+            <div class="frame" data-pending="Cross-references to gUnkCar.unk0c">
+              <img src="img/xrefs.png" alt="The Cross-references panel for gUnkCar.unk0c" width="937" height="308">
+            </div>
+            <figcaption>Cross-references to <code>gUnkCar.unk0c</code>: the store in <code>sub_02001540</code>
+              that writes it every frame, and the code in <code>sub_02001254</code> that read it.</figcaption>
+          </figure>
+          <figure class="shot">
+            <div class="frame" data-pending="the call graph for sub_02002160">
+              <img src="img/callgraph.png" alt="The Call graph panel for sub_02002160" width="937" height="308">
+            </div>
+            <figcaption>The call graph for <code>sub_02002160</code>: one caller, the main loop
+              <code>sub_02001540</code>, which called it 391 times from <code>02001aca</code>, and no
+              callees.</figcaption>
+          </figure>
+        </div>
+
+        <p>Functions are found automatically: every entry that runs becomes <code>sub_</code> plus its address.
+          Use <kbd>P</kbd> (<span class="menu">Edit &gt; Define function...</span>) for code that hasn't run yet.
+          The dialog's <span class="ui">Detect size from recording</span> can't size code that never ran: type
+          the size yourself, or only the first instruction is decoded.</p>
+      </section>
+
+      <!-- ============================================================ 6 -->
+      <section class="usecase" id="uc6">
+        <h2><span class="uc-num">6</span> &ndash; Name things as you learn them</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Key</th><th>Action</th></tr></thead>
+            <tbody>
+              <tr><td><kbd>N</kbd></td><td>Rename the function, label or register at the cursor</td></tr>
+              <tr><td><span class="menu">Edit &gt; Types...</span></td><td>Edit a struct's C definition: rename or retype its fields, then Save</td></tr>
+              <tr><td><kbd>;</kbd></td><td>Comment the selection or the cursor</td></tr>
+              <tr><td><kbd>D</kbd></td><td>Define data (with a type)</td></tr>
+              <tr><td><kbd>P</kbd></td><td>Define or edit a function</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>B</kbd></td><td>Add a bookmark</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>Undo / redo (redo is <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> on Linux)</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The same commands are in every right-click menu, acting on the row or byte you clicked.</p>
+
+        <div class="note info">
+          <span class="note-title">Where the names go</span>
+          <p>Into the knowledge store: <code>knowledge.db</code> under
+            <code>workbench/&lt;GAMECODE&gt;_&lt;sha1&gt;/</code> in melonDS's settings folder
+            (<a href="#files">where files go</a>). The game code is followed by the start of the
+            ROM's SHA-1. Names show up in every panel at once. They are not written to a decomp project's
+            <code>symbols.txt</code>: copy names you are sure of there by hand.</p>
+        </div>
+        <p>Every edit is logged with its author. Edits made by a script or agent through the API are marked
+          <code>[agent]</code> and have their own undo, so <kbd>Ctrl</kbd>+<kbd>Z</kbd> only undoes your own.
+          The Annotations panel lists comments and can filter them by author and tag.</p>
+      </section>
+
+      <!-- ============================================================ 7 -->
+      <section class="usecase" id="uc7">
+        <h2><span class="uc-num">7</span> &ndash; Which code has run?</h2>
+        <p>The <span class="ui">Coverage map</span> (<span class="menu">View &gt; Coverage map</span>) draws a region of memory as cells, coloured by what happened there: executed, read,
+          written or DMA'd.</p>
+
+        <div class="note tip">
+          <span class="note-title">Uses</span>
+          <p>Play one part of the game (a menu, a level) and see which code is new. Find code that never ran,
+            so you know which functions still need a static look.</p>
+        </div>
+
+        <ol class="steps">
+          <li>Choose the region (main RAM, ITCM, DTCM, shared WRAM, ARM7 WRAM, VRAM) and the kind of access
+            (exec, read, write, dma or combined) at the top.</li>
+          <li>Hover a cell to see what it is; click to select it, double-click to open it in the Disassembly or
+            Memory view. ARM7 WRAM is the ARM7's; ITCM, DTCM and VRAM are the ARM9's; main RAM and shared WRAM
+            follow the CPU in the status bar.</li>
+          <li><span class="menu">Layers</span> draws functions, data objects, overlays and bookmarks over the
+            map. Right-click a cell for <span class="ui">Define function...</span>,
+            <span class="ui">Define data...</span> and the usual address commands.</li>
+        </ol>
+
+        <figure class="shot">
+          <div class="frame" data-pending="the Coverage map of main RAM, showing executed code">
+            <img src="img/coverage.png" alt="The Coverage map of main RAM" width="937" height="308">
+          </div>
+          <figcaption>The Coverage map of main RAM, showing executed code: the test ROM's code is the few
+            marked cells at the top. <kbd>Ctrl</kbd>+wheel zooms down to single bytes;
+            <span class="ui">Fit</span> shows the whole region.</figcaption>
+        </figure>
+      </section>
+
+      <!-- ============================================================ 8 -->
+      <section class="usecase" id="uc8">
+        <h2><span class="uc-num">8</span> &ndash; Check a decompiled function against the original</h2>
+
+        <div class="note info">
+          <span class="note-title">Set up once</span>
+          <p><span class="menu">Build &gt; Compare setup</span> holds the compare script, the Python,
+            objdiff-cli and compiler paths, and a test run. The script and its contract are in
+            <a href="https://github.com/hmatt1/melonDS-with-decomp/blob/decomp-workbench/tools/workbench/compare/README.md"><code>tools/workbench/compare/README.md</code></a>.</p>
+        </div>
+
+        <ol class="steps">
+          <li>Open <span class="menu">Build &gt; Compare setup</span>. On the Settings tab, fill in the paths
+            to Python, objdiff-cli and the compiler (mwccarm through wibo) and press
+            <span class="ui">Save tool paths</span>; describe the compiler flags in <code>compare.json</code> and
+            press <span class="ui">Save compare.json</span>. On the Run tab, <span class="ui">Self-test</span>
+            checks them.</li>
+          <li>In <span class="menu">File &gt; Workbench settings...</span>, set <em>Decomp source tree</em> to
+            the decomp project's <code>src/</code> and <em>Editor command</em> to, for example,
+            <code>code -g {file}:{line}</code>.</li>
+          <li>With the cursor in a function, <span class="menu">Build &gt; Open source in editor</span>
+            (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd>) opens its source in the editor.</li>
+          <li><span class="menu">Build &gt; Build and compare function</span>
+            (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd>) compiles the function and compares it with the
+            original bytes. The result is in the <span class="ui">Source and diff</span> tab, and the function's
+            status in the Functions panel follows the latest result.</li>
+        </ol>
+      </section>
+
+      <!-- ============================================================ 9 -->
+      <section class="usecase" id="uc9">
+        <h2><span class="uc-num">9</span> &ndash; Script it</h2>
+
+        <div class="note info">
+          <span class="note-title">The API</span>
+          <p><code>melonDS --api</code> starts a local JSON-RPC server on <code>127.0.0.1:47800</code> (queries)
+            and <code>47801</code> (control). Everything a panel can do, the API can do; the Python client is
+            generated from the same schema.</p>
+        </div>
+
+        <p>Start melonDS with <code>--api</code>; then, from Python:</p>
+<pre><code>import os, sys
+sys.path.insert(0, os.path.expanduser("~/code/melonDS-with-decomp/tools/workbench/python"))
+from dswb.client import Client
+
+# api.json is in the workbench folder of melonDS's settings folder
+c = Client.connect(agent="me", info_file=os.path.expanduser("~/.config/melonDS/workbench/api.json"))
+
+r = c.writes_list(addr=0x020267c0, size=0x28)
+print(r.total, "writes")
+for w in r.entries[:10]:
+    print(hex(w.addr), w.size, hex(w.pc), w.new_value)
+
+c.breakpoint_set(kind="write", addr=0x020267cc, size=4)
+c.execution_control("resume")</code></pre>
+
+        <p>Other useful calls: <code>search_scan</code> (<a href="#uc3">use case 3</a>), <code>origin_get</code>
+          (<a href="#uc4">4</a>), <code>xrefs_get</code> and <code>calls_get</code> (<a href="#uc5">5</a>),
+          <code>kb_rename</code> and <code>kb_data_define</code> (<a href="#uc6">6</a>), <code>ui_show</code> to
+          point the window at an address, and <code>ui_capture</code> for a picture of a panel. The screenshots
+          on this site were taken that way.</p>
+        <p>The calls and their fields are listed in
+          <a href="https://github.com/hmatt1/melonDS-with-decomp/blob/decomp-workbench/tools/workbench/README.md#api"><code>tools/workbench/README.md</code>, section API</a>.</p>
+      </section>
+
+      <!-- ============================================================ 10 -->
+      <section class="usecase" id="uc10">
+        <h2><span class="uc-num">10</span> &ndash; Keep a recording</h2>
+
+        <div class="note info">
+          <span class="note-title">Sessions</span>
+          <p>A session runs from when recording starts until it stops or the game closes, and is then saved as
+            a <code>.dswbs</code> file in the knowledge store's <code>sessions/</code> folder. The write history
+            of an old session is searched with the <em>History of</em> box in the Write history tab.</p>
+        </div>
+
+        <figure class="shot">
+          <div class="frame" data-pending="the Recording panel">
+            <img src="img/recording-panel.png" alt="The Recording panel" width="937" height="308">
+          </div>
+          <figcaption>The Recording panel (<span class="menu">View &gt; Recording</span>):
+            <span class="ui">Stop recording</span>, which also saves the session; the switches; and the write
+            history filters, with where history is kept (<em>In memory</em>).</figcaption>
+        </figure>
+
+        <ol class="steps">
+          <li><strong>History size.</strong> In the Recording panel, the box that reads <em>In memory</em>
+            takes a size in MB: type 512 and it reads <em>512 MB file</em>. History then goes to
+            <code>workbench/history.dswbh</code> in melonDS's settings folder (shared by all games, not in the
+            game's folder), which holds about 32,000 writes per MB: far more than the default four million.</li>
+          <li><strong>Filters.</strong> <em>skip bulk copies</em>, <em>skip stack</em> and <em>skip
+            unchanged</em> are on by default and keep the history useful; <em>main RAM only</em> drops IO and
+            VRAM.</li>
+          <li><strong>Save now.</strong> <span class="menu">Recording &gt; Save session now</span>, or the
+            panel's button of the same name, saves a session without stopping.</li>
+          <li><strong>All time.</strong> Panels that offer a <em>this session</em> / <em>all time</em> choice
+            merge every saved session of the same ROM.</li>
+        </ol>
+      </section>
+
+      <!-- ============================================================ keys -->
+      <section class="usecase" id="keys">
+        <h2>Keys</h2>
+        <p>Every command has one name and one key, shown in the menu bar, the debug toolbar and every
+          right-click menu. The debugger's keys stay off the game window's: there, <kbd>F1</kbd>&ndash;<kbd>F9</kbd>
+          load savestates, <kbd>Shift</kbd>+<kbd>F1</kbd>&ndash;<kbd>F9</kbd> save them and <kbd>F12</kbd>
+          undoes a load.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Key</th><th>Command</th><th>Menu</th></tr></thead>
+            <tbody>
+              <tr><td><kbd>G</kbd></td><td>Go to an address, a name or <code>pc</code></td><td>Navigate</td></tr>
+              <tr><td><kbd>Alt</kbd>+<kbd>&larr;</kbd> / <kbd>Alt</kbd>+<kbd>&rarr;</kbd></td><td>Back / forward (also the mouse's back and forward buttons)</td><td>Navigate</td></tr>
+              <tr><td><kbd>X</kbd></td><td>Cross-references</td><td>Navigate</td></tr>
+              <tr><td><kbd>L</kbd></td><td>Lock the disassembly to the PC</td><td>Navigate</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>T</kbd></td><td>Switch CPU (ARM9 / ARM7)</td><td>Navigate</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd></td><td>Locate file in game archive</td><td>Navigate</td></tr>
+              <tr><td><kbd>N</kbd></td><td>Rename</td><td>Edit</td></tr>
+              <tr><td><kbd>;</kbd></td><td>Comment</td><td>Edit</td></tr>
+              <tr><td><kbd>P</kbd></td><td>Define function</td><td>Edit</td></tr>
+              <tr><td><kbd>D</kbd></td><td>Define data</td><td>Edit</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>B</kbd></td><td>Add bookmark</td><td>Edit</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>Undo / redo</td><td>Edit</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>F5</kbd></td><td>Continue (from a pause or a break)</td><td>Debug</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F5</kbd></td><td>Break at the next instruction</td><td>Debug</td></tr>
+              <tr><td><kbd>F11</kbd> / <kbd>F10</kbd></td><td>Step into / step over</td><td>Debug</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>F10</kbd></td><td>Run to cursor</td><td>Debug</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>F11</kbd></td><td>Run one frame</td><td>Debug</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>F9</kbd></td><td>Toggle breakpoint</td><td>Debug</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd></td><td>Import static analysis (JSON)</td><td>Analysis</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd></td><td>Build and compare function</td><td>Build</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd></td><td>Open source in editor</td><td>Build</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>R</kbd></td><td>Start or stop recording (the same in the game window)</td><td>Recording</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd></td><td>Record write history / data origin</td><td>Recording</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd></td><td>Reset game with tracking</td><td>Recording</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd></td><td>Game screen in the workbench</td><td>View</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd></td><td>Find a panel</td><td>Window</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>1</kbd>&ndash;<kbd>9</kbd></td><td>Switch workspace</td><td>Window</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p><span class="menu">Debug &gt; Pause</span> has no key: it pauses the emulator at the end of a frame,
+          while Break stops in the debugger at an instruction, where stepping works. The status bar shows which:
+          <code>PAUSED</code>, or <code>BREAK:</code> and the reason, in red.</p>
+      </section>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    melonDS Decomp Workbench is a fork of <a href="https://melonds.kuribo64.net/">melonDS</a>, licensed under the GPL v3.
+    Source: <a href="https://github.com/hmatt1/melonDS-with-decomp">hmatt1/melonDS-with-decomp</a>.
+  </footer>
+  <script src="assets/site.js" defer></script>
+</body>
+</html>

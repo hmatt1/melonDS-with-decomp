@@ -27,10 +27,30 @@
 #include <string>
 #include <algorithm>
 
+#include <QPointer>
 #include <QProcess>
+#include <QStatusBar>
 #include <QApplication>
 #include <QMessageBox>
 #include <QMenuBar>
+#include <QToolBar>
+#include <QRadioButton>
+#include <QCheckBox>
+#include <QSpinBox>
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QLineEdit>
+#include <QComboBox>
+#include <QButtonGroup>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QVBoxLayout>
+#include <QSignalBlocker>
+#include <QGridLayout>
+#include <QSlider>
+#include <QPushButton>
+#include <QActionGroup>
 #include <QMimeDatabase>
 #include <QFileDialog>
 #include <QInputDialog>
@@ -73,6 +93,8 @@
 #include "ArchiveUtil.h"
 #include "CameraManager.h"
 #include "Window.h"
+#include "workbench/WBHost.h"
+#include "workbench/WBStatusWidget.h"
 #include "AboutDialog.h"
 
 using namespace melonDS;
@@ -207,8 +229,8 @@ static bool FileIsSupportedFiletype(const QString& filename, bool insideArchive 
 
 
 
-MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
-    QMainWindow(parent),
+MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded) :
+    QMainWindow(parent, embedded ? Qt::WindowFlags(Qt::Widget) : Qt::WindowFlags()),
     windowID(id),
     emuInstance(inst),
     globalCfg(inst->globalCfg),
@@ -218,6 +240,9 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     enabledSaved(false),
     focused(true)
 {
+    this->embedded = embedded;
+    // QMainWindow always makes itself a window: an embedded one becomes a plain child widget again
+    if (embedded) setWindowFlags(Qt::Widget);
 
     showOSD = windowCfg.GetBool("ShowOSD");
 
@@ -405,6 +430,19 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
                 actRAMInfo = menu->addAction("RAM search");
                 connect(actRAMInfo, &QAction::triggered, this, &MainWindow::onRAMInfo);
 
+                menu->addSeparator();
+                actWorkbench = menu->addAction("Decomp workbench...");
+                actWorkbench->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_W));
+                connect(actWorkbench, &QAction::triggered, this, [this]() { emuInstance->getWorkbench()->ShowWindow(); });
+                // the same name and key as the workbench's Recording > Start recording
+                actRecording = menu->addAction("Start recording");
+                actRecording->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_R));
+                connect(actRecording, &QAction::triggered, this, [this]()
+                {
+                    WBHost* wb = emuInstance->getWorkbench();
+                    wb->SetRecording(!wb->Status().Recording);
+                });
+
                 actTitleManager = menu->addAction("Manage DSi titles");
                 connect(actTitleManager, &QAction::triggered, this, &MainWindow::onOpenTitleManager);
             }
@@ -447,6 +485,7 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
                     int data = i + 1;
                     actScreenSize[i] = submenu->addAction(QString("%1x").arg(data));
                     actScreenSize[i]->setData(QVariant(data));
+                    actScreenSize[i]->setShortcut(QKeySequence(Qt::AltModifier | (Qt::Key_1 + i)));
                     connect(actScreenSize[i], &QAction::triggered, this, &MainWindow::onChangeScreenSize);
                 }
             }
@@ -469,9 +508,9 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
                 QMenu * submenu = menu->addMenu("Screen gap");
                 grpScreenGap = new QActionGroup(submenu);
 
-                const int screengap[] = {0, 1, 8, 64, 90, 128};
+                const int screengap[] = {0, 1, 8, 32, 64, 90, 128};
 
-                for (int i = 0; i < 6; i++)
+                for (int i = 0; i < 7; i++)
                 {
                     int data = screengap[i];
                     actScreenGap[i] = submenu->addAction(QString("%1 px").arg(data));
@@ -567,9 +606,14 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
 
             menu->addSeparator();
 
-            actScreenFiltering = menu->addAction("Screen filtering");
-            actScreenFiltering->setCheckable(true);
-            connect(actScreenFiltering, &QAction::triggered, this, &MainWindow::onChangeScreenFiltering);
+            actHelloWindow = menu->addAction("Pixel grid settings...");
+
+            // On or off only. What draws it follows Config > Video settings: the OpenGL shader with
+            // an OpenGL display or OpenGL 3D renderer, else the software filter (the fallback).
+            actPixelGrid = menu->addAction("Pixel grid");
+            actPixelGrid->setCheckable(true);
+            actPixelGrid->setShortcut(QKeySequence(Qt::AltModifier | Qt::Key_F));
+            connect(actPixelGrid, &QAction::triggered, this, &MainWindow::onChangePixelGrid);
 
             actShowOSD = menu->addAction("Show OSD");
             actShowOSD->setCheckable(true);
@@ -636,6 +680,227 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
 
         setMenuBar(menubar);
 
+        helloWindow = new HelloWindow(this);
+        helloWindow->setWindowTitle("Pixel grid settings");
+        {
+            // one slider per shader float; changes apply on the next frame
+            auto* grid = new QGridLayout(helloWindow);
+            for (int i = 0; i < kNumGridParams; i++)
+            {
+                const GridParamDef& def = kGridParams[i];
+                const int steps = gridParamSteps(def);
+                float val = (float)windowCfg.GetDouble(def.key);
+
+                auto* name = new QLabel(def.name, helloWindow);
+                name->setToolTip(def.tip);
+                auto* slider = new QSlider(Qt::Horizontal, helloWindow);
+                auto* num = new QLabel(helloWindow);
+                slider->setRange(0, steps);
+                slider->setValue(qRound((val - def.min) / (def.max - def.min) * steps));
+                num->setMinimumWidth(48);
+                num->setText(QString::number(val, 'f', def.integer ? 0 : 3));
+
+                connect(slider, &QSlider::valueChanged, this, [this, i, num](int v)
+                {
+                    const GridParamDef& def = kGridParams[i];
+                    float f = def.min + (def.max - def.min) * v / (float)gridParamSteps(def);
+                    num->setText(QString::number(f, 'f', def.integer ? 0 : 3));
+                    windowCfg.SetDouble(def.key, f);
+                    if (panel) panel->gridParam[i] = f;
+                });
+
+                grid->addWidget(name, i, 0);
+                grid->addWidget(slider, i, 1);
+                grid->addWidget(num, i, 2);
+
+                // the blur rows also get their reach, in DS pixels
+                int axis = !strcmp(def.key, "BlurStrengthX") ? 0 : !strcmp(def.key, "BlurStrengthY") ? 1 : -1;
+                if (axis >= 0)
+                {
+                    const char* rkey = axis ? "BlurReachY" : "BlurReachX";
+                    auto* reach = new QSpinBox(helloWindow);
+                    reach->setRange(0, 3);
+                    reach->setSuffix(" px");
+                    reach->setToolTip("How many DS pixels away, in this direction, the blur takes colour from (0 to 3).\n"
+                                      "At 1 only the nearest neighbour on each side counts; at 3, three on each side.\n"
+                                      "At 0 this direction isn't blurred, whatever the slider says.");
+                    reach->setValue(windowCfg.GetInt(rkey));
+                    connect(reach, &QSpinBox::valueChanged, this, [this, axis, rkey](int v)
+                    {
+                        windowCfg.SetInt(rkey, v);
+                        if (panel) panel->blurReach[axis] = v;
+                    });
+                    grid->addWidget(reach, i, 3);
+                }
+            }
+
+            // LED stripe layout of the console being imitated
+            auto* layoutRow = new QHBoxLayout();
+            auto* layoutLabel = new QLabel("Subpixels", helloWindow);
+            layoutLabel->setToolTip("Which console's LED stripes to imitate. Each DS pixel is lit by three thin\n"
+                                    "stripes, one per colour, and their order differs between models:\n\n"
+                                    "DS Lite and DSi: blue, green, red, left to right, on both screens.\n"
+                                    "DSi XL: blue, green, red on the top screen, but red, green, blue on the bottom.\n\n"
+                                    "None turns the stripes off. Subpixel strength sets how visible they are.");
+            layoutRow->addWidget(layoutLabel);
+            auto* layoutGroup = new QButtonGroup(helloWindow);
+            const char* layouts[] = {"None", "DS Lite", "DSi", "DSi XL"};
+            for (int i = 0; i < 4; i++)
+            {
+                auto* rb = new QRadioButton(layouts[i], helloWindow);
+                rb->setChecked(windowCfg.GetInt("SubpixelLayout") == i);
+                layoutGroup->addButton(rb, i);
+                layoutRow->addWidget(rb);
+            }
+            layoutRow->addStretch();
+            connect(layoutGroup, &QButtonGroup::idClicked, this, [this](int id)
+            {
+                windowCfg.SetInt("SubpixelLayout", id);
+                if (panel) panel->subpixelLayout = id;
+            });
+            grid->addLayout(layoutRow, kNumGridParams, 0, 1, 4);
+
+            auto* subBox = new QCheckBox("Subpixel sampling (needs 3x or more internal resolution)", helloWindow);
+            subBox->setObjectName("subpixelSample");
+            subBox->setToolTip("Lets each LED stripe show what's actually under it, the way ClearType does with text.\n\n"
+                               "With the OpenGL renderer at 3x or more internal resolution, the 3D picture has at\n"
+                               "least three samples across each DS pixel. Each stripe then takes its own colour from\n"
+                               "the spot where that stripe sits: blue from the left third, green from the middle,\n"
+                               "red from the right (in the order chosen under Subpixels). That gives about three times\n"
+                               "the horizontal detail in 3D scenes, with faint coloured fringes on hard edges.\n\n"
+                               "Has no effect on 2D graphics, below 3x, or with Subpixels set to None.");
+            subBox->setChecked(windowCfg.GetBool("SubpixelSample"));
+            connect(subBox, &QCheckBox::toggled, this, [this](bool on)
+            {
+                windowCfg.SetBool("SubpixelSample", on);
+                if (panel) panel->subpixelSample = on;
+            });
+            grid->addWidget(subBox, kNumGridParams + 1, 0, 1, 4);
+
+            // presets: "Default" is the built-in values and can't be deleted;
+            // the rest live in pixelgrid-presets.json next to melonDS.toml
+            auto* presetRow = new QHBoxLayout();
+            auto* presetPick = new QComboBox(helloWindow);
+            auto* presetName = new QLineEdit(helloWindow);
+            auto* presetSave = new QPushButton("Save", helloWindow);
+            auto* presetDelete = new QPushButton("Delete", helloWindow);
+            presetPick->setToolTip("Apply a saved set of these settings");
+            presetName->setPlaceholderText("Preset name");
+            presetSave->setToolTip("Save the current settings under the name in the box");
+            presetDelete->setToolTip("Delete the selected preset (not Default)");
+            presetRow->addWidget(presetPick, 1);
+            presetRow->addWidget(presetName, 1);
+            presetRow->addWidget(presetSave);
+            presetRow->addWidget(presetDelete);
+            grid->addLayout(presetRow, kNumGridParams + 2, 0, 1, 4);
+
+            QString presetFile = QString::fromStdString(Platform::GetLocalFilePath("pixelgrid-presets.json"));
+            auto loadPresets = [presetFile]()
+            {
+                QFile f(presetFile);
+                if (!f.open(QIODevice::ReadOnly)) return QJsonObject();
+                return QJsonDocument::fromJson(f.readAll()).object();
+            };
+            auto refill = [presetPick, loadPresets](const QString& select)
+            {
+                QSignalBlocker b(presetPick);
+                presetPick->clear();
+                presetPick->addItem("Default");
+                for (const QString& n : loadPresets().keys()) presetPick->addItem(n);
+                int i = presetPick->findText(select);
+                presetPick->setCurrentIndex(i < 0 ? 0 : i);
+            };
+            refill(QString());
+
+            QWidget* hw = helloWindow;
+            auto current = [hw]()
+            {
+                QJsonObject o;
+                auto sliders = hw->findChildren<QSlider*>();
+                for (int i = 0; i < kNumGridParams && i < sliders.size(); i++)
+                {
+                    const GridParamDef& def = kGridParams[i];
+                    o[def.key] = def.min + (def.max - def.min) * sliders[i]->value() / (double)gridParamSteps(def);
+                }
+                auto reach = hw->findChildren<QSpinBox*>();
+                if (reach.size() >= 2) { o["BlurReachX"] = reach[0]->value(); o["BlurReachY"] = reach[1]->value(); }
+                if (auto* g = hw->findChild<QButtonGroup*>()) o["SubpixelLayout"] = g->checkedId();
+                if (auto* c = hw->findChild<QCheckBox*>("subpixelSample")) o["SubpixelSample"] = c->isChecked();
+                return o;
+            };
+            auto apply = [hw](const QJsonObject& o)
+            {
+                auto sliders = hw->findChildren<QSlider*>();
+                for (int i = 0; i < kNumGridParams && i < sliders.size(); i++)
+                {
+                    const GridParamDef& def = kGridParams[i];
+                    double v = o.value(def.key).toDouble(def.def);
+                    sliders[i]->setValue(qRound((v - def.min) / (def.max - def.min) * gridParamSteps(def)));
+                }
+                auto reach = hw->findChildren<QSpinBox*>();
+                if (reach.size() >= 2)
+                {
+                    reach[0]->setValue(o.value("BlurReachX").toInt(1));
+                    reach[1]->setValue(o.value("BlurReachY").toInt(1));
+                }
+                if (auto* g = hw->findChild<QButtonGroup*>())
+                    if (auto* b = g->button(o.value("SubpixelLayout").toInt(3))) b->click();
+                if (auto* c = hw->findChild<QCheckBox*>("subpixelSample")) c->setChecked(o.value("SubpixelSample").toBool(false));
+            };
+
+            // activated, not currentTextChanged: picking the entry already shown
+            // (say Default, after moving a slider) applies it again
+            connect(presetPick, &QComboBox::activated, this, [=](int idx)
+            {
+                QString n = presetPick->itemText(idx);
+                presetDelete->setEnabled(n != "Default");
+                presetName->setText(n == "Default" ? QString() : n);
+                apply(n == "Default" ? QJsonObject() : loadPresets().value(n).toObject());
+            });
+            presetDelete->setEnabled(false);
+            connect(presetSave, &QPushButton::clicked, this, [=]()
+            {
+                QString n = presetName->text().trimmed();
+                if (n.isEmpty() || n.compare("Default", Qt::CaseInsensitive) == 0)
+                {
+                    QMessageBox::information(hw, "Pixel grid settings", "Type a name other than Default to save a preset.");
+                    return;
+                }
+                QJsonObject all = loadPresets();
+                all[n] = current();
+                QFile f(presetFile);
+                if (f.open(QIODevice::WriteOnly)) f.write(QJsonDocument(all).toJson());
+                refill(n);
+                presetDelete->setEnabled(true);
+            });
+            connect(presetDelete, &QPushButton::clicked, this, [=]()
+            {
+                QString n = presetPick->currentText();
+                if (n == "Default") return;
+                QJsonObject all = loadPresets();
+                all.remove(n);
+                QFile f(presetFile);
+                if (f.open(QIODevice::WriteOnly)) f.write(QJsonDocument(all).toJson());
+                refill(QString());
+                presetName->clear();
+                presetDelete->setEnabled(false);
+            });
+            grid->setColumnStretch(1, 1);
+        }
+        helloWindow->resize(480, 360);
+
+        connect(actHelloWindow, &QAction::triggered, this, [this]()
+        {
+            helloWindow->show();
+            helloWindow->raise();
+            helloWindow->activateWindow();
+        });
+        helloWindow->onClosed = [this]()
+        {
+            saveHelloWindowState();
+            windowCfg.SetBool("HelloVisible", false);
+        };
+
         if (localCfg.GetString("Firmware.Username") == "Arisotura")
             actMPNewInstance->setText("Fart");
     }
@@ -647,7 +912,7 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     move(frameGeo.topLeft());
 #endif
 
-    std::string geom = windowCfg.GetString("Geometry");
+    std::string geom = embedded ? std::string() : windowCfg.GetString("Geometry");
     if (!geom.empty())
     {
         QByteArray raw = QByteArray::fromStdString(geom);
@@ -659,8 +924,41 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     }
     show();
 
+    if (helloWindow)
+    {
+        std::string hgeom = windowCfg.GetString("HelloGeometry");
+        if (!hgeom.empty())
+            helloWindow->restoreGeometry(QByteArray::fromBase64(QByteArray::fromStdString(hgeom)));
+        if (windowCfg.GetBool("HelloVisible"))
+            helloWindow->show();
+    }
+
     panel = nullptr;
     createScreenPanel();
+
+    // recording indicator (status bar shown while recording)
+    if (WBHost* wb = emuInstance->getWorkbench())
+    {
+        wbStatus = new WBStatusWidget(wb, this);
+        statusBar()->addWidget(wbStatus, 1);
+        statusBar()->setVisible(false);
+        // statusChanged comes from the emulation thread, queued: one can still be waiting when the
+        // instance has deleted its host (quitting with recording on)
+        QPointer<WBHost> host = wb;
+        connect(wb, &WBHost::statusChanged, this, [this, host]()
+        {
+            if (!host) return;
+            WBStatus s = host->Status();
+            bool show = s.Recording;
+            if (statusBar()->isVisible() != show) statusBar()->setVisible(show);
+            if (hasMenu && actRecording)
+            {
+                actRecording->setText(s.Recording ? "Stop recording" : "Start recording");
+                actRecording->setEnabled(s.Recording || (s.Available && s.EmuState != WBStatus::NoGame));
+            }
+            wbStatus->refresh();
+        });
+    }
 
     if (hasMenu)
     {
@@ -702,7 +1000,7 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
         actScreenRotation[windowCfg.GetInt("ScreenRotation")]->setChecked(true);
 
         int screenGap = windowCfg.GetInt("ScreenGap");
-        for (int i = 0; i < 6; i++)
+        for (int i = 0; i < 7; i++)
         {
             if (actScreenGap[i]->data().toInt() == screenGap)
             {
@@ -727,7 +1025,7 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
                 actScreenAspectBot[i]->setChecked(true);
         }
 
-        actScreenFiltering->setChecked(windowCfg.GetBool("ScreenFilter"));
+        updatePixelGridMenu();
         actShowOSD->setChecked(showOSD);
 
         actLimitFramerate->setChecked(emuInstance->doLimitFPS);
@@ -774,8 +1072,16 @@ void MainWindow::osdAddMessage(unsigned int color, const char* msg)
 void MainWindow::saveEnabled(bool enabled)
 {
     if (enabledSaved) return;
+    // an embedded window lives in the workbench, which recreates it: never reopen it on its own
+    if (embedded) enabled = false;
     windowCfg.SetBool("Enabled", enabled);
     enabledSaved = true;
+}
+
+void MainWindow::saveHelloWindowState()
+{
+    QByteArray enc = helloWindow->saveGeometry().toBase64();
+    windowCfg.SetString("HelloGeometry", enc.toStdString());
 }
 
 void MainWindow::closeEvent(QCloseEvent* event)
@@ -795,9 +1101,17 @@ void MainWindow::closeEvent(QCloseEvent* event)
 
     if (!emuInstance) return;
 
-    QByteArray geom = saveGeometry();
-    QByteArray enc = geom.toBase64(QByteArray::Base64Encoding);
-    windowCfg.SetString("Geometry", enc.toStdString());
+    if (!embedded)
+    {
+        QByteArray geom = saveGeometry();
+        QByteArray enc = geom.toBase64(QByteArray::Base64Encoding);
+        windowCfg.SetString("Geometry", enc.toStdString());
+    }
+    if (helloWindow)
+    {
+        windowCfg.SetBool("HelloVisible", helloWindow->isVisible());
+        saveHelloWindowState();
+    }
     Config::Save();
 
     emuInstance->deleteWindow(windowID, false);
@@ -814,8 +1128,11 @@ void MainWindow::createScreenPanel()
     panel = nullptr;
     if (oldpanel) delete oldpanel;
 
-    hasOGL = globalCfg.GetBool("Screen.UseGL") ||
-            (globalCfg.GetInt("3D.Renderer") != renderer3D_Software);
+    // One decision for every window of the instance: a window's OpenGL context is shared
+    // with the first window's, so they must all use OpenGL or none. The OpenGL pixel grid
+    // needs it; the software one draws on the plain display (SoftPixelFilter).
+    hasOGL = emuInstance->usesOpenGL();
+    updatePixelGridMenu();
 
     if (hasOGL)
     {
@@ -854,8 +1171,6 @@ void MainWindow::createScreenPanel()
     }
     setCentralWidget(panel);
 
-    if (hasMenu)
-        actScreenFiltering->setEnabled(hasOGL);
     panel->osdSetEnabled(showOSD);
 
     connect(emuThread, SIGNAL(windowUpdate()), panel, SLOT(repaint()));
@@ -1037,6 +1352,10 @@ void MainWindow::onFocusOut()
 
 void MainWindow::onAppStateChanged(Qt::ApplicationState state)
 {
+    // closed: the instance and its emulation thread may be gone, while another window (the workbench)
+    // still changes the application state
+    if (!emuInstance) return;
+
     if (state == Qt::ApplicationInactive)
     {
         emuInstance->keyReleaseAll();
@@ -1526,12 +1845,12 @@ void MainWindow::onSaveState()
     else
     {
         // TODO: specific 'last directory' for savestate files?
-        emuThread->emuPause();
+        beginSettingsDialog();
         filename = QFileDialog::getSaveFileName(this,
                                                          "Save state",
                                                          globalCfg.GetQString("LastROMFolder"),
                                                          "melonDS savestates (*.mln);;Any file (*.*)");
-        emuThread->emuUnpause();
+        endSettingsDialog();
         if (filename.isEmpty())
             return;
     }
@@ -1561,12 +1880,12 @@ void MainWindow::onLoadState()
     else
     {
         // TODO: specific 'last directory' for savestate files?
-        emuThread->emuPause();
+        beginSettingsDialog();
         filename = QFileDialog::getOpenFileName(this,
                                                          "Load state",
                                                          globalCfg.GetQString("LastROMFolder"),
                                                          "melonDS savestates (*.ml*);;Any file (*.*)");
-        emuThread->emuUnpause();
+        endSettingsDialog();
         if (filename.isEmpty())
             return;
     }
@@ -1708,7 +2027,7 @@ void MainWindow::onEnableCheats(bool checked)
 
 void MainWindow::onSetupCheats()
 {
-    emuThread->emuPause();
+    beginSettingsDialog();
 
     CheatsDialog* dlg = CheatsDialog::openDlg(this);
     connect(dlg, &CheatsDialog::finished, this, &MainWindow::onCheatsDialogFinished);
@@ -1716,7 +2035,7 @@ void MainWindow::onSetupCheats()
 
 void MainWindow::onCheatsDialogFinished(int res)
 {
-    emuThread->emuUnpause();
+    endSettingsDialog();
 }
 
 void MainWindow::onROMInfo()
@@ -1804,9 +2123,27 @@ bool MainWindow::lanWarning(bool host)
     return true;
 }
 
+void MainWindow::beginSettingsDialog()
+{
+    if (emuThread->emuIsRunning())
+    {
+        emuThread->emuPause();
+        settingsPauseDepth++;
+    }
+}
+
+void MainWindow::endSettingsDialog()
+{
+    if (settingsPauseDepth > 0)
+    {
+        settingsPauseDepth--;
+        emuThread->emuUnpause();
+    }
+}
+
 void MainWindow::onOpenEmuSettings()
 {
-    emuThread->emuPause();
+    beginSettingsDialog();
 
     EmuSettingsDialog* dlg = EmuSettingsDialog::openDlg(this);
     connect(dlg, &EmuSettingsDialog::finished, this, &MainWindow::onEmuSettingsDialogFinished);
@@ -1837,12 +2174,12 @@ void MainWindow::onEmuSettingsDialogFinished(int res)
     if (!emuThread->emuIsActive())
         actTitleManager->setEnabled(!globalCfg.GetString("DSi.NANDPath").empty());
 
-    emuThread->emuUnpause();
+    endSettingsDialog();
 }
 
 void MainWindow::onOpenInputConfig()
 {
-    emuThread->emuPause();
+    beginSettingsDialog();
 
     InputConfigDialog* dlg = InputConfigDialog::openDlg(this);
     connect(dlg, &InputConfigDialog::finished, this, &MainWindow::onInputConfigFinished);
@@ -1850,7 +2187,7 @@ void MainWindow::onOpenInputConfig()
 
 void MainWindow::onInputConfigFinished(int res)
 {
-    emuThread->emuUnpause();
+    endSettingsDialog();
 }
 
 void MainWindow::onOpenVideoSettings()
@@ -1861,7 +2198,7 @@ void MainWindow::onOpenVideoSettings()
 
 void MainWindow::onOpenCameraSettings()
 {
-    emuThread->emuPause();
+    beginSettingsDialog();
 
     camStarted[0] = camManager[0]->isStarted();
     camStarted[1] = camManager[1]->isStarted();
@@ -1877,7 +2214,7 @@ void MainWindow::onCameraSettingsFinished(int res)
     if (camStarted[0]) camManager[0]->start();
     if (camStarted[1]) camManager[1]->start();
 
-    emuThread->emuUnpause();
+    endSettingsDialog();
 }
 
 void MainWindow::onOpenAudioSettings()
@@ -1892,7 +2229,7 @@ void MainWindow::onOpenAudioSettings()
 
 void MainWindow::onOpenFirmwareSettings()
 {
-    emuThread->emuPause();
+    beginSettingsDialog();
 
     FirmwareSettingsDialog* dlg = FirmwareSettingsDialog::openDlg(this);
     connect(dlg, &FirmwareSettingsDialog::finished, this, &MainWindow::onFirmwareSettingsFinished);
@@ -1903,12 +2240,12 @@ void MainWindow::onFirmwareSettingsFinished(int res)
     if (FirmwareSettingsDialog::needsReset)
         onReset();
 
-    emuThread->emuUnpause();
+    endSettingsDialog();
 }
 
 void MainWindow::onOpenPathSettings()
 {
-    emuThread->emuPause();
+    beginSettingsDialog();
 
     PathSettingsDialog* dlg = PathSettingsDialog::openDlg(this);
     connect(dlg, &PathSettingsDialog::finished, this, &MainWindow::onPathSettingsFinished);
@@ -1919,7 +2256,7 @@ void MainWindow::onPathSettingsFinished(int res)
     if (PathSettingsDialog::needsReset)
         onReset();
 
-    emuThread->emuUnpause();
+    endSettingsDialog();
 }
 
 void MainWindow::onUpdateAudioVolume(int vol, int dsisync)
@@ -1950,7 +2287,7 @@ void MainWindow::onAudioSettingsFinished(int res)
 
 void MainWindow::onOpenMPSettings()
 {
-    emuThread->emuPause();
+    beginSettingsDialog();
 
     MPSettingsDialog* dlg = MPSettingsDialog::openDlg(this);
     connect(dlg, &MPSettingsDialog::finished, this, &MainWindow::onMPSettingsFinished);
@@ -1962,12 +2299,12 @@ void MainWindow::onMPSettingsFinished(int res)
     emuInstance->updateAudioMuteByWindowFocus();
     MPInterface::Get().SetRecvTimeout(globalCfg.GetInt("MP.RecvTimeout"));
 
-    emuThread->emuUnpause();
+    endSettingsDialog();
 }
 
 void MainWindow::onOpenWifiSettings()
 {
-    emuThread->emuPause();
+    beginSettingsDialog();
 
     WifiSettingsDialog* dlg = WifiSettingsDialog::openDlg(this);
     connect(dlg, &WifiSettingsDialog::finished, this, &MainWindow::onWifiSettingsFinished);
@@ -1978,12 +2315,12 @@ void MainWindow::onWifiSettingsFinished(int res)
     if (WifiSettingsDialog::needsReset)
         onReset();
 
-    emuThread->emuUnpause();
+    endSettingsDialog();
 }
 
 void MainWindow::onOpenInterfaceSettings()
 {
-    emuThread->emuPause();
+    beginSettingsDialog();
     InterfaceSettingsDialog* dlg = InterfaceSettingsDialog::openDlg(this);
     connect(dlg, &InterfaceSettingsDialog::finished, this, &MainWindow::onInterfaceSettingsFinished);
     connect(dlg, &InterfaceSettingsDialog::updateInterfaceSettings, this, &MainWindow::onUpdateInterfaceSettings);
@@ -2001,7 +2338,7 @@ void MainWindow::onUpdateInterfaceSettings()
 
 void MainWindow::onInterfaceSettingsFinished(int res)
 {
-    emuThread->emuUnpause();
+    endSettingsDialog();
 }
 
 void MainWindow::onChangeScreenSize()
@@ -2097,6 +2434,27 @@ void MainWindow::onOpenNewWindow()
     emuInstance->createWindow();
 }
 
+void MainWindow::updatePixelGridMenu()
+{
+    if (!actPixelGrid) return;
+    actPixelGrid->setChecked(emuInstance->getLocalConfig().GetBool("PixelGrid"));
+    actPixelGrid->setToolTip(hasOGL ? "Drawn by the OpenGL screen shader (Config > Video settings uses OpenGL)"
+                                    : "Drawn in software on the CPU (Config > Video settings uses software)");
+}
+
+void MainWindow::onChangePixelGrid(bool checked)
+{
+    // one setting for all windows of the instance; each screen keeps its implementation
+    emuInstance->getLocalConfig().SetBool("PixelGrid", checked);
+    Config::Save();
+    for (int i = 0; i < kMaxWindows; i++)
+        if (auto* w = emuInstance->getWindow(i))
+        {
+            if (w->panel) w->panel->setPixelGrid(checked);
+            w->updatePixelGridMenu();
+        }
+}
+
 void MainWindow::onChangeScreenFiltering(bool checked)
 {
     windowCfg.SetBool("ScreenFilter", checked);
@@ -2150,7 +2508,18 @@ void MainWindow::onTitleUpdate(QString title)
         title = prefix + title;
     }
 
+    if (WBHost* wb = emuInstance->getWorkbench())
+    {
+        QString p = wb->TitlePrefix();
+        if (!p.isEmpty() && !title.startsWith(p)) title = p + title;
+    }
+
     setWindowTitle(title);
+}
+
+void MainWindow::onWorkbenchBooted()
+{
+    updateCartInserted(false);
 }
 
 void MainWindow::toggleFullscreen()
@@ -2159,7 +2528,10 @@ void MainWindow::toggleFullscreen()
     {
         showFullScreen();
         if (hasMenu)
+        {
             menuBar()->setFixedHeight(0); // Don't use hide() as menubar actions stop working
+            if (toolbar) toolbar->hide();
+        }
     }
     else
     {
@@ -2168,6 +2540,7 @@ void MainWindow::toggleFullscreen()
         {
             int menuBarHeight = menuBar()->sizeHint().height();
             menuBar()->setFixedHeight(menuBarHeight);
+            if (toolbar) toolbar->show();
         }
     }
 }
@@ -2275,7 +2648,7 @@ void MainWindow::onUpdateVideoSettings(bool glchange)
     bool hadOGL = hasOGL;
     if (glchange)
     {
-        emuThread->emuPause();
+        beginSettingsDialog();
         if (hadOGL)
         {
             emuThread->deinitContext(windowID);
@@ -2318,6 +2691,6 @@ void MainWindow::onUpdateVideoSettings(bool glchange)
 
     if (glchange)
     {
-        emuThread->emuUnpause();
+        endSettingsDialog();
     }
 }

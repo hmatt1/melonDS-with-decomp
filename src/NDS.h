@@ -245,6 +245,7 @@ class Wifi;
 class AREngine;
 class GPU;
 class ARMJIT;
+namespace WB { class Workbench; }
 
 class NDS
 {
@@ -289,6 +290,12 @@ public: // TODO: Encapsulate the rest of these members
     u16 PowerControl9;
 
     u16 ExMemCnt[2];
+
+    // decomp workbench (see src/workbench). WB is attached by the frontend;
+    // the flags select the hooked interpreter and memory hooks.
+    WB::Workbench* WB = nullptr;
+    bool WBMemHooks = false;
+    bool WBExecHooks = false;
 
 protected:
     // These BIOS arrays should be declared *before* the component objects (JIT, SPI, etc.)

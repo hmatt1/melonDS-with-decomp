@@ -93,6 +93,9 @@ if (WIN32)
         endif()
     elseif (BUILD_STATIC AND MINGW)
         set(CMAKE_FIND_LIBRARY_SUFFIXES .a)
+        # MSYS2 package configs name the shared import library through this suffix.
+        # A static link has to follow the .a archives instead.
+        set(CMAKE_IMPORT_LIBRARY_SUFFIX .a)
     endif()
 endif()
 
