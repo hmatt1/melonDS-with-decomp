@@ -12,7 +12,7 @@ works with other addresses (see --help), but the captions describe these.
 
 Two pictures need a person and are listed at the end: a right-click menu (a popup, which
 ui.capture does not see) and the Memory view's File structure layer (no API switch for it).
-The orange numbers are not drawn into the pictures: guide.html places them over each picture
+The orange numbers are not drawn into the pictures: index.html places them over each picture
 with callout spans positioned in percent (style="--x:..;--y:.."), so a retaken picture may need
 their positions adjusted.
 """
@@ -163,7 +163,7 @@ def main():
             print("  the watchpoint did not hit in 15 s: break-disasm, callstack and breakpoints were not taken")
         c.execution_control("resume")
         # use case 3: the value scan is a person's search in the Search panel
-        print("\nTake these by hand (see the guide's captions):")
+        print("\nTake these by hand (see the captions in docs/index.html):")
         for name, how in MANUAL + [("value-scan.png", "Run a value scan in Search > Value scan (unknown, then "
                                     "increased three times 30 frames apart) and capture the Search panel.")]:
             print("  %-26s %s" % (name, how))

@@ -161,6 +161,15 @@ a:hover { text-decoration-thickness: 2px; }
 
 .toc a:hover { color: var(--text); }
 .toc a.active { color: var(--accent); border-left-color: var(--accent); font-weight: 600; }
+.toc .toc-group {
+  margin: 14px 0 4px;
+  padding-left: 12px;
+  font-size: 12px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text);
+}
 .toc .num { font-variant-numeric: tabular-nums; margin-right: 6px; }
 
 @media (max-width: 960px) {
@@ -189,6 +198,12 @@ h1, h2, h3 { line-height: 1.25; letter-spacing: -0.01em; }
 h1 { font-size: 2.1rem; margin: 0 0 12px; }
 h2 { font-size: 1.5rem; margin: 56px 0 12px; padding-top: 8px; }
 h3 { font-size: 1.1rem; margin: 28px 0 8px; }
+h4 { font-size: 1rem; margin: 22px 0 8px; }
+
+/* the page's parts: Install and the guide each open with a heading of their own */
+.part { margin-top: 64px; padding-top: 24px; border-top: 2px solid var(--border); }
+.part > h2:first-child { margin-top: 0; font-size: 1.8rem; }
+.part section > h3 { margin-top: 36px; font-size: 1.25rem; }
 .content > h2:first-child, section > h2:first-child { margin-top: 0; }
 
 .lede { font-size: 1.15rem; color: var(--muted); margin: 0 0 24px; }
@@ -293,7 +308,7 @@ th { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: 
   padding-top: 8px;
   margin-top: 56px;
 }
-.usecase:first-of-type { border-top: 0; margin-top: 0; }
+.part + .usecase { border-top: 0; margin-top: 32px; }
 .usecase h2 { margin-top: 8px; }
 .usecase .uc-num { color: var(--accent); font-variant-numeric: tabular-nums; }
 
