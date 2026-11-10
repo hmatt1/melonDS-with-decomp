@@ -316,19 +316,24 @@ th { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: 
 
 figure.shot { margin: 8px 0 24px; }
 
+/* a picture is shown at its own size (one screen pixel per pixel), and only scaled down to fit: a
+   small panel isn't blown up. The frame hugs the picture, so the callouts' percentages stay on it */
 .frame {
   position: relative;
+  width: fit-content;
+  max-width: 100%;
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
   background: var(--surface);
 }
 
-.frame img { display: block; width: 100%; height: auto; }
+.frame img { display: block; max-width: 100%; height: auto; }
 
 /* a screenshot not taken yet: the frame says what it will show */
 .frame.missing img { display: none; }
 .frame.missing {
+  width: auto;
   min-height: 180px;
   display: grid;
   place-items: center;
