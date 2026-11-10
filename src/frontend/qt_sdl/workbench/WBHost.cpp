@@ -2200,6 +2200,9 @@ void WBHost::Pause()
 
 void WBHost::Resume()
 {
+    // A finished snapshot stays. A walk still reading memory is dropped, including when the
+    // workbench window is closed and nothing else is listening for the pause change.
+    AbandonStaticAnalysis();
     if (WB.Dbg.InBreak())
     {
         WB.Dbg.CancelStep();

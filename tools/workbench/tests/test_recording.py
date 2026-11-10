@@ -6,7 +6,7 @@ Boots the test ROM with the API and recording on, finds the manifest the ROM
 publishes in RAM, and checks that the recording matches the ROM's known layout:
 ARM and Thumb code, literal pools, data, DMA, write history, call edges,
 card-read and decompression provenance, data origin labels, breakpoints,
-stepping and session files.
+stepping, step over, unreached-code analysis and session files.
 """
 import argparse
 import json
@@ -428,6 +428,146 @@ def main():
         check(any("packed.lz" in s for t in o.taint for s in t.sources),
               "file data that looks like an address keeps its label in arithmetic: %s" % [t.sources for t in o.taint])
         c.recording_configure(origin_follow_addresses=False)
+
+        print("analysis and step over")
+        c.execution_control("resume")
+        try:
+            c.analysis_run()
+            check(False, "analysis.run while the game is running is refused")
+        except ApiError as e:
+            check("Pause the game first" in str(e), "analysis.run while the game is running is refused (%s)" % e)
+        c.execution_control("pause")
+
+        def drop_cond():
+            try:
+                c.kb_function_delete(m["cond_caller"] & ~1)
+            except ApiError:
+                pass
+
+        bx = (m["cond_caller_end"] & ~1) - 4
+        found = False
+        summary = ""
+        for _ in range(5):
+            drop_cond()
+            run = c.analysis_run()
+            got = c.analysis_get(addr=bx, size=4)
+            if run.outcome == "finished" and any(r.start <= bx < r.end for r in got.ranges):
+                found = True
+                summary = run.summary
+                break
+            c.analysis_clear()
+        check(found and "marked" in summary.lower(), "analysis.run marks the untaken bx lr (%s)" % summary)
+        conf = ""
+        for _ in range(3):
+            drop_cond()
+            conf = c.disasm_get(bx, count=1).lines[0].confidence
+            if conf == "from analysis":
+                break
+        check(conf == "from analysis", "disasm.get reports the mark as from analysis (%s)" % conf)
+        c.analysis_clear()
+        left = c.analysis_get(addr=bx, size=4)
+        check(not any(r.start <= bx < r.end for r in left.ranges), "analysis.clear removes the mark")
+
+        other = Client.connect(info)
+
+        def race_cancel():
+            last = None
+            for _ in range(8):
+                c.execution_control("pause")
+                try:
+                    c.analysis_clear()
+                except ApiError:
+                    pass
+                box = {}
+                stop = threading.Event()
+
+                def go():
+                    try:
+                        box["r"] = c.analysis_run()
+                    except Exception as e:
+                        box["e"] = e
+                    stop.set()
+
+                def hammer():
+                    # an early cancel is a no-op; one that lands while the walk is busy stops it
+                    while not stop.is_set():
+                        other.analysis_cancel()
+
+                t = threading.Thread(target=go)
+                h = threading.Thread(target=hammer)
+                t.start()
+                h.start()
+                t.join(30)
+                stop.set()
+                h.join(5)
+                last = box.get("r")
+                if last is not None and last.outcome == "cancelled":
+                    return last
+            return last
+
+        def race_abandon():
+            # The run has to be accepted first: a resume that wins the race is refused.
+            # One that lands while the walk is busy abandons it.
+            last = None
+            for delay in (0.001, 0.002, 0.003, 0.005, 0.008):
+                c.execution_control("pause")
+                try:
+                    c.analysis_clear()
+                except ApiError:
+                    pass
+                box = {}
+
+                def go():
+                    try:
+                        box["r"] = c.analysis_run()
+                    except Exception as e:
+                        box["e"] = e
+
+                t = threading.Thread(target=go)
+                t.start()
+                time.sleep(delay)
+                if t.is_alive():
+                    other.execution_control("resume")
+                t.join(30)
+                last = box.get("r")
+                if last is not None and last.outcome == "abandoned":
+                    return last
+            return last
+
+        cancelled = race_cancel()
+        check(cancelled is not None and cancelled.outcome == "cancelled",
+              "a second connection cancels analysis.run (%s)" % (cancelled.outcome if cancelled else "no reply"))
+        abandoned = race_abandon()
+        check(abandoned is not None and abandoned.outcome == "abandoned",
+              "resuming during the walk abandons it (%s)" % (abandoned.outcome if abandoned else "no reply"))
+        c.execution_control("pause")
+        try:
+            c.analysis_clear()
+        except ApiError:
+            pass
+        try:
+            c.execution_control("step_over", count=2)
+            check(False, "step_over rejects a count other than 1")
+        except ApiError as e:
+            check("one instruction" in str(e), "step_over rejects a count other than 1 (%s)" % e)
+
+        start = m["thumb_func"] & ~1
+        leaf = m["thumb_leaf"] & ~1
+        lines = c.disasm_get(start, count=16).lines
+        bl = next((ln for ln in lines if (ln.target & ~1) == leaf), None)
+        check(bl is not None, "wb_thumb_func contains bl wb_thumb_leaf")
+        if bl is not None:
+            nxt = next(ln for ln in lines if ln.addr > bl.addr)
+            bp = c.breakpoint_set("exec", bl.addr)
+            c.execution_control("resume")
+            c.wait_event("breakpoint_hit", 10)
+            over = c.execution_control("step_over")
+            check(over.state == "break" and over.pc == nxt.addr and not over.interrupted and "pop" in nxt.text.lower(),
+                  "step_over stops on the instruction after the call (%08x, next %08x %s)" % (over.pc, nxt.addr, nxt.text))
+            c.wait_event("breakpoint_hit", 2)  # the temporary breakpoint step_over plants at the return
+            c.breakpoint_clear(bp.id)
+            c.execution_control("resume")
+        other.close()
 
         print("breakpoints and stepping")
         bp = c.breakpoint_set("exec", m["writer_func"])

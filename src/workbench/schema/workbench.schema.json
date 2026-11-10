@@ -329,7 +329,7 @@
           ["mem_class", "string", "untouched, code, data, code_and_data, io"],
           ["mode", "string", "arm, thumb, mixed or empty"],
           ["classification", "string", "arm, thumb, mixed, data or unknown (UI_REQUIREMENTS CD-1)"],
-          ["confidence", "string", "confirmed (recorded), override (set in the knowledge store), defined (a data object), inferred (inside a function, never executed) or none"],
+          ["confidence", "string", "confirmed (recorded), override (set in the knowledge store), defined (a data object), inferred (inside a function, never executed), from analysis (marked, while paused, by following code that did run) or none"],
           ["last_writer_pc", "u32", ""],
           ["last_writer_cpu", "string", ""],
           ["last_write_frame", "u32", ""],
@@ -563,7 +563,7 @@
                                     ["overlay", "i32", "view this overlay's code (an overlay epoch) where another one is loaded: its own recorded records, and its bytes from the ROM (unpacked when compressed); -1 = what is in memory now", -1] ] },
       "DisasmLine": { "fields": [ ["addr", "u32", ""], ["bytes", "string", ""], ["text", "string", ""], ["thumb", "bool", ""], ["executed", "bool", ""], ["target", "u32", "branch target or referenced address, 0 if none"],
                                   ["classification", "string", "arm, thumb, mixed, data or unknown (UI_REQUIREMENTS CD-1)"],
-                                  ["confidence", "string", "confirmed (recorded), override (set in the knowledge store), defined (a data object), inferred (inside a function, never executed) or none"],
+                                  ["confidence", "string", "confirmed (recorded), override (set in the knowledge store), defined (a data object), inferred (inside a function, never executed), from analysis (marked, while paused, by following code that did run) or none"],
                                   ["conflict", "bool", "an override disagrees with what was recorded"], ["why", "string", "the evidence, in one line"] ] },
       "DisasmResult": { "fields": [ ["lines", "DisasmLine[]", ""],
                                     ["overlay_loaded", "bool", "with overlay: that overlay is loaded now, so the lines show memory as it is"] ] },
@@ -884,11 +884,33 @@
       "BootParams": { "fields": [ ["path", "string", "ROM path; empty = reboot the current ROM", ""] ] },
       "ExecutionParams": {
         "fields": [
-          ["action", "string", "pause, resume, step, run_frames, break"],
-          ["count", "u32", "frames for run_frames, instructions for step", 1],
+          ["action", "string", "pause, resume, step, step_over, run_frames, break"],
+          ["count", "u32", "frames for run_frames, instructions for step; step_over requires 1", 1],
           ["cpu", "string", "cpu to step", "arm9"],
-          ["wait", "bool", "for run_frames and step: reply after completion", true]
+          ["wait", "bool", "for run_frames, step and step_over: reply after completion", true]
         ]
+      },
+      "AnalysisRunParams": { "fields": [ ["wait", "bool", "reply after the walk finishes. false replies immediately, with no summary", true] ] },
+      "AnalysisRunResult": {
+        "fields": [
+          ["outcome", "string", "started (wait false), finished, cancelled (the previous snapshot stays) or abandoned (the game resumed)"],
+          ["summary", "string", "the status-bar sentence when outcome is finished; empty otherwise"]
+        ]
+      },
+      "AnalysisGetParams": {
+        "fields": [
+          ["cpu", "string", "", "arm9"],
+          ["addr", "addr", "start of the window; with size 0, where to continue from", 0],
+          ["size", "u32", "bytes from addr; 0 = the whole snapshot", 0],
+          ["limit", "u32", "", 1000]
+        ]
+      },
+      "AnalysisRange": {
+        "fields": [ ["start", "u32", ""], ["end", "u32", "exclusive"], ["kind", "string", "arm, thumb or data"], ["why", "string", ""] ]
+      },
+      "AnalysisGetResult": {
+        "fields": [ ["ranges", "AnalysisRange[]", ""], ["truncated", "bool", ""],
+                    ["next_addr", "u32", "when truncated: query again from here. With a size, reduce it so the end stays put; size 0 continues to the end of the snapshot"] ]
       },
       "ExecutionResult": { "fields": [ ["state", "string", ""], ["frame", "u32", ""], ["pc", "u32", "ARM9 PC, or stepped CPU PC"], ["interrupted", "bool", "the person paused or a breakpoint hit first"] ] },
       "TouchPoint": { "fields": [ ["x", "u32", ""], ["y", "u32", ""] ] },
@@ -1006,6 +1028,7 @@
       ["writes.list", "read", "WritesListParams", "WritesListResult", "Write history for an address or range, filtered by frame window and CPU, of the running recording or a saved session."],
       ["sessions.list", "read", "Empty", "SessionListResult", "Saved sessions of this game, newest first, and whether each kept all of its write history."],
       ["coverage.get", "read", "CoverageParams", "CoverageResult", "Executed (or read/written/DMA) ranges, optionally only outside known functions."],
+      ["analysis.get", "read", "AnalysisGetParams", "AnalysisGetResult", "The unreached-code snapshot for one CPU: start, end, kind (arm, thumb, data) and why. An address range limits it; otherwise the whole snapshot, paged like coverage.get."],
       ["calls.get", "read", "CallsParams", "CallsResult", "Observed callers and callees of a function."],
       ["callstack.get", "read", "CallStackParams", "CallStackResult", "Current shadow call stack of a CPU."],
       ["origin.get", "read", "OriginParams", "OriginResult", "Provenance chain and taint labels of a range."],
@@ -1029,7 +1052,10 @@
       ["recording.get", "read", "Empty", "RecordingResult", "Recording state and data origin sources."],
       ["game.boot", "control", "BootParams", "Ok", "Boot a ROM (or reboot the current one)."],
       ["game.reset", "control", "Empty", "Ok", "Reset the console."],
-      ["execution.control", "control", "ExecutionParams", "ExecutionResult", "Pause, resume, step one instruction, break, or run N frames then pause."],
+      ["execution.control", "control", "ExecutionParams", "ExecutionResult", "Pause, resume, step one instruction, step over a call, break, or run N frames then pause."],
+      ["analysis.run", "control", "AnalysisRunParams", "AnalysisRunResult", "While paused or in a break, follow code the recording reached and mark what it has not executed. The reply is the status-bar summary, not the ranges."],
+      ["analysis.cancel", "control", "Empty", "Ok", "Stop the walk and keep the previous snapshot."],
+      ["analysis.clear", "control", "Empty", "Ok", "Clear unreached marks. Refused while a walk is running."],
       ["input.send", "control", "InputParams", "InputResult", "Hold buttons and/or touch the screen for N frames. The person's input always wins."],
       ["state.save", "control", "StateParams", "Ok", "Save a savestate."],
       ["state.load", "control", "StateParams", "Ok", "Load a savestate."],

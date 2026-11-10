@@ -808,7 +808,7 @@ class MetadataEntry:
     mem_class: str = ""  # untouched, code, data, code_and_data, io
     mode: str = ""  # arm, thumb, mixed or empty
     classification: str = ""  # arm, thumb, mixed, data or unknown (UI_REQUIREMENTS CD-1)
-    confidence: str = ""  # confirmed (recorded), override (set in the knowledge store), defined (a data object), inferred (inside a function, never executed) or none
+    confidence: str = ""  # confirmed (recorded), override (set in the knowledge store), defined (a data object), inferred (inside a function, never executed), from analysis (marked, while paused, by following code that did run) or none
     last_writer_pc: int = 0
     last_writer_cpu: str = ""
     last_write_frame: int = 0
@@ -2101,7 +2101,7 @@ class DisasmLine:
     executed: bool = False
     target: int = 0  # branch target or referenced address, 0 if none
     classification: str = ""  # arm, thumb, mixed, data or unknown (UI_REQUIREMENTS CD-1)
-    confidence: str = ""  # confirmed (recorded), override (set in the knowledge store), defined (a data object), inferred (inside a function, never executed) or none
+    confidence: str = ""  # confirmed (recorded), override (set in the knowledge store), defined (a data object), inferred (inside a function, never executed), from analysis (marked, while paused, by following code that did run) or none
     conflict: bool = False  # an override disagrees with what was recorded
     why: str = ""  # the evidence, in one line
 
@@ -4200,10 +4200,10 @@ class BootParams:
 
 @dataclass
 class ExecutionParams:
-    action: str = ""  # pause, resume, step, run_frames, break
-    count: int = 1  # frames for run_frames, instructions for step
+    action: str = ""  # pause, resume, step, step_over, run_frames, break
+    count: int = 1  # frames for run_frames, instructions for step; step_over requires 1
     cpu: str = 'arm9'  # cpu to step
-    wait: bool = True  # for run_frames and step: reply after completion
+    wait: bool = True  # for run_frames, step and step_over: reply after completion
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "ExecutionParams":
@@ -4220,6 +4220,113 @@ class ExecutionParams:
         out["count"] = self.count
         out["cpu"] = self.cpu
         out["wait"] = self.wait
+        return out
+
+
+@dataclass
+class AnalysisRunParams:
+    wait: bool = True  # reply after the walk finishes. false replies immediately, with no summary
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "AnalysisRunParams":
+        kw = {}
+        if "wait" in d: kw["wait"] = d["wait"]
+        return cls(**kw)
+
+    def to_dict(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        out["wait"] = self.wait
+        return out
+
+
+@dataclass
+class AnalysisRunResult:
+    outcome: str = ""  # started (wait false), finished, cancelled (the previous snapshot stays) or abandoned (the game resumed)
+    summary: str = ""  # the status-bar sentence when outcome is finished; empty otherwise
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "AnalysisRunResult":
+        kw = {}
+        if "outcome" in d: kw["outcome"] = d["outcome"]
+        if "summary" in d: kw["summary"] = d["summary"]
+        return cls(**kw)
+
+    def to_dict(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        out["outcome"] = self.outcome
+        out["summary"] = self.summary
+        return out
+
+
+@dataclass
+class AnalysisGetParams:
+    cpu: str = 'arm9'
+    addr: int = 0  # start of the window; with size 0, where to continue from
+    size: int = 0  # bytes from addr; 0 = the whole snapshot
+    limit: int = 1000
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "AnalysisGetParams":
+        kw = {}
+        if "cpu" in d: kw["cpu"] = d["cpu"]
+        if "addr" in d: kw["addr"] = d["addr"]
+        if "size" in d: kw["size"] = d["size"]
+        if "limit" in d: kw["limit"] = d["limit"]
+        return cls(**kw)
+
+    def to_dict(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        out["cpu"] = self.cpu
+        out["addr"] = self.addr
+        out["size"] = self.size
+        out["limit"] = self.limit
+        return out
+
+
+@dataclass
+class AnalysisRange:
+    start: int = 0
+    end: int = 0  # exclusive
+    kind: str = ""  # arm, thumb or data
+    why: str = ""
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "AnalysisRange":
+        kw = {}
+        if "start" in d: kw["start"] = d["start"]
+        if "end" in d: kw["end"] = d["end"]
+        if "kind" in d: kw["kind"] = d["kind"]
+        if "why" in d: kw["why"] = d["why"]
+        return cls(**kw)
+
+    def to_dict(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        out["start"] = self.start
+        out["end"] = self.end
+        out["kind"] = self.kind
+        out["why"] = self.why
+        return out
+
+
+@dataclass
+class AnalysisGetResult:
+    ranges: List[AnalysisRange] = field(default_factory=lambda: [])
+    truncated: bool = False
+    next_addr: int = 0  # when truncated: query again from here. With a size, reduce it so the end stays put; size 0 continues to the end of the snapshot
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "AnalysisGetResult":
+        kw = {}
+        if "ranges" in d and d["ranges"] is not None: kw["ranges"] = [AnalysisRange.from_dict(x) for x in d["ranges"]]
+        if "truncated" in d: kw["truncated"] = d["truncated"]
+        if "next_addr" in d: kw["next_addr"] = d["next_addr"]
+        return cls(**kw)
+
+    def to_dict(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        out["ranges"] = [x.to_dict() for x in self.ranges]
+        out["truncated"] = self.truncated
+        out["next_addr"] = self.next_addr
         return out
 
 
@@ -4868,6 +4975,7 @@ METHODS = {
     "writes.list": ("read", WritesListParams, WritesListResult),
     "sessions.list": ("read", Empty, SessionListResult),
     "coverage.get": ("read", CoverageParams, CoverageResult),
+    "analysis.get": ("read", AnalysisGetParams, AnalysisGetResult),
     "calls.get": ("read", CallsParams, CallsResult),
     "callstack.get": ("read", CallStackParams, CallStackResult),
     "origin.get": ("read", OriginParams, OriginResult),
@@ -4892,6 +5000,9 @@ METHODS = {
     "game.boot": ("control", BootParams, Ok),
     "game.reset": ("control", Empty, Ok),
     "execution.control": ("control", ExecutionParams, ExecutionResult),
+    "analysis.run": ("control", AnalysisRunParams, AnalysisRunResult),
+    "analysis.cancel": ("control", Empty, Ok),
+    "analysis.clear": ("control", Empty, Ok),
     "input.send": ("control", InputParams, InputResult),
     "state.save": ("control", StateParams, Ok),
     "state.load": ("control", StateParams, Ok),
@@ -5002,6 +5113,15 @@ class GeneratedMethods:
         if writer_from is not None: p.writer_from = writer_from
         if writer_to is not None: p.writer_to = writer_to
         return CoverageResult.from_dict(self._call("coverage.get", p.to_dict()))
+
+    def analysis_get(self, cpu: Optional[str] = 'arm9', addr: Optional[int] = 0, size: Optional[int] = 0, limit: Optional[int] = 1000) -> AnalysisGetResult:
+        "The unreached-code snapshot for one CPU: start, end, kind (arm, thumb, data) and why. An address range limits it; otherwise the whole snapshot, paged like coverage.get. (endpoint: read)"
+        p = AnalysisGetParams()
+        if cpu is not None: p.cpu = cpu
+        if addr is not None: p.addr = addr
+        if size is not None: p.size = size
+        if limit is not None: p.limit = limit
+        return AnalysisGetResult.from_dict(self._call("analysis.get", p.to_dict()))
 
     def calls_get(self, addr: int, cpu: Optional[str] = 'arm9', limit: Optional[int] = 100) -> CallsResult:
         "Observed callers and callees of a function. (endpoint: read)"
@@ -5185,13 +5305,29 @@ class GeneratedMethods:
         return Ok.from_dict(self._call("game.reset", p.to_dict()))
 
     def execution_control(self, action: str, count: Optional[int] = 1, cpu: Optional[str] = 'arm9', wait: Optional[bool] = True) -> ExecutionResult:
-        "Pause, resume, step one instruction, break, or run N frames then pause. (endpoint: control)"
+        "Pause, resume, step one instruction, step over a call, break, or run N frames then pause. (endpoint: control)"
         p = ExecutionParams()
         if action is not None: p.action = action
         if count is not None: p.count = count
         if cpu is not None: p.cpu = cpu
         if wait is not None: p.wait = wait
         return ExecutionResult.from_dict(self._call("execution.control", p.to_dict()))
+
+    def analysis_run(self, wait: Optional[bool] = True) -> AnalysisRunResult:
+        "While paused or in a break, follow code the recording reached and mark what it has not executed. The reply is the status-bar summary, not the ranges. (endpoint: control)"
+        p = AnalysisRunParams()
+        if wait is not None: p.wait = wait
+        return AnalysisRunResult.from_dict(self._call("analysis.run", p.to_dict()))
+
+    def analysis_cancel(self) -> Ok:
+        "Stop the walk and keep the previous snapshot. (endpoint: control)"
+        p = Empty()
+        return Ok.from_dict(self._call("analysis.cancel", p.to_dict()))
+
+    def analysis_clear(self) -> Ok:
+        "Clear unreached marks. Refused while a walk is running. (endpoint: control)"
+        p = Empty()
+        return Ok.from_dict(self._call("analysis.clear", p.to_dict()))
 
     def input_send(self, buttons: Optional[List[str]] = None, touch: Optional[TouchPoint] = None, frames: Optional[int] = 1, capture: Optional[bool] = True) -> InputResult:
         "Hold buttons and/or touch the screen for N frames. The person's input always wins. (endpoint: control)"

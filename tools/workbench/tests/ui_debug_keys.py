@@ -1,6 +1,7 @@
 """The Debug menu's keys work in the workbench window: Ctrl+F5 continues a paused game, Ctrl+Shift+F5 breaks a
-running one, Ctrl+F9 then Ctrl+F5 runs to a breakpoint. F5 alone is the game window's (Load state 5): in the
-workbench it neither pauses nor resumes.
+running one, Ctrl+F9 then Ctrl+F5 runs to a breakpoint, F10 steps over a call. F5 alone is the game window's
+(Load state 5): in the workbench it neither pauses nor resumes. Analysis > Mark unreached code and
+Clear unreached marks show up in the API.
 
     python tools/workbench/tests/ui_debug_keys.py --rom tools/workbench/testrom/wbtest.nds
 
@@ -16,12 +17,15 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "python"))
-from dswb import Client  # noqa: E402
+from dswb import ApiError, Client  # noqa: E402
+from test_recording import find_manifest, read_manifest  # noqa: E402
 from ui_person_flow import FAILS, check, dialog, find_window, focus, key, press, type_text, wait_ready  # noqa: E402
 
 VK_F5 = 0x74        # not 0x75: that is F6
 VK_F9 = 0x78
+VK_F10 = 0x79
 VK_F11 = 0x7A
+VK_DOWN = 0x28
 
 
 def state(c):
@@ -129,6 +133,89 @@ def main():
         bl = c.breakpoints_list().breakpoints
         hits = [b.hit_count for b in bl if b.addr == m["arm_func"]]
         check(s == "break" and hits and hits[0] >= 1, "Ctrl+F5 runs until the breakpoint hits: %s, hits %s" % (s, hits))
+
+        print("F10 steps over a call")
+        full = read_manifest(c, find_manifest(c))
+        leaf = full["thumb_leaf"] & ~1
+        lines = c.disasm_get(full["thumb_func"] & ~1, count=16).lines
+        bl = next((ln for ln in lines if (ln.target & ~1) == leaf), None)
+        check(bl is not None, "wb_thumb_func contains bl wb_thumb_leaf")
+        if bl is not None:
+            nxt = next(ln for ln in lines if ln.addr > bl.addr)
+            c.breakpoint_clear(-1)
+            c.breakpoint_set("exec", bl.addr)
+            focus(hwnd)
+            key(VK_F5, ("ctrl",))
+            s = wait_state(c, "break", timeout=5.0)
+            info = c.status_get().break_info
+            pc = info.pc if info else 0
+            check(s == "break" and pc == bl.addr, "continued to the call: %s at %08x" % (s, pc))
+            focus(hwnd)
+            key(VK_F10)
+            end = time.time() + 3.0
+            info = c.status_get().break_info
+            pc = info.pc if info else 0
+            while pc != nxt.addr and time.time() < end:
+                time.sleep(0.1)
+                info = c.status_get().break_info
+                pc = info.pc if info else 0
+            check(c.status_get().state == "break" and pc == nxt.addr and "pop" in nxt.text.lower(),
+                  "F10 stops on the instruction after the call (%08x, next %08x %s)" % (pc, nxt.addr, nxt.text))
+            c.breakpoint_clear(-1)
+
+        print("Analysis menu marks and clears, and the API sees it")
+        # Pause() while already in a break leaves the state at break. The menu treats both as held.
+        c.execution_control("pause")
+        held = state(c)
+        check(held in ("paused", "break"), "the game is held before marking unreached code (%s)" % held)
+
+        def drop_cond():
+            try:
+                c.kb_function_delete(full["cond_caller"] & ~1)
+            except ApiError:
+                pass
+
+        bx = (full["cond_caller_end"] & ~1) - 4
+        found = False
+        for _ in range(3):
+            drop_cond()
+            focus(hwnd)
+            key(ord("A"), ("alt",))
+            time.sleep(0.2)
+            key(VK_DOWN)        # Import -> Mark unreached code
+            press("enter")
+            end = time.time() + 8.0
+            while time.time() < end:
+                if c.analysis_get(limit=1).ranges:
+                    break
+                time.sleep(0.1)
+            hit = c.analysis_get(addr=bx, size=4)
+            if any(r.start <= bx < r.end for r in hit.ranges):
+                found = True
+                break
+            try:
+                c.analysis_clear()
+            except ApiError:
+                pass
+        check(found, "Analysis > Mark unreached code marks the untaken bx lr")
+        conf = ""
+        if found:
+            for _ in range(3):
+                drop_cond()
+                conf = c.disasm_get(bx, count=1).lines[0].confidence
+                if conf == "from analysis":
+                    break
+            check(conf == "from analysis", "the window's mark is what disasm.get calls from analysis (%s)" % conf)
+            focus(hwnd)
+            key(ord("A"), ("alt",))
+            time.sleep(0.2)
+            key(VK_DOWN)        # Import -> Mark
+            key(VK_DOWN)        # Mark -> Clear (Cancel is disabled once the walk has finished)
+            press("enter")
+            time.sleep(0.4)
+            left = c.analysis_get(addr=bx, size=4)
+            check(not any(r.start <= bx < r.end for r in left.ranges),
+                  "Analysis > Clear unreached marks removes it from analysis.get")
         c.close()
     finally:
         proc.terminate()
