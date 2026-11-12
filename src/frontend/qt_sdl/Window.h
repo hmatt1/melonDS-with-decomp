@@ -59,6 +59,9 @@ class EmuThread;
 
 const int kMaxRecentROMs = 10;
 
+// -wo: the first main window is made but not shown; the workbench shows the game instead
+extern bool MainWindowStartHidden;
+
 class MainWindow : public QMainWindow
 {
     Q_OBJECT

@@ -197,6 +197,14 @@ MainWindow* EmuInstance::createEmbeddedWindow(QWidget* host)
     for (int i = 1; i < kMaxWindows; i++)
         if (!windowList[i]) { id = i; break; }
     if (id < 0) return nullptr;
+    // the embedded screen stands in for the main window: give it the main window's display settings,
+    // not the ones saved for its window slot
+    Config::Table main = localCfg.GetTable("Window0");
+    Config::Table emb = localCfg.GetTable("Window" + std::to_string(id), "Window0");
+    for (const char* k : {"ScreenRotation", "ScreenGap", "ScreenLayout", "ScreenSizing", "ScreenAspectTop", "ScreenAspectBot"})
+        emb.SetInt(k, main.GetInt(k));
+    for (const char* k : {"ScreenSwap", "IntegerScaling"})
+        emb.SetBool(k, main.GetBool(k));
     EmbedHost = host;
     createWindow(id);
     EmbedHost = nullptr;

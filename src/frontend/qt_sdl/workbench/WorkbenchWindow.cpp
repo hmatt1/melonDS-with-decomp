@@ -355,10 +355,11 @@ void WorkbenchWindow::FinishLayout()
     SavedState = DockMgr->saveState(LayoutVersion);
     // the game screen mode the user chose last time
     Config::Table cfg = Config::GetGlobalTable();
-    if (cfg.GetBool("Workbench.EmbeddedScreen"))
+    bool only = H->Settings().WorkbenchOnly;
+    if (only || cfg.GetBool("Workbench.EmbeddedScreen"))
     {
         ActEmbed->setChecked(true);
-        ActHideMain->setChecked(cfg.GetBool("Workbench.HideMainWindow"));
+        ActHideMain->setChecked(only || cfg.GetBool("Workbench.HideMainWindow"));
         // not before the emulator has run a few frames: the game window's OpenGL context is made on the
         // emulation thread, which sets up its own at startup
         auto* wait = new QTimer(this);
@@ -388,11 +389,20 @@ void WorkbenchWindow::FinishLayout()
 
 void WorkbenchWindow::closeEvent(QCloseEvent* e)
 {
-    // the game goes back to its own window, or it would vanish with this one
-    if (GameWin)
-        if (MainWindow* mw = H->Instance()->getMainWindow()) mw->show();
     SaveLayout();
     e->accept();
+    MainWindow* mw = H->Instance() ? H->Instance()->getMainWindow() : nullptr;
+    // -wo, or Quit from the game panel's menu (MainWindow::onQuit): the workbench is the program, and
+    // closing the main window runs melonDS's normal shutdown
+    if (H->Settings().WorkbenchOnly || property("quitAll").toBool())
+    {
+        // the game window lives inside this one: hand it back to the instance before both go away
+        if (GameWin) { MainWindow* g = GameWin; GameWin = nullptr; disconnect(g, &QObject::destroyed, this, nullptr); H->Instance()->deleteWindow(g->getWindowID(), true); }
+        if (mw) mw->close();
+    }
+    // the game goes back to its own window, or it would vanish with this one. Taking the embedded window
+    // down (not only showing the main window) is what makes the main window draw the game again
+    else if (GameWin) SetEmbeddedScreen(false);
 }
 
 void WorkbenchWindow::SaveLayout()
@@ -1252,7 +1262,7 @@ void WorkbenchWindow::SetEmbeddedScreen(bool on)
         GameWin->show();
         connect(GameWin, &QObject::destroyed, this, [this]()
         {
-            // closed from its own menu (File > Quit closes the window)
+            // closed by melonDS itself (its instance shutting down)
             GameWin = nullptr;
             GamePlaceholder->show();
             if (ActEmbed) ActEmbed->setChecked(false);
@@ -1376,9 +1386,16 @@ bool WorkbenchWindow::eventFilter(QObject* o, QEvent* e)
         {
             auto* ke = static_cast<QKeyEvent*>(e);
             QKeySequence seq(ke->modifiers() | ke->key());
+            // run the game window's action here: left to Qt, a key the workbench's menu bar also uses as a
+            // mnemonic (Alt+F, &File) opens that menu instead
             for (QAction* a : GameWin->findChildren<QAction*>())
                 for (const QKeySequence& s : a->shortcuts())
-                    if (s == seq) return false;
+                    if (s == seq)
+                    {
+                        if (a->isEnabled() && w == QApplication::focusWidget() && !ke->isAutoRepeat()) a->trigger();
+                        e->accept();
+                        return true;
+                    }
             e->accept();
             return true;
         }

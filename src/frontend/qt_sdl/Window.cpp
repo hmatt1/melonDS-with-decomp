@@ -106,6 +106,8 @@ extern CameraManager* camManager[2];
 extern bool camStarted[2];
 
 
+bool MainWindowStartHidden = false;
+
 QString NdsRomMimeType = "application/x-nintendo-ds-rom";
 QStringList NdsRomExtensions { ".nds", ".srl", ".dsi", ".ids" };
 
@@ -922,7 +924,7 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
         // if the window was closed in fullscreen do not restore this
         setWindowState(windowState() & ~Qt::WindowFullScreen);
     }
-    show();
+    if (embedded || id != 0 || !MainWindowStartHidden) show();
 
     if (helloWindow)
     {
@@ -1169,11 +1171,27 @@ void MainWindow::createScreenPanel()
         panel = panelNative;
         panel->show();
     }
-    setCentralWidget(panel);
+    if (embedded)
+    {
+        // centred in a box, so a zoom (onChangeScreenSize) leaves the menus at the top
+        QWidget* box = new QWidget(this);
+        // black around a zoomed screen, like the gap between the screens
+        box->setAttribute(Qt::WA_StyledBackground);
+        box->setStyleSheet("background: black;");
+        QGridLayout* g = new QGridLayout(box);
+        g->setContentsMargins(0, 0, 0, 0);
+        // no alignment flag: an aligned widget stops at its size hint; without one it fills up to its
+        // maximum size and is centred in what is left
+        g->addWidget(panel, 0, 0);
+        setCentralWidget(box);
+    }
+    else setCentralWidget(panel);
 
     panel->osdSetEnabled(showOSD);
 
-    connect(emuThread, SIGNAL(windowUpdate()), panel, SLOT(repaint()));
+    // update(), not repaint(): a repaint per frame per window waits on the display server each time, and
+    // with two windows shown (game in the workbench and the main window) that starves the GUI thread
+    connect(emuThread, SIGNAL(windowUpdate()), panel, SLOT(update()));
 
     connect(this, SIGNAL(screenLayoutChange()), panel, SLOT(onScreenLayoutChanged()));
     emit screenLayoutChange();
@@ -1954,6 +1972,16 @@ void MainWindow::onImportSavefile()
 
 void MainWindow::onQuit()
 {
+    // embedded in the workbench: quit melonDS through the workbench, which saves its layout and takes
+    // this window down first (closing only this window would bring back the hidden main window)
+    if (embedded && window() != this)
+    {
+        // later: a key (Ctrl+Q) is still being delivered to this window, which closing deletes
+        QWidget* wb = window();
+        wb->setProperty("quitAll", true);
+        QTimer::singleShot(0, wb, [wb]() { wb->close(); });
+        return;
+    }
     close();
 }
 
@@ -2345,7 +2373,10 @@ void MainWindow::onChangeScreenSize()
 {
     int factor = ((QAction*)sender())->data().toInt();
     QSize diff = size() - panel->size();
-    resize(panel->screenGetMinSize(factor) + diff);
+    // embedded in the workbench, the workbench panel sets the window's size: cap the screen at the
+    // zoom instead, centred under the menus (a smaller scale still when there is no room)
+    if (embedded) panel->setMaximumSize(panel->screenGetMinSize(factor));
+    else resize(panel->screenGetMinSize(factor) + diff);
 }
 
 void MainWindow::onChangeScreenRotation(QAction* act)

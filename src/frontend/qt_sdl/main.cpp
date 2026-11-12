@@ -268,10 +268,15 @@ bool MelonApplication::event(QEvent *event)
 }
 
 #ifndef _WIN32
+// The handler only writes a byte; the event loop reads it and quits. Calling qApp->quit() in the handler
+// closed every window right where the signal landed, even in the middle of painting a game screen
+static int signalPipe[2] = {-1, -1};
+
 static void signalHandler(int signal)
 {
     std::signal(signal, SIG_DFL);
-    qApp->quit();
+    char b = 1;
+    if (write(signalPipe[1], &b, 1) < 0) {}
 }
 #endif
 
@@ -323,8 +328,11 @@ int main(int argc, char** argv)
         }
     }
 #else
-    std::signal(SIGINT, signalHandler);
-    std::signal(SIGTERM, signalHandler);
+    if (pipe(signalPipe) == 0)
+    {
+        std::signal(SIGINT, signalHandler);
+        std::signal(SIGTERM, signalHandler);
+    }
 #endif
 
     printf("melonDS " MELONDS_VERSION "\n");
@@ -335,6 +343,10 @@ int main(int argc, char** argv)
         printf("did you just call me a derp???\n");
 
     MelonApplication melon(argc, argv);
+#ifndef _WIN32
+    QSocketNotifier* quitOnSignal = signalPipe[0] >= 0 ? new QSocketNotifier(signalPipe[0], QSocketNotifier::Read, &melon) : nullptr;
+    if (quitOnSignal) QObject::connect(quitOnSignal, &QSocketNotifier::activated, &melon, []() { qApp->quit(); });
+#endif
     pathInit();
 
     CLI::CommandLineOptions* options = CLI::ManageArgs(melon);
@@ -402,12 +414,14 @@ int main(int argc, char** argv)
 
     NetInit();
 
+    MainWindowStartHidden = options->workbenchOnly;
     createEmuInstance();
 
     {
         // decomp workbench: settings and command line
         WBHost* wb = emuInstances[0]->getWorkbench();
         if (options->knowledgeStore) wb->Settings().KnowledgeStoreOverride = *options->knowledgeStore;
+        wb->Settings().WorkbenchOnly = options->workbenchOnly;
         bool api = options->api || wb->Settings().ApiEnabled;
         if (api)
             wb->StartApi(options->apiPort ? options->apiPort : wb->Settings().ApiPort,
