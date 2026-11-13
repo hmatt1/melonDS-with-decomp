@@ -150,10 +150,10 @@ DefaultList<double> DefaultDoubles =
     {"Instance*.Window*.CrtBeamMin", 0.21},
     {"Instance*.Window*.CrtBeamMax", 0.40},
     {"Instance*.Window*.CrtMask", 1.0},
-    {"Instance*.Window*.CrtMaskPx", 2.0},
-    {"Instance*.Window*.CrtGlow", 0.26},
+    {"Instance*.Window*.CrtMaskPx", 1.0},
+    {"Instance*.Window*.CrtGlow", 0.15},
     {"Instance*.Window*.CrtVignette", 0.22},
-    {"Instance*.Window*.CrtBoost", 1.5},
+    {"Instance*.Window*.CrtBoost", 1.25},
 };
 
 LegacyEntry LegacyFile[] =

@@ -39,10 +39,10 @@ struct SoftCrtParams
     float beamMin = 0.21f;       // beam sigma on black, DS rows
     float beamMax = 0.40f;       // beam sigma on white
     float mask = 1.f;            // 0..1
-    float maskPx = 2.f;          // screen px per stripe
-    float glow = 0.26f;
+    float maskPx = 1.f;          // screen px per stripe
+    float glow = 0.15f;
     float vignette = 0.22f;
-    float boost = 1.5f;
+    float boost = 1.25f;
 
     bool operator==(const SoftCrtParams& o) const
     {

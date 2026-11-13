@@ -315,21 +315,32 @@ vec3 beam(vec3 lin, float d)
 
 void main()
 {
-    // the mask's stripes follow the screen's own x axis, so they turn with a rotated screen (as
-    // in the software filter); here, before any early return, while derivatives are defined
-    float maskX = abs(dFdx(fTexcoord.x)) >= abs(dFdy(fTexcoord.x)) ? gl_FragCoord.x : gl_FragCoord.y;
+    // the mask's stripes follow the screen's own x axis, so they turn with a rotated screen, and
+    // count screen pixels from the screen's left edge, so at a whole zoom each triad sits on its
+    // DS pixel (as in the software filter). Here, before any early return, while derivatives
+    // are defined
+    float dx = dFdx(fTexcoord.x), dy = dFdy(fTexcoord.x);
+    bool alongX = abs(dx) >= abs(dy);
+    float d = alongX ? dx : dy;
+    float frag = alongX ? gl_FragCoord.x : gl_FragCoord.y;
+    float leftEdge = floor(frag - fTexcoord.x / d + 0.5);   // where the screen starts, in window pixels
+    float maskX = (frag - leftEdge) * sign(d);
 
     // curvature
     vec2 c = fTexcoord.xy * 2.0 - 1.0;
     vec2 warp = uCrtWarp * vec2(0.124, 0.164);
     c *= vec2(1.0 + c.y * c.y * warp.x, 1.0 + c.x * c.x * warp.y);
     vec2 uv = c * 0.5 + 0.5;
-    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
+    // the curved edge, antialiased: how far inside it this pixel is, in screen pixels (half a
+    // pixel either side of the edge blends to black, so it doesn't look stepped at small zooms)
+    vec2 inside = min(uv, 1.0 - uv) / max(fwidth(uv), vec2(1e-6));
+    float edge = clamp(min(inside.x, inside.y) + 0.5, 0.0, 1.0);
+    if (edge <= 0.0)
     {
         oColor = vec4(0.0, 0.0, 0.0, 1.0);
         return;
     }
-    vec2 p = uv * kDSRes;
+    vec2 p = clamp(uv, 0.0, 1.0) * kDSRes;
     int layer = int(fTexcoord.z + 0.5);
 
     // horizontal signal blur: the 9 tap weights depend only on x, so both rows share them
@@ -382,7 +393,8 @@ void main()
     // edge darkening, on the curved screen
     col *= 1.0 - uCrtVignette * pow(clamp(dot(c, c) * 0.5, 0.0, 1.0), 1.5);
 
-    oColor = vec4(pow(clamp(col * uCrtBoost, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0);
+    // the edge blend after clamping, so bright pictures get a smooth edge too
+    oColor = vec4(pow(clamp(col * uCrtBoost, 0.0, 1.0) * edge, vec3(1.0 / 2.2)), 1.0);
 }
 )";
 

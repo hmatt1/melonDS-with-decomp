@@ -197,9 +197,12 @@ aperture-grille mask of red, green and blue stripes in screen pixels, glow, edge
 screen curvature. Its settings: curvature, picture blur, colour bleed, the scanline width on dark
 and on bright pixels, mask strength and width, glow, edge darkening and brightness.
 
-It looks best at whole-number zooms of 4x or more (View > Screen sizing > Force integer
-scaling): scanlines need about 5 screen pixels per DS row, and uneven zooms can give them a wavy
-pattern.
+It is made for whole-number zooms (View > Screen sizing > Force integer scaling); uneven zooms
+give the scanlines a wavy pattern. The defaults are tuned for 3x, the usual zoom: a 1 px mask puts
+one red-green-blue triad on each DS pixel, and Brightness 1.25 with Glow 0.15 keeps mid-tones about
+as bright as without the filter instead of washing out the bright screens DS games tend to have
+(the article's values, Brightness 1.5 and Glow 0.26, suit darker pixel art). At 6x or more, set
+the mask width to 2. The edge of the curved screen is antialiased.
 
 ### What draws them
 
@@ -214,13 +217,15 @@ What draws a filter follows Config > **Video settings**:
 
 The software filters use half the logical cores, 2 to 4 threads, by default. To set the number,
 put `PixelGridThreads` under `[Instance0]` in `melonDS.toml` (0 means automatic). Per frame, for
-both screens at 4x zoom:
+both screens:
 
-| Filter | 2 threads | 4 threads |
-|---|---|---|
-| LCD (DSi XL stripes and blur) | 2.6 ms | 1.4 ms |
-| CRT, flat (curvature 0) | 5.8 ms | 3.2 ms |
-| CRT, curved (the default) | 13.8 ms | 7.3 ms |
+| Filter | Zoom | 2 threads | 4 threads |
+|---|---|---|---|
+| LCD (DSi XL stripes and blur) | 4x | 2.6 ms | 1.4 ms |
+| CRT, flat (curvature 0) | 3x | 3.7 ms | 2.1 ms |
+| CRT, curved (the default) | 3x | 8.6 ms | 4.6 ms |
+| CRT, flat (curvature 0) | 4x | 6.0 ms | 3.2 ms |
+| CRT, curved (the default) | 4x | 14.1 ms | 7.4 ms |
 
 A screen the layout doesn't show (Top only, Bottom only) isn't filtered.
 

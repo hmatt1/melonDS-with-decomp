@@ -312,7 +312,7 @@ void SoftCrtFilter::outStage(Layer& L, int y0, int y1, uint32_t* dst, int stride
 void SoftCrtFilter::curvedStage(Layer& L, int y0, int y1, uint32_t* dst, int stride)
 {
     const Luts& lut = luts();
-    const int n = t.n, W = kW * n, P = t.phases, SW = kW * P;
+    const int n = t.n, W = kW * n, H = kH * n, P = t.phases, SW = kW * P;
     const float wx = t.p.curvature * kWarpX, wy = t.p.curvature * kWarpY, vig = t.p.vignette;
     const float* beamT = t.beam.data();
     for (int Y = y0; Y < y1; Y++)
@@ -325,7 +325,12 @@ void SoftCrtFilter::curvedStage(Layer& L, int y0, int y1, uint32_t* dst, int str
             float cx = cx0 * (1.f + cy0 * cy0 * wx);
             float cy = cy0 * (1.f + cx0 * cx0 * wy);
             float u = cx * 0.5f + 0.5f, v = cy * 0.5f + 0.5f;
-            if (u < 0.f || u > 1.f || v < 0.f || v > 1.f) { o[x] = 0xFF000000u; continue; }
+            // antialiased edge, as kCrtFS: how far inside, in output pixels (one output pixel is
+            // about 1/W of u and 1/H of v; the warp changes that by a few percent at most)
+            float edge = std::min(std::min(u, 1.f - u) * W, std::min(v, 1.f - v) * H) + 0.5f;
+            if (edge <= 0.f) { o[x] = 0xFF000000u; continue; }
+            const bool onEdge = edge < 1.f;   // only the outermost pixel of the curve
+            if (onEdge) { u = std::clamp(u, 0.f, 1.f); v = std::clamp(v, 0.f, 1.f); }
             float px = u * kW, py = v * kH;
 
             // signal column: the nearest phase
@@ -354,6 +359,8 @@ void SoftCrtFilter::curvedStage(Layer& L, int y0, int y1, uint32_t* dst, int str
                 float beam = ta[0] + (ta[1] - ta[0]) * wa + tb[0] + (tb[1] - tb[0]) * wb;
                 col[c] = (beam + g0[c] + (g1[c] - g0[c]) * f) * t.gain[x * 3 + c] * vg;
             }
+            if (onEdge)   // blended after clamping, as kCrtFS does
+                for (float& v : col) v = std::min(v, 1.f) * edge;
             o[x] = encode(lut, col[0], col[1], col[2]);
         }
     }
