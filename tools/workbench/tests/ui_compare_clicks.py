@@ -130,7 +130,9 @@ def main():
     env["PATH"] = r"C:\msys64\ucrt64\bin;" + env.get("PATH", "")
     fresh = {k: None for k in ("CompareCommand", "SourceRoot", "PythonPath", "ObjdiffPath", "Compilers", "CompareApproved",
                                "CompareSelfTestOk", "CompareTimeoutSec")}
+    # empty paths probe python and objdiff-cli on PATH, which a real install satisfies
     fresh["PythonPath"] = "'%s'" % os.path.join(kbdir, "no-python.exe")
+    fresh["ObjdiffPath"] = "'%s'" % os.path.join(kbdir, "no-objdiff.exe")
     open(toml, "w", encoding="utf-8").write(toml_set(toml_orig, fresh))
     # a shared project's compare.json may already hold the flags, before anyone picks a compiler
     with open(os.path.join(kbdir, "compare.json"), "w") as f:

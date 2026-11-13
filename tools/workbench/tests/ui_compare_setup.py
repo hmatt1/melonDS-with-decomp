@@ -2,8 +2,9 @@
 
     python tools/workbench/tests/ui_compare_setup.py [--melonds build/melonDS.exe] [--gcc PATH] [--objdiff PATH]
 
-1. A fresh setup (every Workbench.Compare*, tool path and source root cleared, a new project): the
-   Source and diff panel's checklist lists what is missing; build.setup.check gives the same rows.
+1. A fresh setup (compare settings cleared, Python and objdiff-cli pointed at files that are not
+   there, a new project): the Source and diff panel's checklist lists what is missing;
+   build.setup.check gives the same rows. An empty objdiff path would probe objdiff-cli on PATH.
    The panel is captured to build/ui_screens/compare_checklist_fresh.png.
 2. The paths a person would pick with the checklist's buttons are set (devkitARM's gcc stands in for
    mwccarm), the workbench restarts on the same project, and the self-test passes: every row passes
@@ -106,7 +107,9 @@ def main():
         print("a fresh setup")
         fresh = {k: None for k in ("CompareCommand", "SourceRoot", "PythonPath", "ObjdiffPath", "Compilers", "CompareApproved",
                                    "CompareSelfTestOk", "CompareTimeoutSec")}
-        fresh["PythonPath"] = q(os.path.join(kbdir, "no-python.exe"))   # as on a computer without Python
+        # empty paths probe python and objdiff-cli on PATH, which a real install satisfies
+        fresh["PythonPath"] = q(os.path.join(kbdir, "no-python.exe"))
+        fresh["ObjdiffPath"] = q(os.path.join(kbdir, "no-objdiff.exe"))
         open(toml, "w", encoding="utf-8").write(toml_set(toml_orig, fresh))
         proc, c = launch(exe, rom, a.port, kbdir, env)
         try:
