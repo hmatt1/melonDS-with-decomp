@@ -1106,6 +1106,8 @@ void ScreenPanelGL::initOpenGL()
     glUseProgram(crtProgram);
     glUniform1i(glGetUniformLocation(crtProgram, "DecodedTex"), 3);
     crtSignalULoc = glGetUniformLocation(crtProgram, "uSignal");
+    crtBeamReachULoc = glGetUniformLocation(crtProgram, "uCrtBeamReach");
+    crtBeamRowsULoc = glGetUniformLocation(crtProgram, "uCrtBeamRows");
     crtSigPixelClocksULoc = glGetUniformLocation(crtProgram, "uSigPixelClocks");
     crtSigStepULoc = glGetUniformLocation(crtProgram, "uSigStep");
     crtSigHalfStepULoc = glGetUniformLocation(crtProgram, "uSigHalfStep");
@@ -1538,6 +1540,13 @@ void ScreenPanelGL::drawScreen()
             glUniform2f(crtScreenSizeULoc, w / factor, h / factor);
             for (int i = 0; i < kNumCrtParams; i++)
                 glUniform1f(crtParamULoc[i], crtParam[i]);
+            {
+                // how far the beams reach: 3.5 of the widest sigma (as SoftCrtFilter), and the DS
+                // rows each way past the nearest two that covers, for pixels up to a DS row tall
+                const float reach = 3.5f * std::max({(float)crtParam[crt_BeamMin], (float)crtParam[crt_BeamMax], 1e-3f});
+                glUniform1f(crtBeamReachULoc, reach);
+                glUniform1i(crtBeamRowsULoc, (int)std::ceil(reach + 0.5f));
+            }
             glUniform1i(crtSignalULoc, chain ? 1 : 0);
             if (chain)
             {

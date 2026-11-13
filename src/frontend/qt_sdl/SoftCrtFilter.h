@@ -13,10 +13,11 @@
       2. per DS row: the blurred signal at each of the 256n output columns (tap weights depend
          only on the column's phase in its DS pixel), stored as 12-bit gamma levels, and the glow
          widened to 256n columns
-      3. per output row: two beam lookups per channel (a table per row phase and level), plus the
-         glow lerped between two DS rows; then mask, edge darkening, brightness and encode.
+      3. per output row: the beams of every DS row within reach (a table per row phase, row and
+         level: each beam averaged over the output pixel's height, see makeTables), plus the glow
+         lerped between two DS rows; then mask, edge darkening, brightness and encode.
          With curvature each output pixel instead finds its warped point: the signal there (from
-         columns at 2n phases per DS pixel, the nearest one), two beams from a table by level and
+         columns at 2n phases per DS pixel, the nearest one), the beams from a table by level and
          distance, and the glow read bilinearly, as the shader does
     Bands are whole rows, and output rows are whole multiples of 64 bytes, so threads never write
     the same cache line.
@@ -74,11 +75,13 @@ private:
     // a curved-screen output pixel's geometry (see makeGeometry)
     struct Geo
     {
-        uint32_t off;         // first row's signal / glow offset (kOutside: off the curved screen)
-        uint16_t rowStep;     // to the second row: one row of signal, or 0 at the edges
-        uint16_t f;           // distance below the first row's centre, /65535
+        uint32_t col;         // signal / glow column offset within a row (kOutside: off the curved screen)
+        int16_t r0;           // the DS row whose centre is just above (-1 above the first)
+        uint16_t f;           // distance below that row's centre, /65535
         uint16_t vig;         // edge darkening, /65535
         uint16_t edge;        // antialiased edge, /65535 (65535: fully inside)
+        int8_t rrFirst;       // the DS rows whose beams reach it: r0 + rrFirst, rrCount of them
+        uint8_t rrCount;
     };
     static constexpr uint32_t kOutside = 0xFFFFFFFFu;
 
@@ -89,8 +92,12 @@ private:
         SoftCrtParams p;
         bool valid = false;
         std::vector<float> tapL, tapC;   // [phase][kTaps], normalized
-        std::vector<float> beam;         // x 1.32; flat: [row phase][2 rows][4096 levels],
-                                         // curved: [256 levels][65 distances]
+        std::vector<float> beam;         // x 1.32; flat: per (row phase, DS row in reach) 4096 levels;
+                                         // curved: [256 levels][beamDist distances]
+        struct FlatRow { int dr; uint32_t lut; };   // flat: a DS row in reach (dr from the output's
+        std::vector<std::vector<FlatRow>> flatRows; // DS row) and its 4096 levels in beam, per row phase
+        float reach = 1.f;               // beams reach this far, DS rows (from a beam's centre to a pixel's)
+        int beamDist = 0;                // curved: table distances, kBeamSteps per DS row
         std::vector<float> gain;         // [column][3]: mask x brightness
         std::vector<float> cx, cy;       // screen position -1..1 of each output column / row
         std::vector<Geo> geo;            // curved: per output pixel (both screens share it)

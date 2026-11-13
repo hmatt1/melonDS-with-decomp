@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <type_traits>
 
 namespace
 {
@@ -25,6 +26,26 @@ constexpr float kWarpX = 0.124f, kWarpY = 0.164f;   // at curvature 1; 0.25 give
 // curved screen: beams by distance, in kBeamSteps steps of a DS row (interpolated), for 256 levels
 constexpr int kBeamSteps = 64;
 constexpr int kBeamLevels = 256;
+// beams are drawn out to this many of the widest beam's sigmas, fading smoothly to nothing over
+// the last half sigma (where a beam is under 1.1% of its peak), so no step shows where they end
+constexpr float kBeamReach = 3.5f;
+// the fade: 1 up to half a sigma before the reach, 0 at it (kCrtFS's beamFade is the same)
+inline double beamFade(double d, double reach, double sigmaMax)
+{
+    const double e0 = reach - 0.5 * sigmaMax, x = std::clamp((d - e0) / (reach - e0), 0.0, 1.0);
+    return 1.0 - x * x * (3.0 - 2.0 * x);
+}
+
+// A scanline beam (Gaussian, sigma s DS rows) averaged over an output pixel h DS rows tall whose
+// centre is d rows from the beam's: the pixel shows the light that falls on it, not the beam's
+// value at its centre. Point samples of beams 2 to 3 pixels apart ripple as their phase against
+// the pixel grid changes (moire on a curved screen or at uneven zooms); averages over the pixel
+// add up to the beam's whole light whatever the phase. kCrtFS's beam() is the same
+double beamArea(double lin, double s, double d, double h)
+{
+    const double k = 1.0 / (s * std::sqrt(2.0));
+    return lin * s * std::sqrt(2.0 * 3.14159265358979323846) / h * 0.5 * (std::erf((d + 0.5 * h) * k) - std::erf((d - 0.5 * h) * k));
+}
 
 struct Luts
 {
@@ -94,42 +115,46 @@ void SoftCrtFilter::makeTables(int n, const SoftCrtParams& p)
         for (int k = 0; k < kTaps; k++) { t.tapL[i * kTaps + k] /= sl; t.tapC[i * kTaps + k] /= sc; }
     }
 
-    auto sigma = [&](float lin) { return std::max(p.beamMin + (p.beamMax - p.beamMin) * std::pow(lin, 0.6f), 1e-3f); };
+    // every DS row whose beam reaches the pixel counts (the beams of bright rows reach past the
+    // nearest two); each beam is averaged over the output pixel's height, 1/n DS row (as the
+    // shader, which takes the height from the screen's unwarped coordinate)
+    auto sigma = [&](double lin) { return std::max(p.beamMin + (p.beamMax - p.beamMin) * std::pow(lin, 0.6), 1e-3); };
+    const double h = 1.0 / n;
+    const double sigmaMax = std::max({p.beamMin, p.beamMax, 1e-3f});
+    t.reach = (float)(kBeamReach * sigmaMax + 0.5 * h);
+    auto beamAt = [&](double lin, double d) { return beamArea(lin, sigma(lin), d, h) * beamFade(d, t.reach, sigmaMax) * kBeamGain; };
+    t.flatRows.clear();
     if (curved)
     {
-        // any distance: the beam per level at kBeamSteps + 1 distances from 0 to 1 DS row,
-        // read with linear interpolation (the error stays under 0.001 of full brightness)
-        t.beam.assign((size_t)kBeamLevels * (kBeamSteps + 1), 0.f);
+        // any distance: the beam per level at kBeamSteps steps a DS row out to the reach, read
+        // with linear interpolation (the error stays under 0.001 of full brightness)
+        t.beamDist = (int)std::ceil(t.reach * kBeamSteps) + 2;
+        t.beam.assign((size_t)kBeamLevels * t.beamDist, 0.f);
         for (int l = 0; l < kBeamLevels; l++)
         {
-            float lin = std::pow(l / (float)(kBeamLevels - 1), 2.4f);
-            float s = sigma(lin);
-            for (int k = 0; k <= kBeamSteps; k++)
-            {
-                float d = k / (float)kBeamSteps;
-                t.beam[(size_t)l * (kBeamSteps + 1) + k] = lin * std::exp(-0.5f * d * d / (s * s)) * kBeamGain;
-            }
+            double lin = std::pow(l / (double)(kBeamLevels - 1), 2.4);
+            for (int k = 0; k < t.beamDist; k++)
+                t.beam[(size_t)l * t.beamDist + k] = (float)beamAt(lin, k / (double)kBeamSteps);
         }
     }
     else
     {
-        // row j of n in a DS row sits (j + 0.5) / n - 0.5 below the row's centre line; the two
-        // nearest rows are f and 1 - f away
-        t.beam.assign((size_t)n * 2 * kLevels, 0.f);
+        // row j of n in a DS row sits (j + 0.5) / n - 0.5 below the row's centre line, so f below
+        // the centre of DS row r0 (this row or the one above); DS row r0 + rr is |f - rr| away
+        t.flatRows.resize(n);
+        t.beam.clear();
         for (int j = 0; j < n; j++)
         {
-            float fy = (j + 0.5f) / n - 0.5f;
-            float f = fy < 0.f ? fy + 1.f : fy;
-            for (int r = 0; r < 2; r++)
+            const double fy = (j + 0.5) / n - 0.5;
+            const int r0 = fy < 0 ? -1 : 0;
+            const double f = fy < 0 ? fy + 1 : fy;
+            for (int rr = -16; rr <= 17; rr++)
             {
-                float d = r ? 1.f - f : f;
-                float* b = &t.beam[((size_t)j * 2 + r) * kLevels];
+                const double d = std::fabs(f - rr);
+                if (d >= t.reach) continue;
+                t.flatRows[j].push_back({r0 + rr, (uint32_t)t.beam.size()});
                 for (int l = 0; l < kLevels; l++)
-                {
-                    float lin = std::pow(l / (float)(kLevels - 1), 2.4f);
-                    float s = sigma(lin);
-                    b[l] = lin * std::exp(-0.5f * d * d / (s * s)) * kBeamGain;
-                }
+                    t.beam.push_back((float)beamAt(std::pow(l / (double)(kLevels - 1), 2.4), d));
             }
         }
     }
@@ -226,9 +251,9 @@ void SoftCrtFilter::rowStage(Layer& L, int y0, int y1)
     const bool curved = t.p.curvature > 0.f;
     auto store = [&](uint16_t* o, const float* rgb)
     {
-        if (curved)   // 8-bit levels, already as offsets into the beam table
+        if (curved)   // 8-bit levels (rows of the beam table)
             for (int c = 0; c < 3; c++)
-                o[c] = (uint16_t)((int)(std::min(std::max(rgb[c], 0.f), 1.f) * (kBeamLevels - 1) + 0.5f) * (kBeamSteps + 1));
+                o[c] = (uint16_t)(int)(std::min(std::max(rgb[c], 0.f), 1.f) * (kBeamLevels - 1) + 0.5f);
         else
             for (int c = 0; c < 3; c++)
                 o[c] = (uint16_t)(std::min(std::max(rgb[c], 0.f), 1.f) * (kLevels - 1) + 0.5f);
@@ -301,39 +326,62 @@ void SoftCrtFilter::rowStage(Layer& L, int y0, int y1)
     }
 }
 
-// stage 3, flat screen, per output row: beams of the two nearest DS rows from the table, plus the
-// glow lerped between them; then mask, edge darkening, brightness and encode
+// stage 3, flat screen, per output row: the beams of the DS rows in reach from the table, plus
+// the glow lerped between the two nearest; then mask, edge darkening, brightness and encode
 void SoftCrtFilter::outStage(Layer& L, int y0, int y1, uint32_t* dst, int stride)
 {
     const Luts& lut = luts();
     const int n = t.n, W = kW * n;
     const float vig = t.p.vignette;
+    constexpr int kMaxRows = 40;
     for (int Y = y0; Y < y1; Y++)
     {
         int y = Y / n, j = Y % n;
         float fy = (j + 0.5f) / n - 0.5f;
         int r0 = fy < 0.f ? y - 1 : y;
         float f = fy < 0.f ? fy + 1.f : fy;
+        // the rows in reach: their beam tables and signal (rows past the picture's edges are
+        // the edge rows, as the shader clamps)
+        const auto& rows = t.flatRows[j];
+        const int nr = std::min((int)rows.size(), kMaxRows);
+        const float* lutR[kMaxRows];
+        const uint16_t* sigR[kMaxRows];
+        for (int k = 0; k < nr; k++)
+        {
+            lutR[k] = &t.beam[rows[k].lut];
+            sigR[k] = &L.sig[(size_t)std::clamp(y + rows[k].dr, 0, kH - 1) * W * 3];
+        }
         int ra = std::clamp(r0, 0, kH - 1), rb = std::clamp(r0 + 1, 0, kH - 1);
-        const float* ba = &t.beam[((size_t)j * 2) * kLevels];
-        const float* bb = &t.beam[((size_t)j * 2 + 1) * kLevels];
-        const uint16_t* sa = &L.sig[(size_t)ra * W * 3];
-        const uint16_t* sb = &L.sig[(size_t)rb * W * 3];
         const float* ga = &L.glowH[(size_t)ra * W * 3];
         const float* gb = &L.glowH[(size_t)rb * W * 3];
 
         uint32_t* o = dst + (size_t)Y * stride;
         const float cy = t.cy[Y];
-        for (int x = 0; x < W; x++)
+        // the row loop with its count known to the compiler (2 to 4 rows are the usual)
+        auto run = [&](auto rowsConst)
         {
-            float v = vig > 0.f ? vignette(t.cx[x], cy, vig) : 1.f;
-            float col[3];
-            for (int c = 0; c < 3; c++)
+            constexpr int NR = decltype(rowsConst)::value;
+            const int cnt = NR > 0 ? NR : nr;
+            for (int x = 0; x < W; x++)
             {
-                int i = x * 3 + c;
-                col[c] = (ba[sa[i]] + bb[sb[i]] + ga[i] + (gb[i] - ga[i]) * f) * t.gain[i] * v;
+                float v = vig > 0.f ? vignette(t.cx[x], cy, vig) : 1.f;
+                float col[3];
+                for (int c = 0; c < 3; c++)
+                {
+                    int i = x * 3 + c;
+                    float b = 0.f;
+                    for (int k = 0; k < cnt; k++) b += lutR[k][sigR[k][i]];
+                    col[c] = (b + ga[i] + (gb[i] - ga[i]) * f) * t.gain[i] * v;
+                }
+                o[x] = encode(lut, col[0], col[1], col[2]);
             }
-            o[x] = encode(lut, col[0], col[1], col[2]);
+        };
+        switch (nr)
+        {
+        case 2: run(std::integral_constant<int, 2>()); break;
+        case 3: run(std::integral_constant<int, 3>()); break;
+        case 4: run(std::integral_constant<int, 4>()); break;
+        default: run(std::integral_constant<int, 0>()); break;
         }
     }
 }
@@ -359,17 +407,23 @@ void SoftCrtFilter::makeGeometry()
             // antialiased edge, as kCrtFS: how far inside, in output pixels (one output pixel is
             // about 1/W of u and 1/H of v; the warp changes that by a few percent at most)
             float edge = std::min(std::min(u, 1.f - u) * W, std::min(v, 1.f - v) * H) + 0.5f;
-            if (edge <= 0.f) { gq.off = kOutside; continue; }
+            if (edge <= 0.f) { gq.col = kOutside; continue; }
             u = std::clamp(u, 0.f, 1.f); v = std::clamp(v, 0.f, 1.f);
             float px = u * kW, py = v * kH;
             int sx = std::min((int)(px * P), SW - 1);      // signal column: the nearest phase
             float yy = py - 0.5f;                          // -0.5 .. 191.5
             int r0 = (int)(yy + 1.f) - 1;                  // floor
             float f = yy - r0;
-            int ra = std::clamp(r0, 0, kH - 1), rb = std::clamp(r0 + 1, 0, kH - 1);
-            gq.off = (uint32_t)(((size_t)ra * SW + sx) * 3);
-            gq.rowStep = (uint16_t)((rb - ra) * SW * 3);
+            gq.col = (uint32_t)(sx * 3);
+            gq.r0 = (int16_t)r0;
             gq.f = (uint16_t)std::lround(f * 65535.f);
+            {
+                // exactly the rows in reach, |f - rr| < reach (f as the stage reads it back)
+                const float fq = gq.f * (1.f / 65535.f);
+                const int rrFirst = (int)std::floor(fq - t.reach) + 1, rrLast = (int)std::ceil(fq + t.reach) - 1;
+                gq.rrFirst = (int8_t)rrFirst;
+                gq.rrCount = (uint8_t)std::max(rrLast - rrFirst + 1, 0);
+            }
             gq.vig = (uint16_t)std::lround((vig > 0.f ? vignette(cx, cy, vig) : 1.f) * 65535.f);
             gq.edge = (uint16_t)std::lround(std::min(edge, 1.f) * 65535.f);
         }
@@ -378,15 +432,16 @@ void SoftCrtFilter::makeGeometry()
 
 // stage 3, curved screen: each output pixel works out its warped point (from the geometry table)
 // as kCrtFS does. The sideways signal and glow come from the nearest of the 2n phase columns, the
-// beams from a table by level and distance. Outside the curved screen is black
+// beams of the DS rows in reach from a table by level and distance. Outside the curved screen is black
 void SoftCrtFilter::curvedStage(Layer& L, int y0, int y1, uint32_t* dst, int stride)
 {
     const Luts& lut = luts();
-    const int n = t.n, W = kW * n;
+    const int n = t.n, W = kW * n, SW3 = kW * t.phases * 3;
     const float* beamT = t.beam.data();
     const uint16_t* sig = L.sig.data();
     const float* glow = L.glowH.data();
     const float* gain = t.gain.data();
+    const int bd = t.beamDist;
     constexpr float k16 = 1.f / 65535.f;
     for (int Y = y0; Y < y1; Y++)
     {
@@ -395,25 +450,29 @@ void SoftCrtFilter::curvedStage(Layer& L, int y0, int y1, uint32_t* dst, int str
         for (int x = 0; x < W; x++)
         {
             const Geo& gq = gr[x];
-            if (gq.off == kOutside) { o[x] = 0xFF000000u; continue; }
-            const uint16_t* sa = sig + gq.off;
-            const uint16_t* sb = sa + gq.rowStep;
-            const float* g0 = glow + gq.off;
-            const float* g1 = g0 + gq.rowStep;
+            if (gq.col == kOutside) { o[x] = 0xFF000000u; continue; }
+            const int r0 = gq.r0;
             const float f = gq.f * k16;
-            // the two rows are f and 1 - f away: table steps and weights
-            float fa = f * kBeamSteps, fb = (1.f - f) * kBeamSteps;
-            int ia = std::min((int)fa, kBeamSteps - 1), ib = std::min((int)fb, kBeamSteps - 1);
-            float wa = fa - ia, wb = fb - ib;
             const float vg = gq.vig * k16;
-            float col[3];
-            for (int c = 0; c < 3; c++)
+            float col[3] = {0.f, 0.f, 0.f};
+            // the rows in reach (from the geometry table)
+            const int rrEnd = gq.rrFirst + gq.rrCount;
+            for (int rr = gq.rrFirst; rr < rrEnd; rr++)
             {
-                const float* ta = beamT + sa[c] + ia;
-                const float* tb = beamT + sb[c] + ib;
-                float beam = ta[0] + (ta[1] - ta[0]) * wa + tb[0] + (tb[1] - tb[0]) * wb;
-                col[c] = (beam + g0[c] + (g1[c] - g0[c]) * f) * gain[x * 3 + c] * vg;
+                const float fd = (f > rr ? f - rr : rr - f) * kBeamSteps;
+                const uint16_t* s = sig + (size_t)std::clamp(r0 + rr, 0, kH - 1) * SW3 + gq.col;
+                const int id = (int)fd;
+                const float wd = fd - id;
+                for (int c = 0; c < 3; c++)
+                {
+                    const float* tb = beamT + (size_t)s[c] * bd + id;
+                    col[c] += tb[0] + (tb[1] - tb[0]) * wd;
+                }
             }
+            const float* g0 = glow + (size_t)std::clamp(r0, 0, kH - 1) * SW3 + gq.col;
+            const float* g1 = glow + (size_t)std::clamp(r0 + 1, 0, kH - 1) * SW3 + gq.col;
+            for (int c = 0; c < 3; c++)
+                col[c] = (col[c] + g0[c] + (g1[c] - g0[c]) * f) * gain[x * 3 + c] * vg;
             if (gq.edge != 65535)   // the outermost pixel of the curve: blended after clamping, as kCrtFS does
             {
                 const float edge = gq.edge * k16;

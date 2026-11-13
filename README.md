@@ -207,8 +207,16 @@ aperture-grille mask of red, green and blue stripes in screen pixels, glow, edge
 screen curvature. Its settings: curvature, picture blur, colour bleed, the scanline width on dark
 and on bright pixels, mask strength and width, glow, edge darkening and brightness.
 
-It is made for whole-number zooms (View > Screen sizing > Force integer scaling); uneven zooms
-give the scanlines a wavy pattern. The defaults are tuned for 3x, the usual zoom: a 1 px mask puts
+Each scanline is a beam: a Gaussian across the rows whose width follows its brightness. Every DS
+row whose beam reaches a pixel lights it, so a bright line's glow spreads evenly up and down;
+beams fade smoothly to nothing past 3 of their widths. A pixel shows the light that falls on it,
+the beam averaged over the pixel's height, not the beam's value at its centre point. Beams
+point-sampled 2 or 3 pixels apart ripple against the screen's pixel grid where the screen is
+curved or the zoom uneven; averaged, they keep the same brightness at any position.
+
+It is made for whole-number zooms (View > Screen sizing > Force integer scaling): there every
+scanline has the same shape. At uneven zooms they look slightly sharper or softer from row to
+row, but brightness stays even. The defaults are tuned for 3x, the usual zoom: a 1 px mask puts
 one red-green-blue triad on each DS pixel, and Brightness 1.25 with Glow 0.15 keeps mid-tones about
 as bright as without the filter instead of washing out the bright screens DS games tend to have
 (the article's values, Brightness 1.5 and Glow 0.26, suit darker pixel art). At 6x or more, set
@@ -382,9 +390,9 @@ Per frame at 3x zoom, on 2 threads:
 |---|---|---|
 | LCD (DSi XL stripes and blur, 4x) | 2.6 ms | about half |
 | CRT, flat (curvature 0) | 3.7 ms | 2.0 ms |
-| CRT, curved (the default) | 6.1 ms | 3.1 ms |
-| CRT, curved, Mega Drive composite | 9.5 ms | 4.9 ms |
-| CRT, curved, SNES PAL composite | 10.7 ms | 5.5 ms |
+| CRT, curved (the default) | 7.5 ms | 3.9 ms |
+| CRT, curved, Mega Drive composite | 10.9 ms | 5.6 ms |
+| CRT, curved, SNES PAL composite | 12.2 ms | 6.2 ms |
 
 Four threads take about half as long. In TrackMania DS with the Software renderer, on a PC limited
 to 4 cores, every filter and signal holds 60 fps. On 2 cores, where the filter and the emulator

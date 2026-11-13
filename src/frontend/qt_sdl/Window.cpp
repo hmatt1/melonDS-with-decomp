@@ -851,9 +851,9 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
             crt.setParam = [this](int i, float v) { if (panel) panel->crtParam[i] = v; };
             crt.setActive = [this](bool on) { onChangeScreenFilter(on ? screenFilter_CRT : screenFilter_Off); };
             crt.presetFile = localPath("crt-presets.json");
-            crt.note = "Made for whole-number zooms (View > Screen sizing > Force integer scaling): "
-                       "uneven ones give the scanlines a wavy pattern. The defaults suit 3x; at 6x or "
-                       "more, a 2 px mask width keeps one triad per DS pixel.";
+            crt.note = "Made for whole-number zooms (View > Screen sizing > Force integer scaling), where every "
+                       "scanline has the same shape; at uneven ones they vary slightly from row to row. The "
+                       "defaults suit 3x; at 6x or more, a 2 px mask width keeps one triad per DS pixel.";
 
             // video signal: which console's encoder and which cable feed the TV. The combo boxes
             // go at the top of the "Video signal" box; the sliders that don't apply grey out

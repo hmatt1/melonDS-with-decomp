@@ -397,6 +397,8 @@ uniform float uCrtMaskPx;          // screen pixels per stripe
 uniform float uCrtGlow;
 uniform float uCrtVignette;
 uniform float uCrtBoost;
+uniform float uCrtBeamReach;       // beams reach this far, DS rows: 3.5 widest sigmas (without the pixel's half height)
+uniform int uCrtBeamRows;          // DS rows beyond the nearest two, each way, that a beam can reach from
 
 smooth in vec3 fTexcoord;
 
@@ -404,11 +406,24 @@ out vec4 oColor;
 
 const vec2 kDSRes = vec2(256.0, 192.0);
 
-// a scanline beam: thin on dark pixels, wider on bright ones, d DS rows from its centre
-vec3 beam(vec3 lin, float d)
+// error function (Abramowitz and Stegun 7.1.26, within 1.5e-7)
+vec3 erf3(vec3 x)
+{
+    vec3 a = abs(x);
+    vec3 t = 1.0 / (1.0 + 0.3275911 * a);
+    vec3 y = 1.0 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * exp(-a * a);
+    return sign(x) * y;
+}
+
+// a scanline beam: thin on dark pixels, wider on bright ones, its centre d DS rows from this
+// pixel's, averaged over the pixel's height h (DS rows): the light that falls on the pixel, so
+// beams don't ripple against the pixel grid when curved or at uneven zooms (SoftCrtFilter's
+// beamArea is the same)
+vec3 beam(vec3 lin, float d, float h)
 {
     vec3 s = max(mix(vec3(uCrtBeamMin), vec3(uCrtBeamMax), pow(lin, vec3(0.6))), vec3(1e-3));
-    return lin * exp(-0.5 * d * d / (s * s));
+    vec3 k = 1.0 / (s * 1.41421356);
+    return lin * s * (2.50662827 / h) * 0.5 * (erf3((d + 0.5 * h) * k) - erf3((d - 0.5 * h) * k));
 }
 
 void main()
@@ -423,6 +438,8 @@ void main()
     float frag = alongX ? gl_FragCoord.x : gl_FragCoord.y;
     float leftEdge = floor(frag - fTexcoord.x / d + 0.5);   // where the screen starts, in window pixels
     float maskX = (frag - leftEdge) * sign(d);
+    // this pixel's height in DS rows, from the unwarped coordinate (as the software filter)
+    float hRow = max(fwidth(fTexcoord.y) * kDSRes.y, 1e-4);
 
     // curvature
     vec2 c = fTexcoord.xy * 2.0 - 1.0;
@@ -456,13 +473,21 @@ void main()
         sc += wc[k];
     }
 
-    // the two nearest DS rows, each a beam
+    // every DS row whose beam reaches this pixel, each a beam (bright ones reach past the
+    // nearest two)
     float y = p.y - 0.5;
     float r0 = floor(y);
     float f = y - r0;
+    float reach = uCrtBeamReach + 0.5 * hRow;
+    // beams fade to nothing over the last half sigma before the reach (where they're under 1.1%
+    // of their peak), so no step shows where they end (SoftCrtFilter's beamFade)
+    float fadeFrom = reach - 0.5 * uCrtBeamReach / 3.5;
     vec3 col = vec3(0.0);
-    for (int r = 0; r < 2; r++)
+    for (int r = -uCrtBeamRows; r <= uCrtBeamRows + 1; r++)
     {
+        float dist = abs(f - float(r));
+        if (dist >= reach) continue;
+        float fade = 1.0 - smoothstep(fadeFrom, reach, dist);
         int row = clamp(int(r0) + r, 0, 191);
         vec3 rgb;
         if (uSignal)
@@ -488,7 +513,7 @@ void main()
                              Y - 0.272 * IQ.x - 0.647 * IQ.y,
                              Y - 1.106 * IQ.x + 1.703 * IQ.y), 0.0, 1.0);
         }
-        col += beam(pow(rgb, vec3(2.4)), r == 0 ? f : 1.0 - f);
+        col += beam(pow(rgb, vec3(2.4)), dist, hRow) * fade;
     }
     col *= 1.32;
 

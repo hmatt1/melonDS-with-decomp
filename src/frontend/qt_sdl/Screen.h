@@ -316,6 +316,7 @@ private:
     GLint crtPrepassLayerULoc = -1;
     GLint crtSavedBinding[3] = {0, 0, 0};   // units 1 to 3, put back after the CRT draw
     GLint crtScreenSizeULoc = -1, crtTransformULoc = -1, crtParamULoc[kNumCrtParams];
+    GLint crtBeamReachULoc = -1, crtBeamRowsULoc = -1;
     void drawCrtPrepass(unsigned layers);
 
     // CRT video signal chain: the kernel (weights) and decoded noise as textures, and a decode
