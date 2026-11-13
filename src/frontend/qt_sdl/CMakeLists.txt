@@ -6,6 +6,7 @@ set(SOURCES_QT_SDL
     main.cpp
     main_shaders.h
     Screen.cpp
+    SoftPixelFilter.cpp
     Window.cpp
     EmuInstance.cpp
     EmuInstanceAudio.cpp
@@ -286,9 +287,40 @@ else()
 endif()
 target_link_libraries(melonDS PRIVATE core)
 target_link_libraries(melonDS PRIVATE PkgConfig::SDL2 PkgConfig::LibArchive PkgConfig::Zstd PkgConfig::Faad PkgConfig::SQLite3 ZLIB::ZLIB)
-# workbench: Qt Advanced Docking System (MSYS2: mingw-w64-ucrt-x86_64-qt-advanced-docking-system)
-find_package(qtadvanceddocking-qt6 REQUIRED)
+# workbench: Qt Advanced Docking System, vendored in vendor/qtads (see VENDORED.md).
+# Always linked static, so build/melonDS runs without a libqtadvanceddocking next to it.
+# block() keeps BUILD_STATIC/BUILD_EXAMPLES from leaking into melonDS's own options.
+block()
+    set(BUILD_STATIC ON)
+    set(BUILD_EXAMPLES OFF)
+    set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+    add_subdirectory("${CMAKE_SOURCE_DIR}/vendor/qtads" "${CMAKE_BINARY_DIR}/qtads" EXCLUDE_FROM_ALL)
+endblock()
 target_link_libraries(melonDS PRIVATE ads::qtadvanceddocking-qt6)
+# Tracy profiling, vendored client in vendor/tracy (see VENDORED.md and Trace.h). A list of
+# categories: all, qt, emu, render, sdl_startup. Empty (the default): Tracy isn't built in.
+set(MELONDS_TRACE "" CACHE STRING "Tracy profiling categories: all, qt, emu, render, sdl_startup (a list); empty is off")
+if (MELONDS_TRACE)
+    set(TRACE_CATEGORIES ${MELONDS_TRACE})
+    if ("all" IN_LIST TRACE_CATEGORIES)
+        set(TRACE_CATEGORIES qt emu render sdl_startup)
+    endif()
+    foreach(cat IN LISTS TRACE_CATEGORIES)
+        if (NOT cat MATCHES "^(qt|emu|render|sdl_startup)$")
+            message(FATAL_ERROR "MELONDS_TRACE: unknown category '${cat}' (all, qt, emu, render, sdl_startup)")
+        endif()
+        string(TOUPPER "${cat}" CAT)
+        # core too: emu and render code lives there
+        target_compile_definitions(melonDS PRIVATE MELONDS_TRACE_${CAT})
+        target_compile_definitions(core PRIVATE MELONDS_TRACE_${CAT})
+    endforeach()
+    target_sources(melonDS PRIVATE "${CMAKE_SOURCE_DIR}/vendor/tracy/public/TracyClient.cpp")
+    foreach(t melonDS core)
+        target_compile_definitions(${t} PRIVATE TRACY_ENABLE)
+        target_include_directories(${t} PRIVATE "${CMAKE_SOURCE_DIR}/vendor/tracy/public")
+    endforeach()
+    message(STATUS "Tracy profiling on: ${TRACE_CATEGORIES}")
+endif()
 target_link_libraries(melonDS PRIVATE ${QT_LINK_LIBS} ${CMAKE_DL_LIBS})
 if (BUILD_STATIC AND MINGW)
     # FreeType, HarfBuzz and their static dependencies refer to each other. One more

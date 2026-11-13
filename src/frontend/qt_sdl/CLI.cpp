@@ -37,6 +37,8 @@ CommandLineOptions* ManageArgs(QApplication& melon)
 {
     QCommandLineParser parser;
     parser.addHelpOption();
+    // single-dash words are option names, so -wo is its own flag (combined letters like -fw no longer work)
+    parser.setSingleDashWordOptionMode(QCommandLineParser::ParseAsLongOptions);
 
     parser.addPositionalArgument("nds", "Nintendo DS ROM (or an archive file which contains it) to load into Slot-1");
     parser.addPositionalArgument("gba", "GBA ROM (or an archive file which contains it) to load into Slot-2");
@@ -50,12 +52,14 @@ CommandLineOptions* ManageArgs(QApplication& melon)
 #endif
 
     parser.addOption(QCommandLineOption({"w", "workbench"}, "Open the decomp workbench window on startup"));
+    parser.addOption(QCommandLineOption({"wo", "workbench-only"}, "Open the workbench with the game in its Game screen panel and the main window hidden"));
     parser.addOption(QCommandLineOption("api", "Enable the workbench control and query API on 127.0.0.1"));
     parser.addOption(QCommandLineOption("api-port", "Port of the API read endpoint (the control endpoint uses port+1)", "port"));
     parser.addOption(QCommandLineOption("api-memory-write", "Allow memory.write through the API"));
     parser.addOption(QCommandLineOption("record", "Turn recording on once the game boots (write history and data origin stay off unless their own flags are set)"));
     parser.addOption(QCommandLineOption("write-history", "Turn recording and write history on once the game boots"));
     parser.addOption(QCommandLineOption("data-origin", "Turn recording and data origin on once the game boots"));
+    parser.addOption(QCommandLineOption("default-layout", "Open the workbench with the default layout, not the one used last"));
     parser.addOption(QCommandLineOption("no-record", "Leave recording, write history and data origin off"));
     parser.addOption(QCommandLineOption("no-write-history", "Leave write history off"));
     parser.addOption(QCommandLineOption("no-data-origin", "Leave data origin off"));
@@ -66,13 +70,15 @@ CommandLineOptions* ManageArgs(QApplication& melon)
     CommandLineOptions* options = new CommandLineOptions;
 
     options->fullscreen = parser.isSet("fullscreen");
-    options->workbench = parser.isSet("workbench");
+    options->workbenchOnly = parser.isSet("workbench-only");
+    options->workbench = parser.isSet("workbench") || options->workbenchOnly;
     options->api = parser.isSet("api");
     options->apiPort = parser.isSet("api-port") ? parser.value("api-port").toInt() : 0;
     options->apiMemoryWrite = parser.isSet("api-memory-write");
     options->writeHistory = parser.isSet("write-history");
     options->dataOrigin = parser.isSet("data-origin");
     options->record = parser.isSet("record") || options->writeHistory || options->dataOrigin;
+    options->defaultLayout = parser.isSet("default-layout");
     options->noRecord = parser.isSet("no-record");
     options->noWriteHistory = parser.isSet("no-write-history");
     options->noDataOrigin = parser.isSet("no-data-origin");

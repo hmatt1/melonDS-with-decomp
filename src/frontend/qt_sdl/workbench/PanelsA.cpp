@@ -258,7 +258,7 @@ void InspectorPanel::Refresh()
         wp.size = 4;
         wp.limit = 8;
         QString e;
-        WBQ::Writes(wb, wp, r.Writes, e);
+        WBQ::RecentWrites(wb, cpu, addr, 4, 8, r.Writes);
         WBApi::OriginParams op;
         op.addr = addr;
         op.size = 4;

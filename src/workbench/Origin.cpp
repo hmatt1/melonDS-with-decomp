@@ -174,6 +174,7 @@ void Origin::NoteWriteRun(u32 cpu, u32 addr, u32 size)
         if (addr == r.Start)
         {
             // the buffer is filled again from its start (the next chunk of a streamed file)
+            CheckRun(cpu, r, PendingWhich());
             r.End = addr + size;
             r.Checked = addr;
             r.Grown = true;
@@ -182,61 +183,77 @@ void Origin::NoteWriteRun(u32 cpu, u32 addr, u32 size)
         if (addr >= r.Start && addr + size <= r.End) { r.Checked = std::min(r.Checked, addr); r.Grown = true; return; }
     }
     WriteRun& r = runs[RunNext[cpu & 1]++ & 7];
+    if (r.Grown) CheckRun(cpu, r, PendingWhich());
     r.Start = r.Checked = addr;
     r.End = addr + size;
     r.Grown = true;
 }
 
-void Origin::CheckSeeds(u32 cpu)
+u32 Origin::PendingWhich() const
 {
-    melonDS::NDS* nds = WB.GetNDS();
-    if (!nds || !nds->MainRAM || !WB.SubFileResolve) return;
-    u32 mask = nds->MainRAMMask;
-    u32 now = WB.Frame();
     // search only the indexes that hold a pending file
     u32 which = 0;
     for (const PendingFile& p : Pending) which |= (p.Member ? 1 : 2) | (p.Members ? 1 : 0);
+    return which;
+}
+
+void Origin::CheckSeeds(u32 cpu, bool all)
+{
+    u32 which = PendingWhich();
     for (WriteRun& r : Runs[cpu & 1])
     {
         if (!r.Grown) continue;
         u32 from = std::max(r.Checked, r.Start);
-        if (r.End - from < 64) continue;          // wait for a useful amount of new output
-        r.Grown = false;
-        r.Checked = r.End;
-        SeedRuns.clear();
-        WB.SubFileResolve(nds->MainRAM, 0x02000000, mask + 1, 0x02000000 + (from & mask), r.End - from, which, SeedRuns);
-        for (const SubFileRun& m : SeedRuns)
-        {
-            // only files whose bytes were just read: equal bytes elsewhere are a coincidence
-            for (u32 j = 0; j < m.Count; j++)
-            {
-                auto it = std::find_if(Pending.begin(), Pending.end(), [&](const PendingFile& p) { return p.FileId == m.FileId && p.Member == m.Members[j]; });
-                if (it == Pending.end()) continue;
-                SetRangeLabel(cpu, m.Addr, m.Size, LabelForSource(it->Source), false);
-                Seeded++;
-                break;
-            }
-        }
-        // a file packed whole that holds archived files, or an archived file that is an archive itself:
-        // the files inside, once unpacked, are labelled as themselves over the label of what held them
-        for (const SubFileRun& m : SeedRuns)
-        {
-            if (!m.Count || !m.Members[0]) continue;
-            auto it = std::find_if(Pending.begin(), Pending.end(), [&](const PendingFile& p)
-            {
-                if (p.FileId != m.FileId || p.Member == m.Members[0]) return false;
-                return p.Member ? WB.SubFileInside && WB.SubFileInside(p.FileId, p.Member, m.Members[0]) : p.Members;
-            });
-            if (it == Pending.end()) continue;
-            if (u32 src = SourceFor(m.FileId, m.Members[0]))
-            {
-                SetRangeLabel(cpu, m.Addr, m.Size, LabelForSource(src), false);
-                Seeded++;
-            }
-        }
+        u32 grown = r.End - from;
+        if (grown < 64) continue;          // wait for a useful amount of new output
+        if (!all && grown < (from - r.Start) / 8) continue;
+        CheckRun(cpu, r, which);
     }
     // files read but never unpacked where we could see them are dropped after a while
+    u32 now = WB.Frame();
     Pending.erase(std::remove_if(Pending.begin(), Pending.end(), [now](const PendingFile& p) { return now - p.Frame > 600; }), Pending.end());
+}
+
+void Origin::CheckRun(u32 cpu, WriteRun& r, u32 which)
+{
+    melonDS::NDS* nds = WB.GetNDS();
+    if (!nds || !nds->MainRAM || !WB.SubFileResolve) return;
+    u32 mask = nds->MainRAMMask;
+    u32 from = std::max(r.Checked, r.Start);
+    if (r.End - from < 64) return;
+    r.Grown = false;
+    r.Checked = r.End;
+    SeedRuns.clear();
+    WB.SubFileResolve(nds->MainRAM, 0x02000000, mask + 1, 0x02000000 + (from & mask), r.End - from, which, SeedRuns);
+    for (const SubFileRun& m : SeedRuns)
+    {
+        // only files whose bytes were just read: equal bytes elsewhere are a coincidence
+        for (u32 j = 0; j < m.Count; j++)
+        {
+            auto it = std::find_if(Pending.begin(), Pending.end(), [&](const PendingFile& p) { return p.FileId == m.FileId && p.Member == m.Members[j]; });
+            if (it == Pending.end()) continue;
+            SetRangeLabel(cpu, m.Addr, m.Size, LabelForSource(it->Source), false);
+            Seeded++;
+            break;
+        }
+    }
+    // a file packed whole that holds archived files, or an archived file that is an archive itself:
+    // the files inside, once unpacked, are labelled as themselves over the label of what held them
+    for (const SubFileRun& m : SeedRuns)
+    {
+        if (!m.Count || !m.Members[0]) continue;
+        auto it = std::find_if(Pending.begin(), Pending.end(), [&](const PendingFile& p)
+        {
+            if (p.FileId != m.FileId || p.Member == m.Members[0]) return false;
+            return p.Member ? WB.SubFileInside && WB.SubFileInside(p.FileId, p.Member, m.Members[0]) : p.Members;
+        });
+        if (it == Pending.end()) continue;
+        if (u32 src = SourceFor(m.FileId, m.Members[0]))
+        {
+            SetRangeLabel(cpu, m.Addr, m.Size, LabelForSource(src), false);
+            Seeded++;
+        }
+    }
 }
 
 u32 Origin::SourceFor(u32 fileid, u32 member)

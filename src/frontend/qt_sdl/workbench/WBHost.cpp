@@ -31,6 +31,7 @@
 #include <QRegularExpression>
 #include <QStandardPaths>
 
+#include "Trace.h"
 #include "WBHost.h"
 #include "WorkbenchWindow.h"
 #include "Panels.h"
@@ -51,6 +52,7 @@ using namespace melonDS::WB;
 
 WBHost::WBHost(EmuInstance* inst) : QObject(nullptr), Inst(inst)
 {
+    TRACE_QT("WBHost constructor");
     Arc = std::make_shared<ArcShared>();
     Arc->Host = this;
     connect(this, &WBHost::archiveChanged, this, &WBHost::SeedArchiveAssets);
@@ -192,10 +194,11 @@ void WBHost::OnRomLoaded(const QString& path, u32 filelen)
         WB.Taint.Enable(false);
     }
     const NDSCart::CartCommon* cart = nds->GetNDSCart();
-    WB.OnRomLoaded(cart->GetROM(), cart->GetROMLength(), filelen);
-    WB.Taint.SetAllRomFiles(Cfg.OriginAllRomFiles);
-    ApplyHistoryFile(nullptr);
-    StartArchiveIndex();
+    // zones, not steps: this runs inside loadROM's steps, and steps don't nest
+    { TRACE_EMU("OnRomLoaded: parse ROM (NitroROM and hashes)"); WB.OnRomLoaded(cart->GetROM(), cart->GetROMLength(), filelen); }
+    { TRACE_EMU("OnRomLoaded: data origin sources"); WB.Taint.SetAllRomFiles(Cfg.OriginAllRomFiles); }
+    { TRACE_EMU("OnRomLoaded: history file"); ApplyHistoryFile(nullptr); }
+    { TRACE_EMU("OnRomLoaded: start archive index"); StartArchiveIndex(); }
     if (RecordAtBoot)
     {
         if (WB.JITActive())
@@ -215,10 +218,11 @@ void WBHost::OnRomLoaded(const QString& path, u32 filelen)
     }
     QMetaObject::invokeMethod(this, [this, path]()
     {
+        TRACE_QT("ROM loaded: on the GUI thread");
         CurRomPath = path;
         AllTimeData.reset();
-        OpenKnowledgeStore();
-        emit romChanged();
+        { TRACE_QT("OpenKnowledgeStore"); OpenKnowledgeStore(); }
+        { TRACE_QT("romChanged handlers"); emit romChanged(); }
         emit recordingChanged();
     }, Qt::QueuedConnection);
 }
@@ -2492,12 +2496,14 @@ void WBHost::PollKB()
 
 WorkbenchWindow* WBHost::Window(bool create)
 {
+    TRACE_QT("WBHost::Window");
     if (!Win && create) Win = new WorkbenchWindow(this);
     return Win;
 }
 
 void WBHost::ShowWindow()
 {
+    TRACE_QT("WBHost::ShowWindow");
     WorkbenchWindow* w = Window(true);
     w->show();
     w->raise();

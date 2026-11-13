@@ -224,7 +224,11 @@ public:
     {
         if (!Pending.empty() && (addr >> 24) == 0x02) NoteWriteRun(cpu, addr, size);
     }
-    void OnReturn(u32 cpu) { if (!Pending.empty()) CheckSeeds(cpu); }
+    // a run is searched again once it grew by an eighth (each search extends the match back over the
+    // whole run, so checking every 64 bytes was quadratic); what's left is searched at frame end and
+    // before the run's buffer is refilled or reused
+    void OnReturn(u32 cpu) { if (!Pending.empty()) CheckSeeds(cpu, false); }
+    void FrameEndSeeds() { if (!Pending.empty()) { CheckSeeds(0, true); CheckSeeds(1, true); } }
     u32 SeededFiles() const { return Seeded; }
 
     // propagation, called from Workbench hooks
@@ -277,7 +281,9 @@ private:
     u32 Seeded = 0;              // seeded runs
     std::vector<SubFileRun> SeedRuns;
     void NoteWriteRun(u32 cpu, u32 addr, u32 size);
-    void CheckSeeds(u32 cpu);
+    void CheckSeeds(u32 cpu, bool all);
+    void CheckRun(u32 cpu, WriteRun& r, u32 which);
+    u32 PendingWhich() const;
     static u64 RomKey(u32 fileid, u32 member) { return ((u64)fileid << 32) | member; }
     std::unordered_map<u32, u32> SourceLabel;     // source id -> singleton label
 
@@ -516,6 +522,12 @@ struct HistoryView
         u64 start = (Pos - Used) % Slots;
         for (u64 i = 0; i < Used; i++) f(Data[(start + i) % Slots]);
     }
+    template <typename F> void ForEachNewest(F&& f) const  // newest first; stops when f returns false
+    {
+        if (!Slots || !Used) return;
+        for (u64 i = 1; i <= Used; i++)
+            if (!f(Data[(Pos - i) % Slots])) return;
+    }
 };
 
 class Recorder
@@ -638,7 +650,13 @@ private:
     void PushHistory(const WriteHistoryEntry& e)
     {
         if (Ext) Ext[HistoryPos % Cap] = e;
-        else if (History.size() < Cap) History.push_back(e);
+        else if (History.size() < Cap)
+        {
+            // reserved whole once: growing by copying stalled a frame for up to 50 ms at a time. The OS
+            // only backs the pages that get written, so a short recording still costs little memory
+            if (History.capacity() < Cap) History.reserve(Cap);
+            History.push_back(e);
+        }
         else History[HistoryPos % Cap] = e;
         HistoryPos++;
         if (HistoryUsed < Cap) HistoryUsed++;

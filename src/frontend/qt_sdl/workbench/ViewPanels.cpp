@@ -78,7 +78,14 @@ DisasmPanel::DisasmPanel(WorkbenchWindow* w) : WBPanel(w)
     oh->setContentsMargins(6, 2, 6, 2);
     oh->addWidget(ShowBytes);
     oh->addWidget(ShowData);
+    // off: the view stands still while the game runs and catches up when it pauses, breaks or steps
+    auto* follow = new QCheckBox("Follow while running", Opts);
+    follow->setObjectName("followRunning");
+    follow->setToolTip("Refresh the disassembly 10 times a second while the game runs.\n"
+                       "Off: it updates when the game pauses, breaks or steps, and when you scroll or navigate.");
+    oh->addWidget(follow);
     oh->addStretch();
+    connect(follow, &QCheckBox::toggled, this, [this](bool on) { if (on) Refresh(); });
     connect(ShowBytes, &QCheckBox::toggled, this, [this]() { update(); });
     connect(ShowData, &QCheckBox::toggled, this, [this]() { update(); });
     Bar = new QScrollBar(Qt::Vertical, this);
@@ -91,6 +98,8 @@ DisasmPanel::DisasmPanel(WorkbenchWindow* w) : WBPanel(w)
         Fetch();
     });
     connect(w, &WorkbenchWindow::cpuChanged, this, [this](int) { Fetch(); });
+    // the view doesn't follow the game while it runs (see Refresh): catch up as soon as it stops
+    connect(H, &WBHost::pausedChanged, this, [this](bool paused) { if (paused && IsShown()) Refresh(); });
     QFontMetrics fm(font());
     LineH = fm.height() + 2;
 }
@@ -152,6 +161,13 @@ void DisasmPanel::ShowAddress(u32 addr, bool center)
 
 void DisasmPanel::Refresh()
 {
+    // redraw on change, not 10 times a second while the game runs (unless "Follow while running" is
+    // on): the view updates when the game pauses, breaks or steps, and when you scroll or navigate
+    if (H->Status().EmuState == WBStatus::Running)
+    {
+        auto* follow = Opts->findChild<QCheckBox*>("followRunning");
+        if (!follow || !follow->isChecked()) return;
+    }
     if (W->LockedToPC())
     {
         u32 pc = PCForView();

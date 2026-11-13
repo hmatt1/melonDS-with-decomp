@@ -575,6 +575,47 @@ bool LabelTree(Workbench& wb, const WBApi::OriginLabelParams& p, WBApi::OriginLa
     return true;
 }
 
+void RecentWrites(Workbench& wb, u32 cpu, u32 addr, u32 size, u32 limit, WBApi::WritesListResult& out)
+{
+    out.history_enabled = wb.Rec.WriteHistoryOn();
+    out.history_source = "live";
+    HistoryView h = wb.Rec.LiveHistory();
+    out.history_wrapped = h.Wrapped();
+    out.oldest_frame = h.OldestFrame();
+    bool any = false;
+    for (u32 i = 0; i < size; i++)
+    {
+        ByteRecord r;
+        if (ByteAt(wb, nullptr, cpu, addr + i, r) && (r.write_count || r.dma_write_count))
+        {
+            any = true;
+            if (i == 0)
+            {
+                out.last_writer_pc = r.last_writer_pc;
+                out.last_writer_cpu = CpuName(r.last_writer_cpu & 0xF);
+                out.last_write_frame = r.last_write_frame;
+            }
+        }
+    }
+    if (!any) return;
+    u32 end = addr + size;
+    std::vector<WriteHistoryEntry> hits;
+    h.ForEachNewest([&](const WriteHistoryEntry& e)
+    {
+        if (e.addr >= end || e.addr + e.size <= addr) return true;
+        hits.push_back(e);
+        return hits.size() < limit;
+    });
+    out.total = hits.size();
+    for (auto it = hits.rbegin(); it != hits.rend(); ++it)
+    {
+        WBApi::WriteEntry w;
+        w.frame = it->frame; w.timestamp = it->timestamp; w.cpu = CpuName(it->cpu); w.pc = it->pc;
+        w.addr = it->addr; w.size = it->size; w.old_value = it->old_value; w.new_value = it->new_value;
+        out.entries.push_back(w);
+    }
+}
+
 bool Writes(Workbench& wb, const WBApi::WritesListParams& p, WBApi::WritesListResult& out, QString& err)
 {
     if (!WritesIn(wb.Rec.LiveHistory(), p, out, err)) return false;

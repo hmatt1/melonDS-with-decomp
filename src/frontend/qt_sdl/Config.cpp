@@ -49,9 +49,14 @@ toml::value RootTable;
 DefaultList<int> DefaultInts =
 {
     {"Instance*.Keyboard", -1},
+    {"Instance*.Window*.BlurReachX", 1},
+    {"Instance*.PixelGridThreads", 2},    // software pixel grid: 2 = one per screen
+    {"Instance*.Window*.SubpixelLayout", 3},   // DSi XL
+    {"Instance*.Window*.BlurReachY", 1},
     {"Instance*.Joystick", -1},
     {"Instance*.Window*.Width", 256},
     {"Instance*.Window*.Height", 384},
+    {"Instance*.Window*.ScreenGap", 8},
     {"Screen.VSyncInterval", 1},
     {"3D.Renderer", renderer3D_Software},
     {"3D.GL.ScaleFactor", 1},
@@ -100,6 +105,7 @@ DefaultList<bool> DefaultBools =
     {"3D.GL.HiresCoordinates", true},
     {"LimitFPS", true},
     {"Instance*.Window*.ShowOSD", true},
+    {"Instance*.PixelGrid", true},   // all windows; drawn by OpenGL or, as fallback, in software
     {"Emu.DirectBoot", true},
     {"Instance*.DS.Battery.LevelOkay", true},
     {"Instance*.DSi.Battery.Charging", true},
@@ -126,6 +132,15 @@ DefaultList<double> DefaultDoubles =
     {"TargetFPS", 60.0},
     {"FastForwardFPS", 1000.0},
     {"SlowmoFPS", 30.0},
+    {"Instance*.Window*.GridDarkness", 0.10},
+    {"Instance*.Window*.GridWidthPx", 1.0},
+    {"Instance*.Window*.GridSoft", 3.0},
+    {"Instance*.Window*.SubpixelStrength", 0.6},
+    {"Instance*.Window*.GridDarknessH", 0.50},
+    {"Instance*.Window*.BlurStrengthX", 0.08},
+    {"Instance*.Window*.BlurStrengthY", 0.04},
+    {"Instance*.Window*.BlurHalo", 0.0},
+    {"Instance*.Window*.SubpixelKeep", 0.9},
 };
 
 LegacyEntry LegacyFile[] =

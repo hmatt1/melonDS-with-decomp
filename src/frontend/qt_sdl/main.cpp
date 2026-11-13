@@ -22,6 +22,7 @@
 #include <string.h>
 
 #include <optional>
+#include <thread>
 #include <string>
 
 #include <QApplication>
@@ -36,6 +37,8 @@
 #include <QVector>
 #include <QCommandLineParser>
 #include <QStandardPaths>
+#include <QFileInfo>
+#include <QFile>
 #ifndef _WIN32
 #include <QGuiApplication>
 #include <QSocketNotifier>
@@ -50,6 +53,10 @@
 #include "duckstation/gl/context.h"
 
 #include "main.h"
+#include "Trace.h"
+#ifdef MELONDS_TRACE_QT
+#include <QMetaEnum>
+#endif
 #include "version.h"
 
 #include "Config.h"
@@ -178,10 +185,9 @@ void broadcastInstanceCommand(int cmd, QVariant& param, int sourceinst)
 }
 
 
-void pathInit()
+void pathInit(const QString& appdirpath)
 {
     // First, check for the portable directory next to the executable.
-    QString appdirpath = QCoreApplication::applicationDirPath();
     QString portablepath = appdirpath + QDir::separator() + "portable";
 
 #if defined(__APPLE__)
@@ -249,6 +255,20 @@ MelonApplication::MelonApplication(int& argc, char** argv)
 #endif
 }
 
+#ifdef MELONDS_TRACE_QT
+// every Qt event as a zone, "<event type>: <receiver class>": paints, layouts, timers and the gaps between
+bool MelonApplication::notify(QObject* receiver, QEvent* event)
+{
+    static const QMetaEnum types = QMetaEnum::fromType<QEvent::Type>();
+    const char* type = types.valueToKey(event->type());
+    char name[128];
+    if (type) snprintf(name, sizeof(name), "%s: %s", type, receiver->metaObject()->className());
+    else snprintf(name, sizeof(name), "QEvent %d: %s", (int)event->type(), receiver->metaObject()->className());
+    TRACE_QT_NAMED(name);
+    return QApplication::notify(receiver, event);
+}
+#endif
+
 // TODO: ROM loading should be moved to EmuInstance
 // especially so the preloading below and in main() can be done in a nicer fashion
 
@@ -268,15 +288,33 @@ bool MelonApplication::event(QEvent *event)
 }
 
 #ifndef _WIN32
+// The handler only writes a byte; the event loop reads it and quits. Calling qApp->quit() in the handler
+// closed every window right where the signal landed, even in the middle of painting a game screen
+static int signalPipe[2] = {-1, -1};
+
 static void signalHandler(int signal)
 {
     std::signal(signal, SIG_DFL);
-    qApp->quit();
+    char b = 1;
+    if (write(signalPipe[1], &b, 1) < 0) {}
 }
 #endif
 
 int main(int argc, char** argv)
 {
+    TRACE_QT_STEP("startup: before QApplication");
+#ifdef __linux__
+    // the config (paths, then melonDS.toml) loads on a worker from the start, alongside QApplication and
+    // SDL; nothing reads it before "startup: config load" waits for it. The executable's folder (for a
+    // portable setup) comes from /proc, as QCoreApplication doesn't exist yet
+    bool configLoaded = false;
+    std::thread configThread([&configLoaded]()
+    {
+        TRACE_QT("config load (worker)");
+        pathInit(QFileInfo(QFile::symLinkTarget("/proc/self/exe")).absolutePath());
+        configLoaded = Config::Load();
+    });
+#endif
     sysTimer.start();
     srand(time(nullptr));
 
@@ -284,6 +322,13 @@ int main(int argc, char** argv)
         emuInstances[i] = nullptr;
 
     qputenv("QT_SCALE_FACTOR", "1");
+
+#if defined(__linux__)
+    // Wayland doesn't let apps position their own windows, so saved window
+    // positions are ignored. Default to X11 (XWayland) unless the user chose.
+    if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM"))
+        qputenv("QT_QPA_PLATFORM", "xcb");
+#endif
 
 #if defined(_WIN32)
 #if QT_VERSION_MAJOR == 6
@@ -316,8 +361,11 @@ int main(int argc, char** argv)
         }
     }
 #else
-    std::signal(SIGINT, signalHandler);
-    std::signal(SIGTERM, signalHandler);
+    if (pipe(signalPipe) == 0)
+    {
+        std::signal(SIGINT, signalHandler);
+        std::signal(SIGTERM, signalHandler);
+    }
 #endif
 
     printf("melonDS " MELONDS_VERSION "\n");
@@ -327,29 +375,28 @@ int main(int argc, char** argv)
     if (argc != 0 && (!strcasecmp(argv[0], "derpDS") || !strcasecmp(argv[0], "./derpDS")))
         printf("did you just call me a derp???\n");
 
+    TRACE_QT_STEP("startup: QApplication");
     MelonApplication melon(argc, argv);
-    pathInit();
+#ifndef _WIN32
+    QSocketNotifier* quitOnSignal = signalPipe[0] >= 0 ? new QSocketNotifier(signalPipe[0], QSocketNotifier::Read, &melon) : nullptr;
+    if (quitOnSignal) QObject::connect(quitOnSignal, &QSocketNotifier::activated, &melon, []() { qApp->quit(); });
+#endif
+    TRACE_QT_STEP("startup: paths and arguments");
+#ifndef __linux__
+    pathInit(QCoreApplication::applicationDirPath());
+#endif
 
     CLI::CommandLineOptions* options = CLI::ManageArgs(melon);
 
     // http://stackoverflow.com/questions/14543333/joystick-wont-work-using-sdl
+    TRACE_QT_STEP("startup: SDL");
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
 
     SDL_SetHint(SDL_HINT_APP_NAME, "melonDS");
 
-    if (SDL_Init(SDL_INIT_HAPTIC) < 0)
-    {
-        printf("SDL couldn't init rumble\n");
-    }
-    if (SDL_Init(SDL_INIT_JOYSTICK) < 0)
-    {
-        printf("SDL couldn't init joystick\n");
-    }
-    if (SDL_Init(SDL_INIT_SENSOR) < 0)
-    {
-        printf("SDL couldn't init motion sensors\n");
-    }
-    if (SDL_Init(SDL_INIT_AUDIO) < 0)
+    TRACE_SDL_STARTUP_MESSAGE("SDL init begins");
+    // No SDL_INIT_HAPTIC: nothing uses SDL_Haptic, and rumble goes through SDL_GameControllerRumble.
+    if ([] { TRACE_SDL_STARTUP("SDL_Init(AUDIO)"); return SDL_Init(SDL_INIT_AUDIO); }() < 0)
     {
         const char* err = SDL_GetError();
         QString errorStr = "Failed to initialize SDL. This could indicate an issue with your audio driver.\n\nThe error was: ";
@@ -359,18 +406,26 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    SDL_JoystickEventState(SDL_ENABLE);
+    { TRACE_SDL_STARTUP("SDL_InitSubSystem(VIDEO)"); SDL_InitSubSystem(SDL_INIT_VIDEO); }
+    { TRACE_SDL_STARTUP("SDL screensaver calls"); SDL_EnableScreenSaver(); SDL_DisableScreenSaver(); }
 
-    SDL_InitSubSystem(SDL_INIT_VIDEO);
-    SDL_EnableScreenSaver(); SDL_DisableScreenSaver();
+    // last SDL_Init on this thread: SDL_Init calls must not overlap the worker's
+    EmuInstance::joystickInitStart();
 
-    if (!Config::Load())
+    TRACE_QT_STEP("startup: config load");
+#ifdef __linux__
+    configThread.join();
+#else
+    bool configLoaded = Config::Load();
+#endif
+    if (!configLoaded)
         QMessageBox::critical(nullptr,
                               "melonDS",
                               "Unable to write to config.\nPlease check the write permissions of the folder you placed melonDS in.");
 
     camStarted[0] = false;
     camStarted[1] = false;
+    TRACE_QT_STEP("startup: cameras");
     camManager[0] = new CameraManager(0, 640, 480, true);
     camManager[1] = new CameraManager(1, 640, 480, true);
 
@@ -393,14 +448,20 @@ int main(int argc, char** argv)
     // this will be changed if a LAN or netplay session is initiated
     setMPInterface(MPInterface_Local);
 
+    TRACE_QT_STEP("startup: network");
     NetInit();
 
+    TRACE_QT_STEP("startup: emu instance and main window");
+    MainWindowStartHidden = options->workbenchOnly;
     createEmuInstance();
 
+    TRACE_QT_STEP("startup: workbench");
     {
         // decomp workbench: settings and command line
         WBHost* wb = emuInstances[0]->getWorkbench();
         if (options->knowledgeStore) wb->Settings().KnowledgeStoreOverride = *options->knowledgeStore;
+        wb->Settings().WorkbenchOnly = options->workbenchOnly;
+        wb->Settings().DefaultLayout = options->defaultLayout;
         bool api = options->api || wb->Settings().ApiEnabled;
         if (api)
             wb->StartApi(options->apiPort ? options->apiPort : wb->Settings().ApiPort,
@@ -414,9 +475,9 @@ int main(int argc, char** argv)
             else
                 wb->RecordOnBoot(!options->noWriteHistory, !options->noDataOrigin);
         }
-        if (options->workbench) wb->ShowWindow();
     }
 
+    TRACE_QT_STEP("startup: ROM preload start");
     {
         MainWindow* win = emuInstances[0]->getMainWindow();
         bool memberSyntaxUsed = false;
@@ -439,13 +500,24 @@ int main(int argc, char** argv)
 
         if (memberSyntaxUsed) printf("Warning: use the a.zip|b.nds format at your own risk!\n");
 
-        win->preloadROMs(dsfile, gbafile, options->boot);
+        // the ROM boots on the emulation thread while the workbench window is built here, then we wait
+        // for it: the workbench settings it reads (record at boot) are set above
+        const bool preloading = win->preloadROMsStart(dsfile, gbafile, options->boot);
+
+        TRACE_QT_STEP("startup: workbench window");
+        if (options->workbench) emuInstances[0]->getWorkbench()->ShowWindow();
+
+        TRACE_QT_STEP("startup: ROM preload finish");
+        if (preloading) win->preloadROMsFinish();
 
         if (options->fullscreen)
             win->toggleFullscreen();
     }
 
+    TRACE_QT_STEP_END();
+    TRACE_QT_MESSAGE("event loop starts");
     int ret = melon.exec();
+    TRACE_QT_STEP("shutdown");
 
     delete options;
 
@@ -458,6 +530,8 @@ int main(int argc, char** argv)
 
     Config::Save();
 
-    SDL_Quit();
+    EmuInstance::joystickInitWait();
+    { TRACE_SDL_STARTUP("SDL_Quit"); SDL_Quit(); }
+    TRACE_QT_STEP_END();
     return ret;
 }

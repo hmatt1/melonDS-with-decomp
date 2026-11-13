@@ -160,6 +160,8 @@ public:
     float inputMotionQuery(melonDS::Platform::MotionQueryType type);
 
     void setJoystick(int id);
+    static void joystickInitStart();  // main(): SDL joystick + sensor init, in the background on Linux
+    static void joystickInitWait();   // before listing joysticks, and before SDL_Quit
     int getJoystickID() { return joystickID; }
     SDL_Joystick* getJoystick() { return joystick; }
     std::shared_ptr<SDL_mutex> getJoyMutex() { return joyMutex; }

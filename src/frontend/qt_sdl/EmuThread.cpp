@@ -29,6 +29,7 @@
 #include <SDL2/SDL.h>
 
 #include "main.h"
+#include "Trace.h"
 
 #include "types.h"
 #include "version.h"
@@ -317,6 +318,10 @@ void EmuThread::run()
             }
             else
             {
+                {
+                    static bool firstStart = true;      // a landmark on the startup timeline
+                    if (firstStart) { firstStart = false; TRACE_QT_MESSAGE("first emulated frame starts"); }
+                }
                 nlines = emuInstance->nds->RunFrame();
             }
 
@@ -345,6 +350,10 @@ void EmuThread::run()
                 emit windowEmuPause(true);
             }
 
+            {
+                static bool firstFrame = true;      // a landmark on the startup timeline
+                if (firstFrame) { firstFrame = false; TRACE_QT_MESSAGE("first emulated frame done"); }
+            }
             winUpdateCount++;
             if (winUpdateCount >= winUpdateFreq && !useOpenGL)
             {
@@ -484,7 +493,7 @@ void EmuThread::run()
             emuInstance->wbHost->UpdateStatus(0);
 
             // serves workbench queries while paused (returns early when one arrives)
-            emuInstance->wbHost->IdleWait(75);
+            { TRACE_EMU("idle: IdleWait(75)"); emuInstance->wbHost->IdleWait(75); }
 
             emuInstance->drawScreen();
         }
@@ -498,6 +507,9 @@ void EmuThread::sendMessage(Message msg)
     msgMutex.lock();
     msgQueue.enqueue(msg);
     msgMutex.unlock();
+    // wake the idle loop (WBHost::IdleWait waits up to 75 ms for debugger jobs): an empty job ends the
+    // wait, so the message is handled now and not up to 75 ms later
+    if (emuInstance && emuInstance->wbHost) emuInstance->wbHost->Core().Dbg.PostJob([] {});
 }
 
 void EmuThread::waitMessage(int num)
@@ -533,12 +545,8 @@ void EmuThread::handleMessages()
             break;
 
         case msg_EmuRun:
-            emuStatus = emuStatus_Running;
-            emuPauseStack = emuPauseStackRunning;
-            emuActive = true;
-
-            emuInstance->audioEnable();
-            emit windowEmuStart();
+            TRACE_EMU_MESSAGE("msg_EmuRun");
+            startRunning();
             break;
 
         case msg_EmuPause:
@@ -616,15 +624,24 @@ void EmuThread::handleMessages()
             break;
 
         case msg_BootROM:
-            emuInstance->wbHost->OnGameClosing();
-            msgResult = 0;
-            if (!emuInstance->loadROM(msg.param.value<QStringList>(), true, msgError))
+        {
+            TRACE_EMU("msg_BootROM");
+            { TRACE_EMU("workbench OnGameClosing"); emuInstance->wbHost->OnGameClosing(); }
+            msgResult = bootResult = 0;
+            bootError.clear();
+            if (!emuInstance->loadROM(msg.param.value<QStringList>(), true, bootError))
+            {
+                msgError = bootError;
                 break;
+            }
 
             assert(emuInstance->nds != nullptr);
-            emuInstance->nds->Start();
-            msgResult = 1;
+            { TRACE_EMU("NDS::Start"); emuInstance->nds->Start(); }
+            // run straight away: frames start while the GUI is still busy (building the workbench at startup)
+            startRunning();
+            msgResult = bootResult = 1;
             break;
+        }
 
         case msg_BootFirmware:
             emuInstance->wbHost->OnGameClosing();
@@ -875,18 +892,36 @@ bool EmuThread::emuIsActive()
 
 int EmuThread::bootROM(const QStringList& filename, QString& errorstr)
 {
+    bootROMStart(filename);
+    return bootROMFinish(errorstr);
+}
+
+void EmuThread::startRunning()
+{
+    emuStatus = emuStatus_Running;
+    emuPauseStack = emuPauseStackRunning;
+    emuActive = true;
+
+    emuInstance->audioEnable();
+    emit windowEmuStart();
+}
+
+void EmuThread::bootROMStart(const QStringList& filename)
+{
     sendMessage({.type = msg_BootROM, .param = filename});
+}
+
+int EmuThread::bootROMFinish(QString& errorstr)
+{
     waitMessage();
-    if (!msgResult)
+    if (!bootResult)
     {
-        errorstr = msgError;
-        return msgResult;
+        errorstr = bootError;
+        return bootResult;
     }
 
-    sendMessage(msg_EmuRun);
-    waitMessage();
     errorstr = "";
-    return msgResult;
+    return bootResult;
 }
 
 int EmuThread::bootFirmware(QString& errorstr)

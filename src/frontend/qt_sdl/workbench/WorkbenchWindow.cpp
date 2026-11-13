@@ -53,6 +53,7 @@
 #include <QStatusBar>
 #include <QTabBar>
 
+#include "Trace.h"
 #include "WorkbenchWindow.h"
 #include "Panels.h"
 #include "Dialogs.h"
@@ -89,6 +90,7 @@ bool WBPanel::IsShown() const
 
 void WorkbenchWindow::ApplyDarkTheme()
 {
+    TRACE_QT("WorkbenchWindow::ApplyDarkTheme");
     QPalette pal;
     const QColor window = WBColor::Window();
     const QColor base = WBColor::Base();
@@ -141,6 +143,7 @@ void WorkbenchWindow::StampButton(QAbstractButton* b)
 
 void WorkbenchWindow::ApplyChrome()
 {
+    TRACE_QT("WorkbenchWindow::ApplyChrome");
     const QString sheet = WBColor::WidgetStyleSheet();
     setStyleSheet(sheet);
     if (!DockMgr) return;
@@ -165,6 +168,7 @@ void WorkbenchWindow::ReloadColors()
 
 WorkbenchWindow::WorkbenchWindow(WBHost* host) : QMainWindow(nullptr), H(host)
 {
+    TRACE_QT("WorkbenchWindow constructor");
     WBColor::Load();
     ApplyDarkTheme();
     setWindowTitle("melonDS Decomp Workbench");
@@ -181,7 +185,10 @@ WorkbenchWindow::WorkbenchWindow(WBHost* host) : QMainWindow(nullptr), H(host)
     ads::CDockManager::setConfigFlag(ads::CDockManager::XmlCompressionEnabled, false);
     ads::CDockManager::setAutoHideConfigFlags(ads::CDockManager::DefaultAutoHideConfig);
     ads::CDockManager::setAutoHideConfigFlag(ads::CDockManager::AutoHideCloseOnOutsideMouseClick, true);
-    DockMgr = new ads::CDockManager(this);
+    {
+        TRACE_QT("ads::CDockManager constructor");
+        DockMgr = new ads::CDockManager(this);
+    }
     ApplyChrome();
     {
         auto* watch = new QFileSystemWatcher(this);
@@ -198,7 +205,21 @@ WorkbenchWindow::WorkbenchWindow(WBHost* host) : QMainWindow(nullptr), H(host)
     DescribePanels();
     BuildMenus();
     BuildStatusBar();
-    DefaultLayout();
+    // The default layout costs a whole layout build (~400 ms), and the last-used layout is restored over
+    // it on show. So when the default is known from an earlier run (its saved state, for this set of
+    // panels), the panels are only registered here, and the last-used layout is the only one built.
+    {
+        Config::Table cfg = Config::GetGlobalTable();
+        if (!H->Settings().DefaultLayout && cfg.GetQString("Workbench.DefaultLayoutKey") == DefaultLayoutKey())
+            DefaultState = QByteArray::fromBase64(cfg.GetQString("Workbench.DefaultLayout").toLatin1());
+    }
+    if (DefaultState.isEmpty()) DefaultLayout();
+    else
+    {
+        // known to the dock manager but not placed: the layout restore on show places them
+        for (ads::CDockWidget* d : Docks) DockMgr->registerDockWidget(d);
+        DefaultCached = true;
+    }
 
     Config::Table cfg = Config::GetGlobalTable();
     QByteArray geom = QByteArray::fromBase64(cfg.GetQString("Workbench.WindowGeometry").toLatin1());
@@ -347,18 +368,26 @@ void WorkbenchWindow::showEvent(QShowEvent* e)
 
 void WorkbenchWindow::FinishLayout()
 {
+    TRACE_QT("WorkbenchWindow::FinishLayout");
     if (!Workspaces.empty()) return;
-    DefaultState = DockMgr->saveState(LayoutVersion);
+    if (!DefaultCached)
+    {
+        DefaultState = DockMgr->saveState(LayoutVersion);
+        Config::Table cfg = Config::GetGlobalTable();
+        cfg.SetQString("Workbench.DefaultLayout", QString::fromLatin1(DefaultState.toBase64()));
+        cfg.SetQString("Workbench.DefaultLayoutKey", DefaultLayoutKey());
+    }
     // the current workspace's layout; one that can't be restored falls back to the workspace's default
     InitWorkspaces();
     RebuildWorkspaceMenu();
     SavedState = DockMgr->saveState(LayoutVersion);
     // the game screen mode the user chose last time
     Config::Table cfg = Config::GetGlobalTable();
-    if (cfg.GetBool("Workbench.EmbeddedScreen"))
+    bool only = H->Settings().WorkbenchOnly;
+    if (only || cfg.GetBool("Workbench.EmbeddedScreen"))
     {
         ActEmbed->setChecked(true);
-        ActHideMain->setChecked(cfg.GetBool("Workbench.HideMainWindow"));
+        ActHideMain->setChecked(only || cfg.GetBool("Workbench.HideMainWindow"));
         // not before the emulator has run a few frames: the game window's OpenGL context is made on the
         // emulation thread, which sets up its own at startup
         auto* wait = new QTimer(this);
@@ -366,12 +395,12 @@ void WorkbenchWindow::FinishLayout()
         connect(wait, &QTimer::timeout, this, [this, wait, since]()
         {
             WBStatus st = H->Status();
-            bool ready = st.EmuState != WBStatus::NoGame && st.Frame >= 30;
+            bool ready = st.EmuState != WBStatus::NoGame && st.Frame >= 1;
             if (!ready && QDateTime::currentMSecsSinceEpoch() - since < 10000) return;
             wait->deleteLater();
             if (ActEmbed->isChecked()) SetEmbeddedScreen(true);
         });
-        wait->start(250);
+        wait->start(10);
     }
     // the first time (and until it is turned off), say what the switches do
     // (shown without taking the keyboard focus)
@@ -388,11 +417,20 @@ void WorkbenchWindow::FinishLayout()
 
 void WorkbenchWindow::closeEvent(QCloseEvent* e)
 {
-    // the game goes back to its own window, or it would vanish with this one
-    if (GameWin)
-        if (MainWindow* mw = H->Instance()->getMainWindow()) mw->show();
     SaveLayout();
     e->accept();
+    MainWindow* mw = H->Instance() ? H->Instance()->getMainWindow() : nullptr;
+    // -wo, or Quit from the game panel's menu (MainWindow::onQuit): the workbench is the program, and
+    // closing the main window runs melonDS's normal shutdown
+    if (H->Settings().WorkbenchOnly || property("quitAll").toBool())
+    {
+        // the game window lives inside this one: hand it back to the instance before both go away
+        if (GameWin) { MainWindow* g = GameWin; GameWin = nullptr; disconnect(g, &QObject::destroyed, this, nullptr); H->Instance()->deleteWindow(g->getWindowID(), true); }
+        if (mw) mw->close();
+    }
+    // the game goes back to its own window, or it would vanish with this one. Taking the embedded window
+    // down (not only showing the main window) is what makes the main window draw the game again
+    else if (GameWin) SetEmbeddedScreen(false);
 }
 
 void WorkbenchWindow::SaveLayout()
@@ -696,29 +734,30 @@ void WorkbenchWindow::CaptureUi(const QString& dock, int maxWidth, UiCaptureFn c
 
 void WorkbenchWindow::BuildPanels()
 {
-    DisasmView = new DisasmPanel(this);
-    MemoryView = new MemoryPanel(this);
+    TRACE_QT("WorkbenchWindow::BuildPanels");
+    { TRACE_QT("panel: DisasmPanel"); DisasmView = new DisasmPanel(this); }
+    { TRACE_QT("panel: MemoryPanel"); MemoryView = new MemoryPanel(this); }
     // no central widget: every panel, the disassembly included, can dock, float or close
 
-    AddDock("Disassembly", "dock_disasm", DisasmView);
-    AddDock("Memory", "dock_memory", MemoryView);
-    AddDock("Functions", "dock_functions", new FunctionsPanel(this));
-    AddDock("Bookmarks", "dock_bookmarks", new BookmarksPanel(this));
-    AddDock("Registers", "dock_registers", new RegistersPanel(this));
-    AddDock("Inspector", "dock_inspector", new InspectorPanel(this));
-    AddDock("Annotations", "dock_annotations", new AnnotationsPanel(this));
-    AddDock("Call stack", "dock_callstack", new CallStackPanel(this));
-    AddDock("Call graph", "dock_callgraph", new CallGraphPanel(this));
-    AddDock("Cross-references", "dock_xrefs", new XrefsPanel(this));
-    AddDock("Coverage map", "dock_coverage", new CoveragePanel(this));
-    AddDock("Write history", "dock_history", new WriteHistoryPanel(this));
-    AddDock("Data origin", "dock_origin", new DataOriginPanel(this));
-    AddDock("Overlays", "dock_overlays", new OverlaysPanel(this));
-    AddDock("Compare setup", "dock_compare_setup", new CompareSetupPanel(this));
-    AddDock("Source and diff", "dock_source", new SourcePanel(this));
-    AddDock("Decompiler", "dock_decompiler", new DecompilerPanel(this));
-    AddDock("Search", "dock_search", new SearchPanel(this));
-    AddDock("Game archive", "dock_archive", ArchiveView = new ArchivePanel(this));
+    { TRACE_QT("panel: Disassembly"); AddDock("Disassembly", "dock_disasm", DisasmView); }
+    { TRACE_QT("panel: Memory"); AddDock("Memory", "dock_memory", MemoryView); }
+    { TRACE_QT("panel: Functions"); AddDock("Functions", "dock_functions", new FunctionsPanel(this)); }
+    { TRACE_QT("panel: Bookmarks"); AddDock("Bookmarks", "dock_bookmarks", new BookmarksPanel(this)); }
+    { TRACE_QT("panel: Registers"); AddDock("Registers", "dock_registers", new RegistersPanel(this)); }
+    { TRACE_QT("panel: Inspector"); AddDock("Inspector", "dock_inspector", new InspectorPanel(this)); }
+    { TRACE_QT("panel: Annotations"); AddDock("Annotations", "dock_annotations", new AnnotationsPanel(this)); }
+    { TRACE_QT("panel: Call stack"); AddDock("Call stack", "dock_callstack", new CallStackPanel(this)); }
+    { TRACE_QT("panel: Call graph"); AddDock("Call graph", "dock_callgraph", new CallGraphPanel(this)); }
+    { TRACE_QT("panel: Cross-references"); AddDock("Cross-references", "dock_xrefs", new XrefsPanel(this)); }
+    { TRACE_QT("panel: Coverage map"); AddDock("Coverage map", "dock_coverage", new CoveragePanel(this)); }
+    { TRACE_QT("panel: Write history"); AddDock("Write history", "dock_history", new WriteHistoryPanel(this)); }
+    { TRACE_QT("panel: Data origin"); AddDock("Data origin", "dock_origin", new DataOriginPanel(this)); }
+    { TRACE_QT("panel: Overlays"); AddDock("Overlays", "dock_overlays", new OverlaysPanel(this)); }
+    { TRACE_QT("panel: Compare setup"); AddDock("Compare setup", "dock_compare_setup", new CompareSetupPanel(this)); }
+    { TRACE_QT("panel: Source and diff"); AddDock("Source and diff", "dock_source", new SourcePanel(this)); }
+    { TRACE_QT("panel: Decompiler"); AddDock("Decompiler", "dock_decompiler", new DecompilerPanel(this)); }
+    { TRACE_QT("panel: Search"); AddDock("Search", "dock_search", new SearchPanel(this)); }
+    { TRACE_QT("panel: Game archive"); AddDock("Game archive", "dock_archive", ArchiveView = new ArchivePanel(this)); }
     connect(ArchiveView, &ArchivePanel::located, this, [this](int member, u32 addr, u32 size)
     {
         if (member != NavigateToArchived) return;
@@ -727,7 +766,7 @@ void WorkbenchWindow::BuildPanels()
         GoTo(addr);
         SetSelection(addr, size);
     });
-    AddDock("NARC/SDAT files", "dock_containers", ContainersView = new ContainersPanel(this));
+    { TRACE_QT("panel: NARC/SDAT files"); AddDock("NARC/SDAT files", "dock_containers", ContainersView = new ContainersPanel(this)); }
     connect(ContainersView, &ContainersPanel::located, this, [this](int global, u32 addr, u32 size)
     {
         if (global != NavigateToContained) return;
@@ -736,10 +775,10 @@ void WorkbenchWindow::BuildPanels()
         GoTo(addr);
         SetSelection(addr, size);
     });
-    AddDock("Graphics", "dock_graphics", new GraphicsPanel(this));
-    AddDock("Breakpoints", "dock_breakpoints", new BreakpointsPanel(this));
-    AddDock("Recording", "dock_recording", new RecordingPanel(this));
-    AddDock("Getting started", "dock_start", new GettingStartedPanel(this));
+    { TRACE_QT("panel: Graphics"); AddDock("Graphics", "dock_graphics", new GraphicsPanel(this)); }
+    { TRACE_QT("panel: Breakpoints"); AddDock("Breakpoints", "dock_breakpoints", new BreakpointsPanel(this)); }
+    { TRACE_QT("panel: Recording"); AddDock("Recording", "dock_recording", new RecordingPanel(this)); }
+    { TRACE_QT("panel: Getting started"); AddDock("Getting started", "dock_start", new GettingStartedPanel(this)); }
 
     // the game screen: a placeholder until the game is shown here
     GameHost = new QWidget();
@@ -763,7 +802,7 @@ void WorkbenchWindow::BuildPanels()
     pl->addStretch();
     gl->addWidget(GamePlaceholder);
     // at least one DS screen wide, so the game is never cropped
-    AddDock("Game screen", "dock_game", GameHost)->setMinimumSize(270, 220);
+    { TRACE_QT("panel: Game screen"); AddDock("Game screen", "dock_game", GameHost)->setMinimumSize(270, 220); }
 
     for (WBPanel* p : Panels)
     {
@@ -772,8 +811,17 @@ void WorkbenchWindow::BuildPanels()
     }
 }
 
+QString WorkbenchWindow::DefaultLayoutKey() const
+{
+    // a saved default layout is only good for the same layout format and the same panels
+    QString key = QString::number(LayoutVersion);
+    for (ads::CDockWidget* d : Docks) key += ' ' + d->objectName();
+    return key;
+}
+
 void WorkbenchWindow::DefaultLayout()
 {
+    TRACE_QT("WorkbenchWindow::DefaultLayout");
     // centre column: disassembly over memory over the bottom tabs; left: functions + bookmarks;
     // right: registers, inspector, annotations. The side columns run the full height
     // (the dock manager only knows docks once they are added)
@@ -861,6 +909,7 @@ void WorkbenchWindow::UseTargetCpu(const CmdTarget& t)
 
 void WorkbenchWindow::BuildMenus()
 {
+    TRACE_QT("WorkbenchWindow::BuildMenus");
     // Every command is made here once, with its id, name and key. Names end in "..." only when the
     // command asks for more before it acts (a dialog or a prompt).
     auto add = [this](QMenu* menu, const char* id, const QString& text, std::function<void()> fn,
@@ -1031,7 +1080,7 @@ void WorkbenchWindow::BuildMenus()
     WorkspaceMenu = win->addMenu("Workspaces");
     add(win, "panels", "Panels...", [this]() { ShowPanelPalette(); }, {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P)});
     win->addSeparator();
-    add(win, "reset_layout", "Reset layout", [this]() { if (!Workspaces.empty()) { RestoreLayout(Workspaces[CurWorkspace].Default); SaveLayout(); } });
+    add(win, "reset_layout", "Reset layout", [this]() { if (!Workspaces.empty()) { RestoreLayout(EnsureDefault(Workspaces[CurWorkspace])); SaveLayout(); } });
 
     QMenu* help = mb->addMenu("&Help");
     add(help, "getting_started", "Getting started", [this]() { ShowPanel("dock_start"); });
@@ -1043,6 +1092,7 @@ void WorkbenchWindow::BuildMenus()
 
 void WorkbenchWindow::BuildStatusBar()
 {
+    TRACE_QT("WorkbenchWindow::BuildStatusBar");
     auto badge = [this](const QString& text, const QString& bg)
     {
         QLabel* l = new QLabel(text, this);
@@ -1242,6 +1292,7 @@ void WorkbenchWindow::Tick()
 
 void WorkbenchWindow::SetEmbeddedScreen(bool on)
 {
+    TRACE_QT("WorkbenchWindow::SetEmbeddedScreen");
     EmuInstance* inst = H->Instance();
     if (on && !GameWin && inst)
     {
@@ -1252,7 +1303,7 @@ void WorkbenchWindow::SetEmbeddedScreen(bool on)
         GameWin->show();
         connect(GameWin, &QObject::destroyed, this, [this]()
         {
-            // closed from its own menu (File > Quit closes the window)
+            // closed by melonDS itself (its instance shutting down)
             GameWin = nullptr;
             GamePlaceholder->show();
             if (ActEmbed) ActEmbed->setChecked(false);
@@ -1376,9 +1427,16 @@ bool WorkbenchWindow::eventFilter(QObject* o, QEvent* e)
         {
             auto* ke = static_cast<QKeyEvent*>(e);
             QKeySequence seq(ke->modifiers() | ke->key());
+            // run the game window's action here: left to Qt, a key the workbench's menu bar also uses as a
+            // mnemonic (Alt+F, &File) opens that menu instead
             for (QAction* a : GameWin->findChildren<QAction*>())
                 for (const QKeySequence& s : a->shortcuts())
-                    if (s == seq) return false;
+                    if (s == seq)
+                    {
+                        if (a->isEnabled() && w == QApplication::focusWidget() && !ke->isAutoRepeat()) a->trigger();
+                        e->accept();
+                        return true;
+                    }
             e->accept();
             return true;
         }

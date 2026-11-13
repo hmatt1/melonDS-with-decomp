@@ -114,6 +114,11 @@ public:
     void emuReset();
 
     int bootROM(const QStringList& filename, QString& errorstr);
+    // bootROM in two halves, so the GUI can do other work while the emulation thread loads the ROM:
+    // start sends the boot, finish waits for it and starts the emulation. Every start needs its finish
+    void startRunning();  // emulator thread only: what msg_EmuRun does
+    void bootROMStart(const QStringList& filename);
+    int bootROMFinish(QString& errorstr);
     int bootFirmware(QString& errorstr);
     int insertCart(const QStringList& filename, bool gba, QString& errorstr);
     void ejectCart(bool gba);
@@ -189,6 +194,9 @@ private:
 
     int msgResult = 0;
     QString msgError;
+    // the boot's own result: between bootROMStart and bootROMFinish other messages may set msgResult
+    int bootResult = 0;
+    QString bootError;
 
     QMutex msgMutex;
     QSemaphore msgSemaphore;

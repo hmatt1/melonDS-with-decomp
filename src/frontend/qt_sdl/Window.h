@@ -26,6 +26,8 @@
 #include <QWidget>
 #include <QWindow>
 #include <QMainWindow>
+#include <QToolBar>
+#include <functional>
 #include <QImage>
 #include <QActionGroup>
 #include <QTimer>
@@ -39,9 +41,26 @@
 
 
 class EmuInstance;
+
+// simple secondary window; tells its owner when the user closes it
+class HelloWindow : public QWidget
+{
+public:
+    explicit HelloWindow(QWidget* parent) : QWidget(parent, Qt::Window) {}
+    std::function<void()> onClosed;
+protected:
+    void closeEvent(QCloseEvent* event) override
+    {
+        if (onClosed) onClosed();
+        QWidget::closeEvent(event);
+    }
+};
 class EmuThread;
 
 const int kMaxRecentROMs = 10;
+
+// -wo: the first main window is made but not shown; the workbench shows the game instead
+extern bool MainWindowStartHidden;
 
 class MainWindow : public QMainWindow
 {
@@ -75,6 +94,10 @@ public:
     void drawScreen();
 
     bool preloadROMs(QStringList file, QStringList gbafile, bool boot);
+    // preloadROMs in two halves: start boots a DS ROM on the emulation thread without waiting, so the
+    // caller can build other things meanwhile; finish waits and reports. A true start needs its finish
+    bool preloadROMsStart(QStringList file, QStringList gbafile, bool boot);
+    bool preloadROMsFinish();
     void onWorkbenchBooted();
     QStringList splitArchivePath(const QString& filename, bool useMemberSyntax);
 
@@ -173,6 +196,8 @@ private slots:
     void onChangeIntegerScaling(bool checked);
     void onOpenNewWindow();
     void onChangeScreenFiltering(bool checked);
+    void onChangePixelGrid(bool checked);
+    void updatePixelGridMenu();
     void onChangeShowOSD(bool checked);
     void onChangeLimitFramerate(bool checked);
     void onChangeAudioSync(bool checked);
@@ -190,6 +215,8 @@ private slots:
     void onScreenEmphasisToggled();
 
 private:
+    struct PendingPreload { bool Active = false; bool Boot = false; bool GBALoaded = false; QStringList File; };
+    PendingPreload preload;     // between preloadROMsStart and preloadROMsFinish
     virtual void closeEvent(QCloseEvent* event) override;
 
     QStringList currentROM;
@@ -286,10 +313,14 @@ public:
     QAction* actPathSettings;
     QAction* actInterfaceSettings;
     QAction* actScreenSize[4];
+    QToolBar* toolbar = nullptr;
+    HelloWindow* helloWindow = nullptr;
+    QAction* actHelloWindow = nullptr;
+    void saveHelloWindowState();
     QActionGroup* grpScreenRotation;
     QAction* actScreenRotation[screenRot_MAX];
     QActionGroup* grpScreenGap;
-    QAction* actScreenGap[6];
+    QAction* actScreenGap[7];
     QActionGroup* grpScreenLayout;
     QAction* actScreenLayout[screenLayout_MAX];
     QAction* actScreenSwap;
@@ -302,6 +333,7 @@ public:
     QAction** actScreenAspectBot;
     QAction* actNewWindow;
     QAction* actScreenFiltering;
+    QAction* actPixelGrid = nullptr;   // null without a menu bar (hasMenu false)
     QAction* actShowOSD;
     QAction* actLimitFramerate;
     QAction* actAudioSync;

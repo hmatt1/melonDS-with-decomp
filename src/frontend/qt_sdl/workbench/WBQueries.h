@@ -54,6 +54,9 @@ bool MemoryRead(Workbench& wb, const WBApi::MemoryReadParams& p, WBApi::MemoryRe
 // kb: what the knowledge store says about the range (gathered on the main thread), for classification
 bool Metadata(Workbench& wb, const melonDS::WB::MergedSessions* all, const WBApi::MetadataParams& p, WBApi::MetadataResult& out, QString& err,
               const KbHints* kb = nullptr, const AnalysisHints* analysis = nullptr);
+// the newest `limit` writes to [addr, addr+size) of the live history, oldest first in out.entries; stops
+// scanning once it has them, and skips the scan when the recorder saw no write there. out.total is not counted
+void RecentWrites(Workbench& wb, u32 cpu, u32 addr, u32 size, u32 limit, WBApi::WritesListResult& out);
 bool Writes(Workbench& wb, const WBApi::WritesListParams& p, WBApi::WritesListResult& out, QString& err);
 // how a data origin label was made (origin.label); emulation thread
 bool LabelTree(Workbench& wb, const WBApi::OriginLabelParams& p, WBApi::OriginLabelResult& out, QString& err);
