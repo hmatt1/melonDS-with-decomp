@@ -649,7 +649,18 @@ void Signal::finalize()
     kernel.clear();
     kernel4.clear();
     noiseData.clear();
-    if (rawKernel.empty()) { base[0] = base[1] = base[2] = 0.f; return; }
+    if (rawKernel.empty())
+    {
+        base[0] = base[1] = base[2] = 0.f;
+        // RGB: no encoding, so each output is its pixel as it is. One tap of identity weights, so
+        // the OpenGL decode pass (which always reads the kernel) gets the same as decodeLine
+        if (active())
+        {
+            kernel = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+            kernel4 = {V4{1, 0, 0, 0}, V4{0, 1, 0, 0}, V4{0, 0, 1, 0}};
+        }
+        return;
+    }
     float m[3][4];
     outputMatrix(m);
     const size_t taps = rawKernel.size() / 12;
