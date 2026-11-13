@@ -1097,11 +1097,11 @@ void ScreenPanelGL::initOpenGL()
     glUniform1i(glGetUniformLocation(crtDecodeProgram, "ScreenTex"), 0);
     glUniform1i(glGetUniformLocation(crtDecodeProgram, "KernelTex"), 4);
     glUniform1i(glGetUniformLocation(crtDecodeProgram, "NoiseTex"), 5);
+    glUniform1i(glGetUniformLocation(crtDecodeProgram, "NesLut"), 6);
     {
         auto u = [this](const char* n) { return glGetUniformLocation(crtDecodeProgram, n); };
         crtDecLoc = {u("uLayer"), u("uPixelClocks"), u("uOutStep"), u("uOutPhases"), u("uTaps"), u("uTapLeft"),
-                     u("uCarrier"), u("uLineStep"), u("uFramePhase"), u("uLinePhaseOf"), u("uBias"), u("uNoise"),
-                     u("uNoiseLines"), u("uFrame"), u("uFrameSwitch"), u("uRows"), u("uPal")};
+                     u("uRowPhase"), u("uBias"), u("uNoise"), u("uNoiseLines"), u("uFrame"), u("uRows"), u("uIndexed")};
     }
     glUseProgram(crtProgram);
     glUniform1i(glGetUniformLocation(crtProgram, "DecodedTex"), 3);
@@ -1244,6 +1244,8 @@ void ScreenPanelGL::deinitOpenGL()
     glDeleteTextures(1, &crtDecodedTexture);
     glDeleteTextures(1, &crtKernelTexture);
     glDeleteTextures(1, &crtNoiseTexture);
+    if (crtNesLutTexture) glDeleteTextures(1, &crtNesLutTexture);
+    crtNesLutTexture = 0;
     crtChainValid = false;
 
     for (const auto& [key, tex] : osdTextures)
@@ -1360,19 +1362,36 @@ void ScreenPanelGL::uploadCrtChain()
     crtChainUploaded = crtChain.generation();
     crtChainValid = true;
 
-    // kernel: one RGBA texel per (tap, output channel) holding its weights for input R, G, B
+    // kernel: one RGBA texel per (tap, output channel) holding its weights for input R, G, B; or, NES,
+    // one per (tap, palette entry) holding the R'G'B' it adds
     const int taps = crtChain.taps(), rows = crtChain.linePhases() * crtChain.outPhases() * crtChain.rows();
     const std::vector<float>& wt = crtChain.weights();
-    std::vector<float> tex((size_t)taps * 3 * rows * 4, 0.f);
+    const bool indexed = crtChain.indexed();
+    const int perTap = indexed ? 64 : 3;
+    std::vector<float> tex((size_t)taps * perTap * rows * 4, 0.f);
     for (int r = 0; r < rows; r++)
         for (int k = 0; k < taps; k++)
-            for (int co = 0; co < 3; co++)
-                for (int ci = 0; ci < 3; ci++)
-                    tex[(((size_t)r * taps + k) * 3 + co) * 4 + ci] = wt[((size_t)r * taps + k) * 9 + co * 3 + ci];
+            for (int e = 0; e < perTap; e++)
+                for (int c = 0; c < 3; c++)
+                    tex[(((size_t)r * taps + k) * perTap + e) * 4 + c] =
+                        indexed ? wt[(((size_t)r * taps + k) * 64 + e) * 3 + c]
+                                : wt[((size_t)r * taps + k) * 9 + e * 3 + c];
     {
         GLBindingKeeper keep(GL_TEXTURE4, GL_TEXTURE_2D, GL_TEXTURE_BINDING_2D);
         glBindTexture(GL_TEXTURE_2D, crtKernelTexture);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, taps * 3, rows, 0, GL_RGBA, GL_FLOAT, tex.data());
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, taps * perTap, rows, 0, GL_RGBA, GL_FLOAT, tex.data());
+    }
+    if (indexed && !crtNesLutTexture)
+    {
+        // the nearest palette entry of every 5-bit colour: x blue, y green, z red
+        GLBindingKeeper keep(GL_TEXTURE6, GL_TEXTURE_3D, GL_TEXTURE_BINDING_3D);
+        glGenTextures(1, &crtNesLutTexture);
+        glBindTexture(GL_TEXTURE_3D, crtNesLutTexture);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage3D(GL_TEXTURE_3D, 0, GL_R8UI, 32, 32, 32, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, Ntsc::nesIndexLut());
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     }
 
     // decoded noise lines (RF), or one empty line
@@ -1394,10 +1413,13 @@ void ScreenPanelGL::drawCrtDecode(unsigned layers, uint32_t frame)
 {
     GLBindingKeeper keepK(GL_TEXTURE4, GL_TEXTURE_2D, GL_TEXTURE_BINDING_2D);
     GLBindingKeeper keepN(GL_TEXTURE5, GL_TEXTURE_2D, GL_TEXTURE_BINDING_2D);
+    GLBindingKeeper keepL(GL_TEXTURE6, GL_TEXTURE_3D, GL_TEXTURE_BINDING_3D);
     glActiveTexture(GL_TEXTURE4);
     glBindTexture(GL_TEXTURE_2D, crtKernelTexture);
     glActiveTexture(GL_TEXTURE5);
     glBindTexture(GL_TEXTURE_2D, crtNoiseTexture);
+    glActiveTexture(GL_TEXTURE6);
+    glBindTexture(GL_TEXTURE_3D, crtNesLutTexture);
     glActiveTexture(GL_TEXTURE0);
 
     const Ntsc::Timing& tm = Ntsc::timing(crtChain.settings().console);
@@ -1411,15 +1433,12 @@ void ScreenPanelGL::drawCrtDecode(unsigned layers, uint32_t frame)
     glUniform1i(crtDecLoc.outPhases, crtChain.outPhases());
     glUniform1i(crtDecLoc.taps, crtChain.taps());
     glUniform1i(crtDecLoc.tapLeft, crtChain.tapLeft());
-    glUniform1i(crtDecLoc.carrier, crtChain.carrierClocks());
-    glUniform1i(crtDecLoc.lineStep, crtChain.lineClockStep());
-    glUniform1i(crtDecLoc.framePhase, crtChain.frameClockPhase(frame));
-    glUniform1i(crtDecLoc.frameSwitch, crtChain.frameSwitch(frame));
     glUniform1i(crtDecLoc.rows, crtChain.rows());
-    glUniform1i(crtDecLoc.pal, Ntsc::isPal(crtChain.settings().console) ? 1 : 0);
-    GLint phaseOf[64] = {};
-    for (int c = 0; c < 2 * crtChain.carrierClocks() && c < 64; c++) phaseOf[c] = crtChain.linePhaseOfClock(c);
-    glUniform1iv(crtDecLoc.linePhaseOf, 64, phaseOf);
+    glUniform1i(crtDecLoc.indexed, crtChain.indexed() ? 1 : 0);
+    // each row's line state this frame, worked out here as the CPU path does it
+    GLint rowPhase[192];
+    for (int r = 0; r < 192; r++) rowPhase[r] = crtChain.linePhase(r, frame);
+    glUniform1iv(crtDecLoc.rowPhase, 192, rowPhase);
     glUniform3fv(crtDecLoc.bias, 1, crtChain.bias());
     glUniform1f(crtDecLoc.noise, crtChain.settings().noise);
     glUniform1i(crtDecLoc.noiseLines, crtChain.settings().noise > 0 ? crtChain.noiseLines() : 0);

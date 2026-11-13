@@ -145,6 +145,9 @@ void main()
     vec3 stripes = vec3(1.0);   // this output pixel's stripe mask, per channel
     float cellMean = 1.0;       // the mask's average over the DS pixel (same for each channel)
     vec3 lineComp = vec3(1.0);  // keeps the grid lines neutral over the stripes
+    bool lineBalance = false;   // sums over the cell for it, per channel (see below)
+    vec3 lineA = vec3(0.0), lineT = vec3(0.0);
+    float lineG = 0.0, lineN = 0.0;
     if (uSubpixel != 0)
     {
         // stripes in screen order, left to right, as R G B weights
@@ -162,13 +165,15 @@ void main()
         cellMean = mix(1.0, stripeMean, uSubStrength);
 
         // the vertical line covers the right stripe(s) more than the others, which
-        // takes that colour out of the cell. Measure, over the cell's own output
-        // pixels, how much light of each stripe the lines keep, and dim the other
-        // stripes to match, so the lines stay neutral
+        // takes that colour out of the cell. Sum, over the cell's own output pixels,
+        // what the lines keep of each stripe's light (A over T) and of light spread
+        // evenly (G over N); the pixel's own mix of the two (below) then says how much
+        // of each channel the lines keep, and the other channels are dimmed to match,
+        // so the lines stay neutral
         if (uGrid && (uGridDark > 0.0 || uGridDarkH > 0.0))
         {
             float m = clamp(floor(n + 0.5), 1.0, 8.0);
-            vec3 keep = vec3(0.0), total = vec3(0.0);
+            vec3 a = vec3(0.0), t3 = vec3(0.0);
             for (int jj = 0; jj < 8; jj++)
             for (int ii = 0; ii < 8; ii++)
             {
@@ -177,13 +182,16 @@ void main()
                 vec2 e = 1.0 - smoothstep(w - s, w + s, 1.0 - c);
                 float dk = max(uGridDark * e.x, uGridDarkH * e.y);
                 vec3 t = mix(vec3(1.0), stripeWeights(float(ii), float(jj), m), uSubStrength);
-                keep  += t * pow(1.0 - dk, 2.2);
-                total += t;
+                float g = pow(1.0 - dk, 2.2);
+                a += t * g;
+                t3 += t;
+                lineG += g;
+                lineN += 1.0;
             }
-            keep /= total;
-            float k = min(keep.x, min(keep.y, keep.z));
-            vec3 comp = k / keep;
-            lineComp = comp.x * s0 + comp.y * s1 + comp.z * s2;
+            // stripe order to channels
+            lineA = a.x * s0 + a.y * s1 + a.z * s2;
+            lineT = t3.x * s0 + t3.y * s1 + t3.z * s2;
+            lineBalance = true;
         }
 
         // subpixel sampling (needs 3x or more internal resolution): each stripe
@@ -216,6 +224,16 @@ void main()
         vec3 primary = min(target, vec3(1.0));
         vec3 spill = (target - primary) * cellMean / (1.0 - cellMean);
         light = primary * stripes + spill * (1.0 - stripes);
+        if (lineBalance)
+        {
+            // each channel's light is spill + (primary - spill) * stripe across the cell:
+            // the share of it the lines keep, per channel (1 where a channel has none)
+            vec3 num = spill * lineG + (primary - spill) * lineA;
+            vec3 den = spill * lineN + (primary - spill) * lineT;
+            vec3 keep = mix(vec3(1.0), num / max(den, vec3(1e-6)), step(vec3(1e-6), den));
+            float k = min(keep.x, min(keep.y, keep.z));
+            lineComp = k / keep;
+        }
     }
     vec3 shown = pow(light * lineComp, vec3(1.0 / 2.2));
 
@@ -294,11 +312,11 @@ const char* kCrtDecodeFS = R"(#version 140
 uniform sampler2DArray ScreenTex;
 uniform sampler2D KernelTex;     // x: tap * 3 + output channel, y: (line phase * out phases + out phase) * rows + row; rgb: weights per input channel
 uniform sampler2D NoiseTex;      // decoded RF noise lines: x: sample, y: line
+uniform usampler3D NesLut;       // NES: 5-bit R'G'B' (x blue, y green, z red) -> palette entry
+uniform bool uIndexed;           // NES: KernelTex x is tap * 64 + palette entry, rgb the R'G'B' it adds
 uniform float uLayer;
-uniform int uPixelClocks, uOutStep, uOutPhases, uTaps, uTapLeft;
-uniform int uCarrier, uLineStep, uFramePhase, uFrameSwitch, uRows;
-uniform bool uPal;
-uniform int uLinePhaseOf[64];    // 2 * carrier clock phase + PAL switch -> line phase
+uniform int uPixelClocks, uOutStep, uOutPhases, uTaps, uTapLeft, uRows;
+uniform int uRowPhase[192];      // each row's line phase this frame (Ntsc::Signal::linePhase)
 uniform vec3 uBias;
 uniform float uNoise;
 uniform int uNoiseLines;
@@ -327,8 +345,7 @@ void main()
 {
     int o = int(gl_FragCoord.x), row = int(gl_FragCoord.y);
     int p = (o * uOutStep + uOutStep / 2) / uPixelClocks;
-    int sw = uPal ? (uFrameSwitch + row) & 1 : 0;
-    int lp = uLinePhaseOf[2 * ((uFramePhase + row * uLineStep) % uCarrier) + sw];
+    int lp = uRowPhase[row];
     vec3 acc = uBias;
     // this row, and with a PAL-D TV the row above (black above the picture)
     for (int rr = 0; rr < uRows; rr++)
@@ -341,6 +358,14 @@ void main()
             int pp = p + k - uTapLeft;
             if (pp < 0 || pp >= kDSRes.x) continue;
             vec3 c = fetch(ivec2(pp, srcRow));
+            if (uIndexed)
+            {
+                // the pixel as its nearest palette entry (as Ntsc::nesIndexOf rounds)
+                ivec3 q = ivec3(clamp(c * 31.0 + 0.5, 0.0, 31.0));
+                int idx = int(texelFetch(NesLut, ivec3(q.b, q.g, q.r), 0).r);
+                acc += texelFetch(KernelTex, ivec2(k * 64 + idx, ky), 0).rgb;
+                continue;
+            }
             acc.r += dot(texelFetch(KernelTex, ivec2(k * 3 + 0, ky), 0).rgb, c);
             acc.g += dot(texelFetch(KernelTex, ivec2(k * 3 + 1, ky), 0).rgb, c);
             acc.b += dot(texelFetch(KernelTex, ivec2(k * 3 + 2, ky), 0).rgb, c);

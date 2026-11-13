@@ -141,7 +141,7 @@ FilterWindow* buildFilterWindow(QWidget* parent, Config::Table& windowCfg, const
 
     auto* presetRow = new QHBoxLayout();
     auto* presetPick = new QComboBox(win);
-    presetPick->setMaxVisibleItems(40);   // the whole list of built-ins at once, not a 10-row scroller
+    presetPick->setMaxVisibleItems(60);   // the whole list of built-ins at once (as the screen allows), not a 10-row scroller
     auto* presetName = new QLineEdit(win);
     auto* presetSave = new QPushButton("Save", win);
     auto* presetDelete = new QPushButton("Delete", win);

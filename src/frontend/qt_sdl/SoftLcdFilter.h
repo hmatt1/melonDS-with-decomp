@@ -67,6 +67,10 @@ private:
         int layer = -1;
         float cellMean = 1.f;
         float lineComp[3] = {1, 1, 1};
+        // grid lines over stripes: per channel, what the lines keep of that channel's stripe light
+        // (lineA over lineT), and of evenly spread light (lineG over lineN); see makeTable
+        bool lineBalance = false;
+        float lineA[3] = {0, 0, 0}, lineT[3] = {0, 0, 0}, lineG = 0.f, lineN = 0.f;
         std::vector<Cell> cells;   // n * n
     };
 

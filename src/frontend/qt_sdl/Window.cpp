@@ -18,6 +18,7 @@
 
 #include <tuple>
 #include <QGroupBox>
+#include <QStandardItemModel>
 #include "Trace.h"
 #include "NDS.h"
 #include <stdlib.h>
@@ -812,6 +813,34 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
                 };
                 return ex;
             };
+            // built-in presets: the DS models' screens. What's known: the DS and DS Lite share a
+            // 0.24 mm pitch (the DS's panel transflective, the Lite's transmissive); the DSi XL's
+            // pixels are about 1.4x larger, and reviews describe its gaps between pixels and its
+            // RGB stripes as plainly visible. No macro photo confirms any model's stripe order, so
+            // those are the Subpixels setting's own (the original DS taking the DS Lite's)
+            {
+                auto lp = [](std::initializer_list<std::pair<const char*, double>> kv)
+                {
+                    QJsonObject o;
+                    for (const auto& [k, v] : kv) o[k] = v;
+                    return o;
+                };
+                lcd.builtins = {
+                    {"DS (original)", lp({{"SubpixelLayout", 1}, {"GridDarkness", 0.18}, {"GridDarknessH", 0.5},
+                                          {"SubpixelStrength", 0.6}, {"BlurStrengthX", 0.1}, {"BlurStrengthY", 0.05}})},
+                    {"DS Lite", lp({{"SubpixelLayout", 1}, {"GridDarkness", 0.1}, {"GridDarknessH", 0.35},
+                                    {"SubpixelStrength", 0.55}})},
+                    {"DSi", lp({{"SubpixelLayout", 2}, {"GridDarkness", 0.1}, {"GridDarknessH", 0.35},
+                                {"SubpixelStrength", 0.55}})},
+                    {"DSi XL", lp({{"SubpixelLayout", 3}, {"GridDarkness", 0.3}, {"GridDarknessH", 0.55},
+                                   {"SubpixelStrength", 0.8}, {"SubpixelKeep", 0.85},
+                                   {"BlurStrengthX", 0.04}, {"BlurStrengthY", 0.02}})},
+                    {QString(), QJsonObject()},
+                    {"Grid only (no stripes)", lp({{"SubpixelLayout", 0}, {"GridDarkness", 0.25}, {"GridDarknessH", 0.5}})},
+                    {"Soft and glowing", lp({{"SubpixelLayout", 0}, {"GridDarkness", 0.05}, {"GridDarknessH", 0.2},
+                                             {"BlurStrengthX", 0.3}, {"BlurStrengthY", 0.2}, {"BlurHalo", 0.4}})},
+                };
+            }
             lcdWindow = buildFilterWindow(this, windowCfg, lcd);
 
             FilterWindowSpec crt;
@@ -837,8 +866,13 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
             auto updateSignalRows = [this, sigUi]()
             {
                 if (!crtWindow || !sigUi->console) return;
-                const int con = sigUi->console->currentIndex(), cab = sigUi->cable->currentIndex();
+                const int con = sigUi->console->currentData().toInt();
+                const int cab = Ntsc::cableFor(con, sigUi->cable->currentIndex());
                 const bool chain = con != Ntsc::Console_Off;
+                // cables the console doesn't have (the NES: composite and RF only) can't be picked
+                if (auto* m = qobject_cast<QStandardItemModel*>(sigUi->cable->model()))
+                    for (int c = 0; c < Ntsc::Cable_Count; c++)
+                        if (auto* it = m->item(c)) it->setEnabled(Ntsc::cableFor(con, c) == c);
                 const bool encoded = chain && cab != Ntsc::Cable_RGB;
                 const bool rf = encoded && cab == Ntsc::Cable_RF;
                 sigUi->cable->setEnabled(chain);
@@ -853,8 +887,33 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
                 if (strcmp(section, "Video signal") != 0) return;
                 auto* conLabel = new QLabel("Console", box);
                 auto* con = new QComboBox(box);
-                con->addItems({"Off (simple blur)", "Mega Drive, 320 wide (H40)", "Mega Drive, 256 wide (H32)", "SNES",
-                               "Mega Drive PAL, 320 wide (H40)", "Mega Drive PAL, 256 wide (H32)", "SNES PAL"});
+                // each item's data is its Ntsc::Console value (the order here is only for the list)
+                {
+                    using namespace Ntsc;
+                    const std::pair<const char*, int> items[] = {
+                        {"Off (simple blur)", Console_Off}, {nullptr, 0},
+                        {"NES / Famicom", Console_NES},
+                        {"Mega Drive 1 / Genesis, 320 wide (H40)", Console_MD1H40},
+                        {"Mega Drive 1 / Genesis, 256 wide (H32)", Console_MD1H32},
+                        {"Mega Drive 2 / Genesis, 320 wide (H40)", Console_MDH40},
+                        {"Mega Drive 2 / Genesis, 256 wide (H32)", Console_MDH32},
+                        {"SNES / Super Famicom", Console_SNES},
+                        {"PlayStation, 320 wide", Console_PS1},
+                        {"PlayStation, 256 wide", Console_PS1W256},
+                        {"Saturn, 352 wide", Console_Saturn352},
+                        {"Nintendo 64", Console_N64}, {nullptr, 0},
+                        {"Mega Drive 1 PAL, 320 wide (H40)", Console_MD1H40Pal},
+                        {"Mega Drive 1 PAL, 256 wide (H32)", Console_MD1H32Pal},
+                        {"Mega Drive 2 PAL, 320 wide (H40)", Console_MDH40Pal},
+                        {"Mega Drive 2 PAL, 256 wide (H32)", Console_MDH32Pal},
+                        {"SNES PAL", Console_SNESPal},
+                        {"PlayStation PAL, 320 wide", Console_PS1Pal},
+                    };
+                    for (const auto& [label, value] : items)
+                        if (label) con->addItem(label, value);
+                        else con->insertSeparator(con->count());
+                    con->setMaxVisibleItems(30);
+                }
                 const QString conTip =
                     "Which console's video encoder sends the picture to the TV, at that console's timing.\n\n"
                     "The DS picture is put through the signal the way that console makes it: each pixel\n"
@@ -863,8 +922,18 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
                     "how the TV decodes it, not from effect settings.\n\n"
                     "Mega Drive, 320 wide: 1.875 pixels per colour cycle, the same on every line, so\n"
                     "1-pixel dithering sits on the colour carrier: it blends, with still rainbows.\n"
+                    "Mega Drive 1 vs 2: different encoder chips. The model 1's board filters (from\n"
+                    "Sega's schematics) soften brightness and colour more.\n"
                     "Mega Drive, 256 wide and SNES: 1.5 pixels per colour cycle. The SNES shifts the\n"
                     "carrier a third of a cycle each line, so its artifacts run diagonally.\n"
+                    "NES: makes the signal itself from its palette, so the picture is first shown in the\n"
+                    "NES's colours (each colour as its nearest one), then sent as the NES sends them:\n"
+                    "square waves with strong diagonal artifacts.\n"
+                    "PlayStation, Saturn, N64: lines of the broadcast length, so the carrier flips every\n"
+                    "line and artifacts flicker into a finer pattern (and a comb TV separates them well).\n"
+                    "PlayStation and Saturn: the same encoder chip as the Mega Drive 2 (early\n"
+                    "PlayStations). N64: the first boards' encoder, which has no filters, and the N64's\n"
+                    "own way of doubling each pixel (the second half blended with the next pixel).\n"
                     "PAL consoles: the European PAL signal, with its own carrier (4.43 MHz) and V's phase\n"
                     "flipped every line; a PAL TV's delay line averages colour over two lines, so colour\n"
                     "edges are softer top to bottom and hue errors cancel out.\n\n"
@@ -876,9 +945,9 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
                 cab->addItems({"RGB", "S-Video", "Composite", "RF"});
                 const QString cabTip =
                     "How the signal gets to the TV.\n\n"
-                    "RGB: no encoding at all, the sharpest picture.\n"
+                    "RGB: no encoding at all, the sharpest picture. (Not on an NES.)\n"
                     "S-Video: brightness and colour on separate wires: colour is softer than brightness,\n"
-                    "but there are no rainbows.\n"
+                    "but there are no rainbows. (Not on an NES or a Mega Drive 1.)\n"
                     "Composite: both on one wire; the TV has to pull them apart, so fine detail turns into\n"
                     "colour (rainbows) and colour leaks into brightness.\n"
                     "RF: composite through an aerial lead and tuner: a little softer, and it can add\n"
@@ -887,7 +956,8 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
                 cabLabel->setToolTip(cabTip); cab->setToolTip(cabTip);
                 {
                     QSignalBlocker b1(con), b2(cab);
-                    con->setCurrentIndex(std::clamp(windowCfg.GetInt("CrtSignal"), 0, Ntsc::Console_Count - 1));
+                    const int ci = con->findData(windowCfg.GetInt("CrtSignal"));
+                    con->setCurrentIndex(ci < 0 ? 0 : ci);
                     cab->setCurrentIndex(std::clamp(windowCfg.GetInt("CrtCable"), 0, Ntsc::Cable_Count - 1));
                 }
                 auto* decLabel = new QLabel("TV decoder", box);
@@ -898,7 +968,12 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
                     "Standard: the NTSC standard's colour axes, so colours come out as they went in.\n"
                     "Sony US / Japanese: the axes of Sony's TV decoder IC from its datasheet. US sets\n"
                     "pushed red and warmed skin tones (reds stronger, yellows toward orange); the\n"
-                    "Japanese setting is milder. Most TVs of the time did something like this.\n\n"
+                    "Japanese setting is milder. Most TVs of the time did something like this.\n"
+                    "Comb filter: separates colour from brightness using the line above (RCA's design,\n"
+                    "with a delay of exactly one broadcast line), instead of a notch. Far fewer\n"
+                    "rainbows on consoles whose lines are the broadcast length (PlayStation, Saturn,\n"
+                    "N64); on the others the line above lands slightly to the side, so it helps less,\n"
+                    "and colour edges between rows can leave dots.\n\n"
                     "PAL:\n"
                     "PAL-D, 1990s: the delay line nearly every PAL set had, as Philips' TDA4665 did it:\n"
                     "each line's colour averaged with the line above's, locked to the console's lines.\n"
@@ -926,11 +1001,12 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
                         dec->addItem("Standard (NTSC)", (int)Ntsc::Decoder_Standard);
                         dec->addItem("Sony, US TV (CXA2025AS)", (int)Ntsc::Decoder_SonyUS);
                         dec->addItem("Sony, Japanese TV (CXA2025AS)", (int)Ntsc::Decoder_SonyJP);
+                        dec->addItem("Comb filter TV (2-line, CCD)", (int)Ntsc::Decoder_Comb);
                     }
                     int i = dec->findData(Ntsc::decoderFor(console, select));
                     dec->setCurrentIndex(i < 0 ? 0 : i);
                 };
-                fillDecoders(con->currentIndex(), windowCfg.GetInt("CrtDecoder"));
+                fillDecoders(con->currentData().toInt(), windowCfg.GetInt("CrtDecoder"));
                 sigUi->fillDecoders = fillDecoders;
                 auto storeDecoder = [this, dec]()
                 {
@@ -939,8 +1015,12 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
                     if (panel) panel->crtDecoder = d;
                 };
                 connect(dec, &QComboBox::currentIndexChanged, this, [storeDecoder](int) { storeDecoder(); });
-                connect(con, &QComboBox::currentIndexChanged, this, [this, updateSignalRows, fillDecoders, dec, storeDecoder](int i)
+                connect(con, &QComboBox::currentIndexChanged, this, [this, con, cab, updateSignalRows, fillDecoders, dec, storeDecoder](int idx)
                 {
+                    const int i = con->itemData(idx).toInt();
+                    // a cable the console doesn't have (an NES on RGB) becomes the one it would use
+                    if (Ntsc::cableFor(i, cab->currentIndex()) != cab->currentIndex())
+                        cab->setCurrentIndex(Ntsc::cableFor(i, cab->currentIndex()));
                     windowCfg.SetInt("CrtSignal", i);
                     if (panel) panel->crtSignal = i;
                     fillDecoders(i, dec->currentData().toInt());   // keeps the choice if it fits
@@ -969,17 +1049,18 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
                 ex.toJson = [sigUi]()
                 {
                     QJsonObject o;
-                    o["CrtSignal"] = sigUi->console->currentIndex();
+                    o["CrtSignal"] = sigUi->console->currentData().toInt();
                     o["CrtCable"] = sigUi->cable->currentIndex();
                     o["CrtDecoder"] = sigUi->decoder->currentData().toInt();
                     return o;
                 };
                 ex.fromJson = [sigUi](const QJsonObject& o)
                 {
-                    sigUi->console->setCurrentIndex(std::clamp(o.value("CrtSignal").toInt(0), 0, Ntsc::Console_Count - 1));
+                    const int ci = sigUi->console->findData(o.value("CrtSignal").toInt(0));
+                    sigUi->console->setCurrentIndex(ci < 0 ? 0 : ci);
                     sigUi->cable->setCurrentIndex(std::clamp(o.value("CrtCable").toInt(Ntsc::Cable_Composite), 0, Ntsc::Cable_Count - 1));
                     // the console's change already refilled the decoders; pick the preset's
-                    const int want = Ntsc::decoderFor(sigUi->console->currentIndex(), o.value("CrtDecoder").toInt(Ntsc::Decoder_Standard));
+                    const int want = Ntsc::decoderFor(sigUi->console->currentData().toInt(), o.value("CrtDecoder").toInt(Ntsc::Decoder_Standard));
                     int i = sigUi->decoder->findData(want);
                     sigUi->decoder->setCurrentIndex(i < 0 ? 0 : i);
                 };
@@ -1006,6 +1087,18 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
             };
             const std::pair<QString, QJsonObject> sep{QString(), QJsonObject()};
             crt.builtins = {
+                // NES: the PPU's own composite wave (RF only on the Famicom)
+                {"NES - composite", preset({{"CrtSignal", Console_NES}, {"CrtCable", Cable_Composite}})},
+                {"NES - RF", withRf({{"CrtSignal", Console_NES}, {"CrtCable", Cable_RF}})},
+                {"Famicom - RF, Japanese TV", withRf({{"CrtSignal", Console_NES}, {"CrtCable", Cable_RF},
+                                                      {"CrtDecoder", Decoder_SonyJP}})},
+                sep,
+                // Mega Drive 1 / Genesis: Sony's CXA1145 on Sega's board networks
+                {"Mega Drive 1 / Genesis - composite", preset({{"CrtSignal", Console_MD1H40}, {"CrtCable", Cable_Composite}})},
+                {"Mega Drive 1 / Genesis - RF", withRf({{"CrtSignal", Console_MD1H40}, {"CrtCable", Cable_RF}})},
+                {"Mega Drive 1 (PAL) - composite", preset({{"CrtSignal", Console_MD1H40Pal}, {"CrtCable", Cable_Composite},
+                                                           {"CrtDecoder", Decoder_PalD}})},
+                sep,
                 // Mega Drive 2 / Genesis, NTSC: Sony's CXA1645 encoder
                 {"Mega Drive 2 / Genesis - composite", preset({{"CrtSignal", Console_MDH40}, {"CrtCable", Cable_Composite}})},
                 {"Mega Drive 2 / Genesis - composite, US TV", preset({{"CrtSignal", Console_MDH40}, {"CrtCable", Cable_Composite},
@@ -1032,6 +1125,8 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
                 {"SNES - RF", withRf({{"CrtSignal", Console_SNES}, {"CrtCable", Cable_RF}})},
                 {"Super Famicom - composite, Japanese TV", preset({{"CrtSignal", Console_SNES}, {"CrtCable", Cable_Composite},
                                                                    {"CrtDecoder", Decoder_SonyJP}})},
+                {"SNES - composite, comb filter TV", preset({{"CrtSignal", Console_SNES}, {"CrtCable", Cable_Composite},
+                                                             {"CrtDecoder", Decoder_Comb}})},
                 sep,
                 // SNES, PAL
                 {"SNES (PAL) - composite", preset({{"CrtSignal", Console_SNESPal}, {"CrtCable", Cable_Composite},
@@ -1039,6 +1134,20 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
                 {"SNES (PAL) - composite, PAL-S TV", preset({{"CrtSignal", Console_SNESPal}, {"CrtCable", Cable_Composite},
                                                              {"CrtDecoder", Decoder_PalS}})},
                 {"SNES (PAL) - RGB SCART", preset({{"CrtSignal", Console_SNESPal}, {"CrtCable", Cable_RGB}})},
+                sep,
+                // the 32/64-bit generation: broadcast-length lines, so a comb TV separates them well
+                {"PlayStation - composite", preset({{"CrtSignal", Console_PS1}, {"CrtCable", Cable_Composite}})},
+                {"PlayStation - composite, comb filter TV", preset({{"CrtSignal", Console_PS1}, {"CrtCable", Cable_Composite},
+                                                                    {"CrtDecoder", Decoder_Comb}})},
+                {"PlayStation - S-Video", preset({{"CrtSignal", Console_PS1}, {"CrtCable", Cable_SVideo}})},
+                {"PlayStation (PAL) - composite", preset({{"CrtSignal", Console_PS1Pal}, {"CrtCable", Cable_Composite},
+                                                          {"CrtDecoder", Decoder_PalD}})},
+                {"Saturn - composite", preset({{"CrtSignal", Console_Saturn352}, {"CrtCable", Cable_Composite}})},
+                {"Saturn - S-Video", preset({{"CrtSignal", Console_Saturn352}, {"CrtCable", Cable_SVideo}})},
+                {"Nintendo 64 - composite", preset({{"CrtSignal", Console_N64}, {"CrtCable", Cable_Composite}})},
+                {"Nintendo 64 - composite, comb filter TV", preset({{"CrtSignal", Console_N64}, {"CrtCable", Cable_Composite},
+                                                                    {"CrtDecoder", Decoder_Comb}})},
+                {"Nintendo 64 - S-Video", preset({{"CrtSignal", Console_N64}, {"CrtCable", Cable_SVideo}})},
                 sep,
                 // kinds of set, fed RGB (or, the portable, a weak aerial signal)
                 {"Sony PVM - RGB", preset({{"CrtSignal", Console_SNES}, {"CrtCable", Cable_RGB},

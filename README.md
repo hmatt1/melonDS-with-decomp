@@ -186,7 +186,17 @@ entry.
 
 Draws the DS screens the way a real DS screen looks: thin lines between pixels, the coloured LED
 stripes of each pixel (DS Lite, DSi or DSi XL layout) and an optional blur. Its settings set how
-dark the lines are, the stripe layout and strength, and the blur.
+dark the lines are, the stripe layout and strength, and the blur. The grid lines are balanced
+against the stripes for each pixel's own light, so they never tint the picture, however dark they
+are.
+
+Built-in presets: **DS (original)**, **DS Lite**, **DSi**, **DSi XL**, **Grid only (no stripes)**
+and **Soft and glowing**. What they rest on: the DS and DS Lite share a 0.24 mm dot pitch; the DSi
+XL's pixels are about 1.4 times larger, and reviews describe its gaps between pixels and its RGB
+stripes as plainly visible, hence the darker grid and stronger stripes. No close-up photo
+confirms any model's stripe order, so the presets use the Subpixels setting's layouts (the
+original DS takes the DS Lite's). The filter has no colour controls, so the original DS's dimmer,
+washed-out panel isn't part of its preset.
 
 ### CRT filter
 
@@ -213,6 +223,14 @@ blends into solid colour all come out of that simulation, not from effect slider
 default, which gives the simple blur set by Picture blur and Colour bleed.
 
 * **Console:** whose encoder and timing.
+  * **NES / Famicom:** the NES has no encoder: its picture chip makes the composite wave itself,
+    a square wave per palette entry. So the DS picture is first shown in the NES's colours (each
+    colour as its nearest palette entry), then sent exactly as the NES sends them. Its strong
+    diagonal artifacts come from that square wave and its 1.5 pixels per colour cycle. Composite
+    and RF only.
+  * **Mega Drive 1 / Genesis (H40 or H32):** the same timing as the Mega Drive 2, with the model
+    1's encoder and the filter networks Sega put around it, which soften brightness and colour
+    more. No S-Video.
   * **Mega Drive, 320 wide (H40):** 1.875 DS pixels per colour cycle. That is the frequency of
     1-pixel dithering, so dithering blends and turns into colour. Every line is exactly 228
     carrier cycles, so the artifacts stand still.
@@ -227,11 +245,24 @@ default, which gives the simple blur set by Picture blur and Colour bleed.
     frame.
   * **SNES PAL:** 1.2 DS pixels per colour cycle; the carrier moves a sixth of a cycle per line,
     a 6-line pattern that stays still from frame to frame.
+  * **PlayStation (320 or 256 wide), Saturn (352 wide), Nintendo 64:** lines of the broadcast
+    length, 227.5 carrier cycles, so the carrier flips every line (and every frame) and the
+    artifacts form a fine pattern that a comb-filter TV separates well. The PlayStation (early
+    boards) and the Saturn use the Mega Drive 2's encoder chip. The N64 uses its first boards'
+    encoder, which has no filters at all, and doubles each pixel the way its video interface does,
+    the second half blended with the next pixel. **PlayStation PAL** is the PAL version.
 * **Cable:** RGB (no encoding), S-Video (colour softer than brightness, no rainbows), Composite,
   or RF (composite through a tuner, with optional noise and a ghost).
 * **TV decoder:**
   * NTSC: the standard's colour axes, or the "red push" axes of Sony's CXA2025AS TV decoder, US
     or Japanese setting.
+  * NTSC comb filter: RCA's CCD comb (1980). It separates colour from brightness using the
+    signal one broadcast line earlier: a delay of exactly 227.5 carrier cycles, clocked from the
+    colour burst. Half the sum is brightness and half the difference is colour, with the
+    difference's content below 1 MHz put back into brightness for vertical detail. Consoles with
+    broadcast-length lines separate cleanly. On the others the line above lands a little to the
+    side (half a cycle on a Mega Drive), so some rainbows stay and colour edges between rows can
+    leave dots.
   * PAL:
     * PAL-D, 1990s TV: the delay line nearly every PAL set had, as Philips' TDA4665 did it. Each
       line's colour is averaged with the line above's, locked to the console's lines. Colour is
@@ -246,13 +277,18 @@ Built-in presets sit under Default in the preset list. They can't be overwritten
 variants under new names. The signal part of each (console, cable, TV decoder) is a real hardware
 combination; the tube part (curvature, scanlines, mask, glow) is the look of that kind of set.
 
+* **NES:** composite; RF; and the Famicom (RF only) on a Japanese TV.
+* **Mega Drive 1 / Genesis:** composite; RF; PAL composite.
 * **Mega Drive 2 / Genesis:** composite; composite on a US TV; composite at 256 wide (H32 games);
   S-Video (the encoder has separate Y and C outputs, which mods bring out); RF; and the Japanese
   console on a Japanese TV.
 * **Mega Drive 2 (PAL):** composite; composite on a 1980s TV (glass delay line); RF; RGB SCART.
-* **SNES / Super Famicom:** S-Video; composite; composite on a US TV; RF; and the Super Famicom on
-  a Japanese TV.
+* **SNES / Super Famicom:** S-Video; composite; composite on a US TV; RF; the Super Famicom on
+  a Japanese TV; and composite on a comb-filter TV.
 * **SNES (PAL):** composite; composite on a PAL-S TV (no delay line); RGB SCART.
+* **PlayStation:** composite; composite on a comb-filter TV; S-Video; PAL composite.
+* **Saturn:** composite; S-Video.
+* **Nintendo 64:** composite; composite on a comb-filter TV; S-Video.
 * **Kinds of set:** Sony PVM (RGB, flat); Sony BVM (RGB, flat, finer scanlines); arcade monitor
   (RGB, curved, heavier scanlines and glow); portable TV (RF with a weak signal: snow, a ghost,
   strong curvature and a coarse mask).
@@ -268,13 +304,33 @@ What the simulation is built on:
     lines per frame (Genesis Plus GX; Kabuto's hardware notes).
   * SNES PAL: one 17.734475 MHz crystal; master clock = 6/5 of it (21.28137 MHz, 4.8 carrier
     cycles' worth); pixels = master/4; 1364 clocks per line, 312 lines (fullsnes).
+  * NES (nesdev wiki): master clock 21.47727 MHz; pixels = master/4; carrier = master/6, its
+    12-step colour wave stepping on both clock edges; 1364 clocks per line; every other frame a
+    pixel shorter.
+  * PlayStation (psx-spx; Mednafen; DuckStation): GPU clock 53.693175 MHz, carrier = /15, pixels
+    /8 (320 wide) or /10 (256); lines alternate 3412 and 3413 clocks; 263 lines. PAL: 53.203425
+    MHz, /12, 3405-clock lines, 314 lines.
+  * Saturn (Sega's overview manual; Mednafen): 352 wide: 28.636 MHz = 8x the carrier, pixels /4,
+    455 pixels per line, 263 lines.
+  * N64 (n64brew wiki): video clock = 13.6x the carrier; 3094 clocks per line; 263 lines; a
+    320-wide game's pixel spans 8 clocks.
 * **Mega Drive 2 encoder:** the Sony CXA1645 datasheet:
   * standard colour axes and luma;
   * a chroma band-pass after the modulator;
   * the recommended 3.65 MHz luma trap on the composite output;
   * a luma delay line.
+  The early PlayStations and most Saturns use the same chip.
+* **Mega Drive 1 encoder:** the Sony CXA1145, which has no filters of its own, with the networks
+  from Sega's schematics in place of the datasheet's delay line and band-pass, simulated as the
+  circuits they are: luma through 1.2 kΩ, 100 µH ∥ 18 pF and 180 pF ∥ 1 kΩ (a 3.75 MHz notch and a
+  soft roll-off); chroma through 1.2 kΩ into 12 µH ∥ 180 pF ∥ 330 Ω (a broad band-pass at 3.42
+  MHz). The PAL values come from a model 1 PAL board.
 * **SNES encoder:** the SMPTE 170M colour-difference filter template. The board's own filter
   values aren't documented.
+* **NES:** the measured output levels (nesdev): each palette entry's low and high level, the
+  burst's own levels, no setup. Its palette, for matching colours, is each entry's flat field
+  decoded by the simulated TV.
+* **N64 encoder:** Rohm's BA7242F (the first boards' ENC-NUS), whose datasheet has no filters.
 * **TV:** demodulates against the colour burst as received, as a TV does.
   * NTSC: a 3.58 MHz luma trap and a ±0.5 MHz chroma band-pass.
   * PAL: Philips' TDA8362: a 4.43 MHz trap (Q 2), a chroma band-pass (Q 3), U/V low-pass about
@@ -287,11 +343,14 @@ What the simulation is built on:
 Not simulated, because the hardware isn't documented well enough to do it accurately:
 
 * the early Mega Drive 2 boards' Samsung KA2195D encoder (the blurriest ones);
-* the Mega Drive 1's discrete filters;
-* the NES, which builds its signal from palette numbers, not from RGB;
-* the PAL Mega Drive 1's Fujitsu MB3514 encoder (no datasheet);
-* comb-filter TVs (these consoles' lines don't alternate carrier phase the way a comb filter
-  needs).
+* the rare PAL Mega Drive 1 VA6.8's Fujitsu MB3514 encoder;
+* the later PlayStations' Sony CXA2106R and the later N64s' MAV-NUS (no datasheets);
+* the PAL NES, PAL Saturn and PAL N64, whose timing isn't documented exactly enough;
+* the Saturn's 320-wide mode: its carrier pattern repeats only every 488 clocks, and working out
+  its weights takes seconds;
+* the NES's colour emphasis bits and the slight hue shift its brighter rows have on some chip
+  revisions;
+* 3-line adaptive comb filters, which switch between methods per pixel (not linear).
 
 The absolute carrier phase of the first pixel isn't documented either. It only shifts the hue
 of the artifact colours.

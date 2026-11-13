@@ -126,14 +126,19 @@ void SoftLcdFilter::makeTable(Table& t, int n, const SoftFilterParams& p, int la
 
     t.cellMean = 1.f;
     t.lineComp[0] = t.lineComp[1] = t.lineComp[2] = 1.f;
+    t.lineBalance = false;
     if (!sub)
         return;
     float stripeMean = n == 4 ? 2.5f / 8.f : 1.f / 3.f;
     t.cellMean = 1.f + (stripeMean - 1.f) * p.subStrength;
     if (p.grid && (p.gridDark > 0.f || p.gridDarkH > 0.f))
     {
+        // the vertical line covers the right stripe(s) more than the others. Sum what the lines
+        // keep of each stripe's light (A over T) and of light spread evenly (G over N); each
+        // pixel's mix of the two (its primary and spill, in band) then gives how much of each
+        // channel the lines keep, and the other channels are dimmed to match (as kScreenFS)
         int m = std::clamp(n, 1, 8);
-        float keep[3] = {0, 0, 0}, total[3] = {0, 0, 0};
+        float a[3] = {0, 0, 0}, tt[3] = {0, 0, 0}, g = 0.f;
         for (int jj = 0; jj < m; jj++)
         for (int ii = 0; ii < m; ii++)
         {
@@ -145,15 +150,19 @@ void SoftLcdFilter::makeTable(Table& t, int n, const SoftFilterParams& p, int la
             for (int k = 0; k < 3; k++)
             {
                 float tk = 1.f + (sw[k] - 1.f) * p.subStrength;   // in stripe order
-                keep[k] += tk * lk;
-                total[k] += tk;
+                a[k] += tk * lk;
+                tt[k] += tk;
             }
+            g += lk;
         }
-        float comp[3], kmin = 1e9f;
-        for (int k = 0; k < 3; k++) { keep[k] /= total[k]; kmin = std::min(kmin, keep[k]); }
-        for (int k = 0; k < 3; k++) comp[k] = kmin / keep[k];
-        for (int k = 0; k < 3; k++)
-            t.lineComp[k] = comp[0] * s0[k] + comp[1] * s1[k] + comp[2] * s2[k];
+        for (int k = 0; k < 3; k++)   // stripe order to channels
+        {
+            t.lineA[k] = a[0] * s0[k] + a[1] * s1[k] + a[2] * s2[k];
+            t.lineT[k] = tt[0] * s0[k] + tt[1] * s1[k] + tt[2] * s2[k];
+        }
+        t.lineG = g;
+        t.lineN = (float)(m * m);
+        t.lineBalance = true;
     }
 }
 
@@ -325,12 +334,28 @@ void SoftLcdFilter::band(int layer, int y0, int y1, const uint32_t* src, uint32_
                 for (int x = 0; x < kW; x++)
                 {
                     // light = (spill + (primary - spill) * stripe) * lineComp = a + b * stripe
+                    float comp[3] = {1.f, 1.f, 1.f};
+                    if (t.lineBalance)
+                    {
+                        // how much of each channel's light the grid lines keep, given this
+                        // pixel's primary and spill; the others dimmed to the lowest
+                        float keep[3], kmin = 1.f;
+                        for (int k = 0; k < 3; k++)
+                        {
+                            float pr = rowLight[x * 3 + k], sp = rowLight[kW * 3 + x * 3 + k];
+                            float num = sp * t.lineG + (pr - sp) * t.lineA[k];
+                            float den = sp * t.lineN + (pr - sp) * t.lineT[k];
+                            keep[k] = den > 1e-6f ? num / den : 1.f;
+                            kmin = std::min(kmin, keep[k]);
+                        }
+                        for (int k = 0; k < 3; k++) comp[k] = kmin / keep[k];
+                    }
                     float a[3], b[3];
                     for (int k = 0; k < 3; k++)
                     {
                         float pr = rowLight[x * 3 + k], sp = rowLight[kW * 3 + x * 3 + k];
-                        a[k] = sp * t.lineComp[k];
-                        b[k] = (pr - sp) * t.lineComp[k];
+                        a[k] = sp * comp[k];
+                        b[k] = (pr - sp) * comp[k];
                     }
                     for (int i = 0; i < n; i++)
                     {

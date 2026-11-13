@@ -441,7 +441,11 @@ void SoftCrtFilter::process(const uint32_t* const src[2], uint32_t* const dst[2]
     // from frame to frame regardless (the signal's carrier pattern on some consoles) is part of
     // the check, and RF noise, new every frame, never skips
     const bool noisy = signal.active() && p.signal.cable == Ntsc::Cable_RF && p.signal.noise > 0.f;
-    const int frameKey = signal.active() ? signal.frameClockPhase(frame) * 2 + signal.frameSwitch(frame) : 0;
+    // (lines of alternating length, as on a PS1, also follow the frame's parity)
+    const int frameKey = signal.active()
+        ? (signal.frameClockPhase(frame) * 2 + signal.frameSwitch(frame)) * 2 +
+              (Ntsc::timing(p.signal.console).lineAlt ? (int)(frame & 1) : 0)
+        : 0;
     int list[2], nl = 0;
     for (int l = 0; l < 2; l++)
     {
