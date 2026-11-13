@@ -81,6 +81,7 @@ private slots:
     void onAutoScreenSizingChanged(int sizing);
 
 protected:
+    bool shownTraced = false;   // Trace.h: the "first frame shown" marker was sent
     MainWindow* mainWindow;
     EmuInstance* emuInstance;
 

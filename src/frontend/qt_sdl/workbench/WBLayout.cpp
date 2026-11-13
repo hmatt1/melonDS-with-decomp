@@ -42,6 +42,7 @@
 #include <DockAreaWidget.h>
 #include <FloatingDockContainer.h>
 
+#include "Trace.h"
 #include "WorkbenchWindow.h"
 #include "WBHost.h"
 #include "Config.h"
@@ -295,6 +296,7 @@ void WorkbenchWindow::UpdateBanners()
 
 void WorkbenchWindow::DescribePanels()
 {
+    TRACE_QT("WorkbenchWindow::DescribePanels");
     for (ads::CDockWidget* d : Docks)
         if (const PanelInfo* pi = InfoFor(d->objectName()))
         {
@@ -335,6 +337,7 @@ void WorkbenchWindow::ShowPanelPalette()
 
 bool WorkbenchWindow::RestoreLayout(const QByteArray& state)
 {
+    TRACE_QT("WorkbenchWindow::RestoreLayout");
     if (state.isEmpty() || !DockMgr->restoreState(state, LayoutVersion)) return false;
 
     // panels the saved layout doesn't know (added since) go to their default place
@@ -373,22 +376,14 @@ bool WorkbenchWindow::RestoreLayout(const QByteArray& state)
 
 void WorkbenchWindow::InitWorkspaces()
 {
-    // built-in workspaces: the default layout with only their panels shown
+    TRACE_QT("WorkbenchWindow::InitWorkspaces");
+    // built-in workspaces: only named here; their layouts are made when first needed (EnsureDefault),
+    // as each costs a whole layout restore
     for (const BuiltIn& b : BuiltIns)
     {
-        DockMgr->restoreState(DefaultState, LayoutVersion);
-        if (!b.Panels.empty())
-            for (ads::CDockWidget* d : Docks)
-            {
-                bool want = false;
-                for (const char* n : b.Panels) if (d->objectName() == n) want = true;
-                d->toggleView(want);
-            }
         Workspace w;
         w.Name = b.Name;
         w.BuiltIn = true;
-        w.Default = DockMgr->saveState(LayoutVersion);
-        w.State = w.Default;
         Workspaces.push_back(w);
     }
 
@@ -408,11 +403,44 @@ void WorkbenchWindow::InitWorkspaces()
     // a layout saved before workspaces existed belongs to the default workspace
     QByteArray legacy = QByteArray::fromBase64(cfg.GetQString("Workbench.DockState").toLatin1());
     if (cur.isEmpty() && !legacy.isEmpty()) Workspaces[0].State = legacy;
-    if (!RestoreLayout(Workspaces[CurWorkspace].State)) RestoreLayout(Workspaces[CurWorkspace].Default);
+    Workspace& w = Workspaces[CurWorkspace];
+    if (H->Settings().DefaultLayout) w.State.clear();     // --default-layout: the last-used one is replaced on save
+    // an unchanged built-in: making its layout leaves the panels in it (when the default layout is showing)
+    if (w.State.isEmpty()) { EnsureDefault(w); if (DefaultCached && w.State == DefaultState) RestoreLayout(w.State); }
+    else if (!RestoreLayout(w.State)) RestoreLayout(EnsureDefault(w));
+}
+
+const QByteArray& WorkbenchWindow::EnsureDefault(Workspace& w)
+{
+    if (!w.BuiltIn || !w.Default.isEmpty()) return w.Default;
+#ifdef MELONDS_TRACE_QT
+    const QByteArray zoneName = ("make built-in workspace: " + w.Name).toUtf8();
+#endif
+    TRACE_QT_NAMED(zoneName.constData());
+    for (const BuiltIn& b : BuiltIns)
+    {
+        if (w.Name != b.Name) continue;
+        if (b.Panels.empty()) w.Default = DefaultState;        // the default layout itself
+        else
+        {
+            // the default layout with only its panels shown; leaves the panels laid out that way
+            DockMgr->restoreState(DefaultState, LayoutVersion);
+            for (ads::CDockWidget* d : Docks)
+            {
+                bool want = false;
+                for (const char* n : b.Panels) if (d->objectName() == n) want = true;
+                d->toggleView(want);
+            }
+            w.Default = DockMgr->saveState(LayoutVersion);
+        }
+    }
+    if (w.State.isEmpty()) w.State = w.Default;
+    return w.Default;
 }
 
 void WorkbenchWindow::MergeWorkspace(const QJsonObject& o, bool project)
 {
+    TRACE_QT("WorkbenchWindow::MergeWorkspace");
     Workspace w;
     w.Name = o.value("name").toString();
     w.State = QByteArray::fromBase64(o.value("state").toString().toLatin1());
@@ -434,6 +462,7 @@ void WorkbenchWindow::MergeWorkspace(const QJsonObject& o, bool project)
 
 void WorkbenchWindow::StoreWorkspaces()
 {
+    TRACE_QT("WorkbenchWindow::StoreWorkspaces");
     QJsonArray arr;
     for (const Workspace& w : Workspaces)
     {
@@ -468,7 +497,7 @@ void WorkbenchWindow::ApplyWorkspace(int idx, bool layout)
 {
     Workspace& w = Workspaces[idx];
     CurWorkspace = idx;
-    if (layout && !RestoreLayout(w.State)) RestoreLayout(w.Default);
+    if (layout && !RestoreLayout(w.State)) RestoreLayout(EnsureDefault(w));
     if (!w.Geometry.isEmpty() && !isFullScreen()) restoreGeometry(w.Geometry);
     // the game screen mode, through the menu actions so the config and the menus follow
     if (w.Screen >= 0 && ActEmbed && ActHideMain)
@@ -491,6 +520,7 @@ void WorkbenchWindow::SwitchWorkspace(int idx)
 
 void WorkbenchWindow::RebuildWorkspaceMenu()
 {
+    TRACE_QT("WorkbenchWindow::RebuildWorkspaceMenu");
     if (!WorkspaceMenu || Workspaces.empty()) return;
     WorkspaceMenu->clear();
     for (size_t i = 0; i < Workspaces.size(); i++)

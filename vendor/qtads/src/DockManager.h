@@ -494,6 +494,13 @@ public:
 	CDockWidget* findDockWidget(const QString& ObjectName) const;
 
 	/**
+	 * melonDS: makes the dock widget known to the dock manager without placing it anywhere, so the
+	 * next restoreState() places it for the first time (adding it first costs a full extra layout).
+	 * A dock widget the restored state doesn't name stays unplaced: add it afterwards.
+	 */
+	void registerDockWidget(CDockWidget* Dockwidget);
+
+	/**
 	 * Remove the given Dock from the dock manager
 	 */
 	void removeDockWidget(CDockWidget* Dockwidget);
