@@ -47,6 +47,9 @@ class MelonApplication : public QApplication
 public:
     MelonApplication(int &argc, char** argv);
     bool event(QEvent* event) override;
+#ifdef MELONDS_TRACE_QT
+    bool notify(QObject* receiver, QEvent* event) override;     // Trace.h
+#endif
 };
 
 extern QString* systemThemeName;

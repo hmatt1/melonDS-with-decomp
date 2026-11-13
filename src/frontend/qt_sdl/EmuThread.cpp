@@ -29,6 +29,7 @@
 #include <SDL2/SDL.h>
 
 #include "main.h"
+#include "Trace.h"
 
 #include "types.h"
 #include "version.h"
@@ -345,6 +346,10 @@ void EmuThread::run()
                 emit windowEmuPause(true);
             }
 
+            {
+                static bool firstFrame = true;      // a landmark on the startup timeline
+                if (firstFrame) { firstFrame = false; TRACE_QT_MESSAGE("first emulated frame"); }
+            }
             winUpdateCount++;
             if (winUpdateCount >= winUpdateFreq && !useOpenGL)
             {

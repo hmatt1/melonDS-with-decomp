@@ -16,6 +16,7 @@
     with melonDS. If not, see http://www.gnu.org/licenses/.
 */
 
+#include "Trace.h"
 #include "NDS.h"
 #include <stdlib.h>
 #include <time.h>
@@ -242,6 +243,7 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
     enabledSaved(false),
     focused(true)
 {
+    TRACE_QT("MainWindow constructor");
     this->embedded = embedded;
     // QMainWindow always makes itself a window: an embedded one becomes a plain child widget again
     if (embedded) setWindowFlags(Qt::Widget);
@@ -1126,6 +1128,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
 
 void MainWindow::createScreenPanel()
 {
+    TRACE_QT("MainWindow::createScreenPanel");
     auto oldpanel = panel;
     panel = nullptr;
     if (oldpanel) delete oldpanel;

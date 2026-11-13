@@ -42,6 +42,7 @@
 #include <DockAreaWidget.h>
 #include <FloatingDockContainer.h>
 
+#include "Trace.h"
 #include "WorkbenchWindow.h"
 #include "WBHost.h"
 #include "Config.h"
@@ -373,6 +374,7 @@ bool WorkbenchWindow::RestoreLayout(const QByteArray& state)
 
 void WorkbenchWindow::InitWorkspaces()
 {
+    TRACE_QT("WorkbenchWindow::InitWorkspaces");
     // built-in workspaces: the default layout with only their panels shown
     for (const BuiltIn& b : BuiltIns)
     {

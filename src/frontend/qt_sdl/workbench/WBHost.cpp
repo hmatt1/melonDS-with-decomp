@@ -31,6 +31,7 @@
 #include <QRegularExpression>
 #include <QStandardPaths>
 
+#include "Trace.h"
 #include "WBHost.h"
 #include "WorkbenchWindow.h"
 #include "Panels.h"
@@ -51,6 +52,7 @@ using namespace melonDS::WB;
 
 WBHost::WBHost(EmuInstance* inst) : QObject(nullptr), Inst(inst)
 {
+    TRACE_QT("WBHost constructor");
     Arc = std::make_shared<ArcShared>();
     Arc->Host = this;
     connect(this, &WBHost::archiveChanged, this, &WBHost::SeedArchiveAssets);
@@ -2489,12 +2491,14 @@ void WBHost::PollKB()
 
 WorkbenchWindow* WBHost::Window(bool create)
 {
+    TRACE_QT("WBHost::Window");
     if (!Win && create) Win = new WorkbenchWindow(this);
     return Win;
 }
 
 void WBHost::ShowWindow()
 {
+    TRACE_QT("WBHost::ShowWindow");
     WorkbenchWindow* w = Window(true);
     w->show();
     w->raise();

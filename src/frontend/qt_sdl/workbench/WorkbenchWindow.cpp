@@ -53,6 +53,7 @@
 #include <QStatusBar>
 #include <QTabBar>
 
+#include "Trace.h"
 #include "WorkbenchWindow.h"
 #include "Panels.h"
 #include "Dialogs.h"
@@ -165,6 +166,7 @@ void WorkbenchWindow::ReloadColors()
 
 WorkbenchWindow::WorkbenchWindow(WBHost* host) : QMainWindow(nullptr), H(host)
 {
+    TRACE_QT("WorkbenchWindow constructor");
     WBColor::Load();
     ApplyDarkTheme();
     setWindowTitle("melonDS Decomp Workbench");
@@ -347,6 +349,7 @@ void WorkbenchWindow::showEvent(QShowEvent* e)
 
 void WorkbenchWindow::FinishLayout()
 {
+    TRACE_QT("WorkbenchWindow::FinishLayout");
     if (!Workspaces.empty()) return;
     DefaultState = DockMgr->saveState(LayoutVersion);
     // the current workspace's layout; one that can't be restored falls back to the workspace's default
@@ -1252,6 +1255,7 @@ void WorkbenchWindow::Tick()
 
 void WorkbenchWindow::SetEmbeddedScreen(bool on)
 {
+    TRACE_QT("WorkbenchWindow::SetEmbeddedScreen");
     EmuInstance* inst = H->Instance();
     if (on && !GameWin && inst)
     {

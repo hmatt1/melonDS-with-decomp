@@ -50,6 +50,10 @@
 #include "duckstation/gl/context.h"
 
 #include "main.h"
+#include "Trace.h"
+#ifdef MELONDS_TRACE_QT
+#include <QMetaEnum>
+#endif
 #include "version.h"
 
 #include "Config.h"
@@ -249,6 +253,20 @@ MelonApplication::MelonApplication(int& argc, char** argv)
 #endif
 }
 
+#ifdef MELONDS_TRACE_QT
+// every Qt event as a zone, "<event type>: <receiver class>": paints, layouts, timers and the gaps between
+bool MelonApplication::notify(QObject* receiver, QEvent* event)
+{
+    static const QMetaEnum types = QMetaEnum::fromType<QEvent::Type>();
+    const char* type = types.valueToKey(event->type());
+    char name[128];
+    if (type) snprintf(name, sizeof(name), "%s: %s", type, receiver->metaObject()->className());
+    else snprintf(name, sizeof(name), "QEvent %d: %s", (int)event->type(), receiver->metaObject()->className());
+    TRACE_QT_NAMED(name);
+    return QApplication::notify(receiver, event);
+}
+#endif
+
 // TODO: ROM loading should be moved to EmuInstance
 // especially so the preloading below and in main() can be done in a nicer fashion
 
@@ -282,6 +300,7 @@ static void signalHandler(int signal)
 
 int main(int argc, char** argv)
 {
+    TRACE_QT_STEP("startup: before QApplication");
     sysTimer.start();
     srand(time(nullptr));
 
@@ -342,16 +361,19 @@ int main(int argc, char** argv)
     if (argc != 0 && (!strcasecmp(argv[0], "derpDS") || !strcasecmp(argv[0], "./derpDS")))
         printf("did you just call me a derp???\n");
 
+    TRACE_QT_STEP("startup: QApplication");
     MelonApplication melon(argc, argv);
 #ifndef _WIN32
     QSocketNotifier* quitOnSignal = signalPipe[0] >= 0 ? new QSocketNotifier(signalPipe[0], QSocketNotifier::Read, &melon) : nullptr;
     if (quitOnSignal) QObject::connect(quitOnSignal, &QSocketNotifier::activated, &melon, []() { qApp->quit(); });
 #endif
+    TRACE_QT_STEP("startup: paths and arguments");
     pathInit();
 
     CLI::CommandLineOptions* options = CLI::ManageArgs(melon);
 
     // http://stackoverflow.com/questions/14543333/joystick-wont-work-using-sdl
+    TRACE_QT_STEP("startup: SDL");
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
 
     SDL_SetHint(SDL_HINT_APP_NAME, "melonDS");
@@ -383,6 +405,7 @@ int main(int argc, char** argv)
     SDL_InitSubSystem(SDL_INIT_VIDEO);
     SDL_EnableScreenSaver(); SDL_DisableScreenSaver();
 
+    TRACE_QT_STEP("startup: config load");
     if (!Config::Load())
         QMessageBox::critical(nullptr,
                               "melonDS",
@@ -390,6 +413,7 @@ int main(int argc, char** argv)
 
     camStarted[0] = false;
     camStarted[1] = false;
+    TRACE_QT_STEP("startup: cameras");
     camManager[0] = new CameraManager(0, 640, 480, true);
     camManager[1] = new CameraManager(1, 640, 480, true);
 
@@ -412,11 +436,14 @@ int main(int argc, char** argv)
     // this will be changed if a LAN or netplay session is initiated
     setMPInterface(MPInterface_Local);
 
+    TRACE_QT_STEP("startup: network");
     NetInit();
 
+    TRACE_QT_STEP("startup: emu instance and main window");
     MainWindowStartHidden = options->workbenchOnly;
     createEmuInstance();
 
+    TRACE_QT_STEP("startup: workbench");
     {
         // decomp workbench: settings and command line
         WBHost* wb = emuInstances[0]->getWorkbench();
@@ -438,6 +465,7 @@ int main(int argc, char** argv)
         if (options->workbench) wb->ShowWindow();
     }
 
+    TRACE_QT_STEP("startup: ROM preload");
     {
         MainWindow* win = emuInstances[0]->getMainWindow();
         bool memberSyntaxUsed = false;
@@ -466,7 +494,10 @@ int main(int argc, char** argv)
             win->toggleFullscreen();
     }
 
+    TRACE_QT_STEP_END();
+    TRACE_QT_MESSAGE("event loop starts");
     int ret = melon.exec();
+    TRACE_QT_STEP("shutdown");
 
     delete options;
 
@@ -480,5 +511,6 @@ int main(int argc, char** argv)
     Config::Save();
 
     SDL_Quit();
+    TRACE_QT_STEP_END();
     return ret;
 }

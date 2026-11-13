@@ -32,6 +32,7 @@
 
 #include <zstd.h>
 #ifdef ARCHIVE_SUPPORT_ENABLED
+#include "Trace.h"
 #include "ArchiveUtil.h"
 #endif
 #include "EmuInstance.h"
@@ -72,6 +73,7 @@ EmuInstance::EmuInstance(int inst) : deleting(false),
     globalCfg(Config::GetGlobalTable()),
     localCfg(Config::GetLocalTable(inst))
 {
+    TRACE_QT("EmuInstance constructor");
     consoleType = globalCfg.GetInt("Emu.ConsoleType");
 
     ndsSave = nullptr;
@@ -213,6 +215,7 @@ MainWindow* EmuInstance::createEmbeddedWindow(QWidget* host)
 
 void EmuInstance::createWindow(int id)
 {
+    TRACE_QT("EmuInstance::createWindow");
     if (numWindows >= kMaxWindows)
     {
         // TODO
