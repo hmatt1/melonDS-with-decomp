@@ -204,6 +204,71 @@ as bright as without the filter instead of washing out the bright screens DS gam
 (the article's values, Brightness 1.5 and Glow 0.26, suit darker pixel art). At 6x or more, set
 the mask width to 2. The edge of the curved screen is antialiased.
 
+#### Video signal
+
+The CRT settings' **Video signal** section sends the DS picture to the TV the way a real
+console's video encoder would. The signal is simulated at the console's master clock and decoded
+the way a consumer NTSC TV decodes it. Colour bleed, rainbows on fine detail and dithering that
+blends into solid colour all come out of that simulation, not from effect sliders. It is off by
+default, which gives the simple blur set by Picture blur and Colour bleed.
+
+* **Console:** whose encoder and timing.
+  * **Mega Drive, 320 wide (H40):** 1.875 DS pixels per colour cycle. That is the frequency of
+    1-pixel dithering, so dithering blends and turns into colour. Every line is exactly 228
+    carrier cycles, so the artifacts stand still.
+  * **Mega Drive, 256 wide (H32):** 1.5 DS pixels per colour cycle, also still.
+  * **SNES:** 1.5 DS pixels per colour cycle. The carrier moves a third of a cycle per line, so
+    the artifacts run diagonally. Every other frame has a short line, so the pattern alternates
+    between two frames.
+* **Cable:** RGB (no encoding), S-Video (colour softer than brightness, no rainbows), Composite,
+  or RF (composite through a tuner, with optional noise and a ghost).
+* **TV decoder:**
+  * the NTSC standard's colour axes;
+  * the "red push" axes of Sony's CXA2025AS TV decoder, US or Japanese setting.
+* **TV controls:** Colour, Tint and Sharpness, as on the set.
+
+Built-in presets sit under Default in the preset list. They can't be overwritten; save your own
+variants under new names.
+
+* Mega Drive 2 / Genesis - composite
+* Mega Drive 2 / Genesis - RF
+* SNES - S-Video
+* SNES - composite
+* SNES - composite, US TV
+* Sony PVM - RGB
+
+What the simulation is built on:
+
+* **Timing** (fullsnes; SNESdev wiki; SpritesMind and nesdev forum measurements):
+  * Mega Drive: master clock 53.693175 MHz; carrier = master/15; pixels = master/8 (H40) or
+    master/10 (H32); 3420 clocks per line.
+  * SNES: master clock 21.47727 MHz; carrier = master/6; pixels = master/4; 1364 clocks per line,
+    with a 1360-clock line every other frame.
+* **Mega Drive 2 encoder:** the Sony CXA1645 datasheet:
+  * standard colour axes and luma;
+  * a chroma band-pass after the modulator;
+  * the recommended 3.65 MHz luma trap on the composite output;
+  * a luma delay line.
+* **SNES encoder:** the SMPTE 170M colour-difference filter template. The board's own filter
+  values aren't documented.
+* **TV:** a 3.58 MHz luma trap and a ±0.5 MHz chroma band-pass. It demodulates against the colour
+  burst as received, as a TV does.
+* **Exactness:** the chain is linear, so it is computed once per setting as each output sample's
+  weights over nearby pixels. Applying those weights gives the simulation's result to within
+  1/10000 (tested), on both OpenGL and the CPU.
+
+Not simulated, because the hardware isn't documented well enough to do it accurately:
+
+* the early Mega Drive 2 boards' Samsung KA2195D encoder (the blurriest ones);
+* the Mega Drive 1's discrete filters;
+* the NES, which builds its signal from palette numbers, not from RGB;
+* PAL;
+* comb-filter TVs (these consoles' lines don't alternate carrier phase the way a comb filter
+  needs).
+
+The absolute carrier phase of the first pixel isn't documented either. It only shifts the hue
+of the artifact colours.
+
 ### What draws them
 
 What draws a filter follows Config > **Video settings**:
@@ -227,7 +292,9 @@ both screens:
 | CRT, flat (curvature 0) | 4x | 6.0 ms | 3.2 ms |
 | CRT, curved (the default) | 4x | 14.1 ms | 7.4 ms |
 
-A screen the layout doesn't show (Top only, Bottom only) isn't filtered.
+A console's video signal on the CPU costs about 3 ms per screen on one thread, split across the
+threads with the rest. On OpenGL it is a small extra pass. A screen the layout doesn't show (Top
+only, Bottom only) isn't filtered.
 
 ## Credits
 

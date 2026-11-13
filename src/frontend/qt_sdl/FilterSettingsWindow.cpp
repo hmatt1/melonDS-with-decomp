@@ -4,11 +4,13 @@
 
 #include "FilterSettingsWindow.h"
 
+#include <cstring>
 #include <memory>
 #include <vector>
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QGroupBox>
 #include <QFile>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -62,11 +64,26 @@ FilterWindow* buildFilterWindow(QWidget* parent, Config::Table& windowCfg, const
     QObject::connect(win->useBox, &QCheckBox::toggled, win, [set = spec.setActive](bool on) { if (set) set(on); });
     grid->addWidget(win->useBox, 0, 0, 1, 4);
 
-    // one slider per parameter; a change applies on the next frame
+    // one slider per parameter; a change applies on the next frame. Parameters with a section go
+    // in a box of that name, which the filter can start with its own controls (sectionTop)
     const int paramRow = 1;
     auto sliders = std::make_shared<std::vector<QSlider*>>();
+    QGridLayout* target = grid;
+    const char* curSection = nullptr;
+    int mainRow = paramRow, boxRow = 0;
+    win->rows.assign(spec.count, {});
     for (int i = 0; i < spec.count; i++)
     {
+        if (spec.params[i].section && (!curSection || strcmp(spec.params[i].section, curSection) != 0))
+        {
+            curSection = spec.params[i].section;
+            auto* box = new QGroupBox(curSection, win);
+            target = new QGridLayout(box);
+            target->setColumnStretch(1, 1);
+            grid->addWidget(box, mainRow++, 0, 1, 4);
+            boxRow = 0;
+            if (spec.sectionTop) spec.sectionTop(curSection, box, target, boxRow);
+        }
         const GridParamDef& def = spec.params[i];
         const int steps = gridParamSteps(def);
         double val = windowCfg.GetDouble(def.key);
@@ -91,12 +108,14 @@ FilterWindow* buildFilterWindow(QWidget* parent, Config::Table& windowCfg, const
             if (set) set(i, (float)f);
         });
 
-        grid->addWidget(name, paramRow + i, 0);
-        grid->addWidget(slider, paramRow + i, 1);
-        grid->addWidget(num, paramRow + i, 2);
+        const int r = target == grid ? mainRow++ : boxRow++;
+        target->addWidget(name, r, 0);
+        target->addWidget(slider, r, 1);
+        target->addWidget(num, r, 2);
+        win->rows[i] = {name, slider, num};
     }
 
-    int row = paramRow + spec.count;
+    int row = mainRow;
     FilterExtras extras;
     if (spec.addExtras) extras = spec.addExtras(win, grid, paramRow, row);
 
@@ -110,11 +129,12 @@ FilterWindow* buildFilterWindow(QWidget* parent, Config::Table& windowCfg, const
     auto* presetName = new QLineEdit(win);
     auto* presetSave = new QPushButton("Save", win);
     auto* presetDelete = new QPushButton("Delete", win);
-    presetPick->setToolTip("Apply a saved set of these settings.\n"
-                           "Default always restores the built-in values, even if it's the only entry.");
+    presetPick->setToolTip("Apply a set of these settings.\n"
+                           "Default always restores the built-in values, even if it's the only entry.\n"
+                           "Built-in presets (if any) come next, then the ones you saved.");
     presetName->setPlaceholderText("Preset name");
     presetSave->setToolTip("Save the current settings under the name in the box");
-    presetDelete->setToolTip("Delete the selected preset (not Default)");
+    presetDelete->setToolTip("Delete the selected saved preset (not Default or a built-in one)");
     presetRow->addWidget(presetPick, 1);
     presetRow->addWidget(presetName, 1);
     presetRow->addWidget(presetSave);
@@ -141,14 +161,34 @@ FilterWindow* buildFilterWindow(QWidget* parent, Config::Table& windowCfg, const
         QFile f(presetFile);
         if (f.open(QIODevice::WriteOnly)) f.write(QJsonDocument(all).toJson());
     };
-    auto refill = [presetPick, loadPresets](const QString& select)
+    // entries: Default (kind 0), the built-in presets (1), then the saved ones (2)
+    const auto builtins = spec.builtins;
+    auto refill = [presetPick, loadPresets, builtins](const QString& select)
     {
         QSignalBlocker b(presetPick);
         presetPick->clear();
-        presetPick->addItem("Default");
-        for (const QString& n : loadPresets().keys()) presetPick->addItem(n);
-        int i = presetPick->findText(select);
+        presetPick->addItem("Default", 0);
+        if (!builtins.empty())
+        {
+            presetPick->insertSeparator(presetPick->count());
+            for (const auto& bi : builtins) presetPick->addItem(bi.first, 1);
+        }
+        const QStringList saved = loadPresets().keys();
+        if (!saved.isEmpty())
+        {
+            presetPick->insertSeparator(presetPick->count());
+            for (const QString& n : saved) presetPick->addItem(n, 2);
+        }
+        // (an empty name would match a separator, whose text is empty)
+        int i = select.isEmpty() ? -1 : presetPick->findText(select);
         presetPick->setCurrentIndex(i < 0 ? 0 : i);
+    };
+    auto isReserved = [builtins](const QString& n)
+    {
+        if (n.compare("Default", Qt::CaseInsensitive) == 0) return true;
+        for (const auto& bi : builtins)
+            if (n.compare(bi.first, Qt::CaseInsensitive) == 0) return true;
+        return false;
     };
     refill(QString());
 
@@ -175,19 +215,29 @@ FilterWindow* buildFilterWindow(QWidget* parent, Config::Table& windowCfg, const
     QObject::connect(presetPick, &QComboBox::activated, win, [=](int idx)
     {
         QString n = presetPick->itemText(idx);
-        bool isDefault = idx == 0;
-        presetDelete->setEnabled(!isDefault);
-        presetName->setText(isDefault ? QString() : n);
-        apply(isDefault ? QJsonObject() : loadPresets().value(n).toObject());
+        int kind = presetPick->itemData(idx).toInt();
+        presetDelete->setEnabled(kind == 2);
+        presetName->setText(kind == 2 ? n : QString());
+        QJsonObject o;
+        if (kind == 1)
+        {
+            for (const auto& bi : builtins)
+                if (bi.first == n) o = bi.second;
+        }
+        else if (kind == 2)
+            o = loadPresets().value(n).toObject();
+        apply(o);
     });
     presetDelete->setEnabled(false);
     const QString title = spec.title;
     QObject::connect(presetSave, &QPushButton::clicked, win, [=]()
     {
         QString n = presetName->text().trimmed();
-        if (n.isEmpty() || n.compare("Default", Qt::CaseInsensitive) == 0)
+        if (n.isEmpty() || isReserved(n))
         {
-            QMessageBox::information(win, title, "Type a name other than Default to save a preset.");
+            QMessageBox::information(win, title, builtins.empty()
+                ? "Type a name other than Default to save a preset."
+                : "Type a name other than Default or a built-in preset's to save a preset.");
             return;
         }
         QJsonObject all = loadPresets();
@@ -198,7 +248,7 @@ FilterWindow* buildFilterWindow(QWidget* parent, Config::Table& windowCfg, const
     });
     QObject::connect(presetDelete, &QPushButton::clicked, win, [=]()
     {
-        if (presetPick->currentIndex() == 0) return;
+        if (presetPick->currentData().toInt() != 2) return;
         QJsonObject all = loadPresets();
         all.remove(presetPick->currentText());
         savePresets(all);

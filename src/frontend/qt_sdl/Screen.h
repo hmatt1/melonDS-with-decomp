@@ -28,6 +28,7 @@
 #include <memory>
 #include "SoftLcdFilter.h"
 #include "SoftCrtFilter.h"
+#include "NtscSignal.h"
 #include <QImage>
 #include <QMutex>
 #include <QScreen>
@@ -63,7 +64,7 @@ int screenFilterSetting(Config::Table& localCfg);
 
 // a screen filter's slider: name, config key (per window), shader uniform, range, default, unit
 // shown after the value, tooltip, whole numbers only
-struct GridParamDef { const char* name; const char* key; const char* uniform; float min, max, def; const char* unit; const char* tip; bool integer = false; };
+struct GridParamDef { const char* name; const char* key; const char* uniform; float min, max, def; const char* unit; const char* tip; bool integer = false; const char* section = nullptr; };
 // steps a parameter's slider has: whole numbers for integer ones
 inline int gridParamSteps(const struct GridParamDef& d) { return d.integer ? (int)(d.max - d.min) : 1000; }
 
@@ -82,19 +83,32 @@ static const GridParamDef kGridParams[] =
 };
 static constexpr int kNumGridParams = sizeof(kGridParams) / sizeof(kGridParams[0]);
 
-// CRT filter (kCrtPrepassFS + kCrtFS, SoftCrtFilter); the order is the one SoftCrtParams is filled in
+// CRT filter (kCrtPrepassFS + kCrtFS, SoftCrtFilter), in the order the settings window shows them.
+// The video signal ones without a uniform go to the signal chain (NtscSignal), not the shader.
+enum CrtParam
+{
+    crt_Curvature, crt_BeamMin, crt_BeamMax, crt_Mask, crt_MaskPx, crt_Glow, crt_Vignette, crt_Boost,
+    crt_LumaBlur, crt_ChromaBlur, crt_Colour, crt_Tint, crt_Sharpness, crt_Noise, crt_Ghost, crt_GhostDelay,
+    crt_Count
+};
 static const GridParamDef kCrtParams[] =
 {
-    {"Curvature",           "CrtCurvature",  "uCrtWarp",       0.0f,  1.0f,  0.25f, "", "How much the picture bulges, like the curved glass of an old tube.\n\n0 is a flat screen. Anything outside the curved edge is black.\nThe curve is a little stronger top to bottom than side to side, as on a real set."},
-    {"Picture blur",        "CrtLumaBlur",   "uCrtLumaBlur",   0.05f, 1.0f,  0.45f, "DS px", "How much the brightness of the picture is smeared sideways, the way a TV signal\nsoftens it. Only sideways: rows stay sharp top to bottom.\n\nLower is sharper. Around 0.45, 1-pixel checkerboards and dithering melt into an\neven shade, as they did on a real TV."},
-    {"Colour bleed",        "CrtChromaBlur", "uCrtChromaBlur", 0.05f, 3.0f,  1.2f,  "DS px", "How far colour runs sideways into its neighbours, separately from brightness.\nTV signals carry colour with less detail than brightness, so colour edges are\nsofter than the picture itself.\n\nLower keeps colours crisp; higher lets them bleed further."},
-    {"Scanline width, dark",   "CrtBeamMin", "uCrtBeamMin",    0.10f, 0.5f,  0.21f, "rows", "How thick each scanline is in dark parts of the picture, in DS rows.\n\nThinner lines leave wider black gaps between rows, so the scanlines show more.\nThicker lines fill the gaps in. Each DS row is drawn as one beam: at 3x zoom that\nis a bright screen row with a dimmer one either side, and more zoom gives the\nbeams a smoother shape."},
-    {"Scanline width, bright", "CrtBeamMax", "uCrtBeamMax",    0.10f, 0.8f,  0.40f, "rows", "How thick each scanline is in bright parts of the picture, in DS rows.\n\nOn a real tube a brighter beam is wider, so bright areas fill the gaps between\nrows while dark areas keep visible scanlines. Keep it at or above the dark width\nfor that look; set both the same for even scanlines everywhere."},
-    {"Mask strength",       "CrtMask",       "uCrtMask",       0.0f,  1.0f,  1.0f,  "", "How strongly the red, green and blue phosphor stripes of the tube show.\n\nThe stripes run top to bottom, like an aperture-grille tube. At 0 there are no\nstripes. At 1 each stripe is brightened in its own colour and the others dimmed,\nwhich darkens the picture a little overall; Brightness makes up for it."},
-    {"Mask width",          "CrtMaskPx",     "uCrtMaskPx",     1.0f,  4.0f,  1.0f,  "px", "Width of each phosphor stripe, in screen pixels. The stripes are laid on the\nscreen's own pixels, so they stay the same size whatever the zoom.\n\nA red, green and blue stripe make one triad, three times this wide. At 3x zoom,\n1 puts exactly one triad on each DS pixel; at 6x, 2 does. Wider than that, the\ntriads span several DS pixels and show as coloured speckle.", true},
-    {"Glow",                "CrtGlow",       "uCrtGlow",       0.0f,  1.0f,  0.15f, "", "A soft halo around bright parts of the picture, as light scatters in the glass\nof a tube. It adds light; it never darkens.\n\n0 turns it off. Higher values make bright areas bloom into their surroundings,\nwhich also washes out the bright, busy screens many DS games have."},
-    {"Edge darkening",      "CrtVignette",   "uCrtVignette",   0.0f,  1.0f,  0.22f, "", "How much darker the corners and edges are than the centre, as on a real tube.\n\n0 keeps the brightness even across the screen."},
-    {"Brightness",          "CrtBoost",      "uCrtBoost",      0.5f,  2.5f,  1.25f, "x", "Overall brightness. The scanline gaps and the phosphor mask both take light away,\nso the picture is brightened to make up for it. The default keeps mid-tones\nabout as bright as without the filter.\n\nHigher and bright colours clip to flat white (a white screen always does, unless\nthis is below about 0.85); lower and the picture looks dim."},
+    {"Curvature",           "CrtCurvature",  "uCrtWarp",       0.0f,  1.0f,  0.25f, "", "How much the picture bulges, like the curved glass of an old tube.\n\n0 is a flat screen. Anything outside the curved edge is black.\nThe curve is a little stronger top to bottom than side to side, as on a real set.", false, "Tube"},
+    {"Scanline width, dark",   "CrtBeamMin", "uCrtBeamMin",    0.10f, 0.5f,  0.21f, "rows", "How thick each scanline is in dark parts of the picture, in DS rows.\n\nThinner lines leave wider black gaps between rows, so the scanlines show more.\nThicker lines fill the gaps in. Each DS row is drawn as one beam: at 3x zoom that\nis a bright screen row with a dimmer one either side, and more zoom gives the\nbeams a smoother shape.", false, "Tube"},
+    {"Scanline width, bright", "CrtBeamMax", "uCrtBeamMax",    0.10f, 0.8f,  0.40f, "rows", "How thick each scanline is in bright parts of the picture, in DS rows.\n\nOn a real tube a brighter beam is wider, so bright areas fill the gaps between\nrows while dark areas keep visible scanlines. Keep it at or above the dark width\nfor that look; set both the same for even scanlines everywhere.", false, "Tube"},
+    {"Mask strength",       "CrtMask",       "uCrtMask",       0.0f,  1.0f,  1.0f,  "", "How strongly the red, green and blue phosphor stripes of the tube show.\n\nThe stripes run top to bottom, like an aperture-grille tube. At 0 there are no\nstripes. At 1 each stripe is brightened in its own colour and the others dimmed,\nwhich darkens the picture a little overall; Brightness makes up for it.", false, "Tube"},
+    {"Mask width",          "CrtMaskPx",     "uCrtMaskPx",     1.0f,  4.0f,  1.0f,  "px", "Width of each phosphor stripe, in screen pixels. The stripes are laid on the\nscreen's own pixels, so they stay the same size whatever the zoom.\n\nA red, green and blue stripe make one triad, three times this wide. At 3x zoom,\n1 puts exactly one triad on each DS pixel; at 6x, 2 does. Wider than that, the\ntriads span several DS pixels and show as coloured speckle.", true, "Tube"},
+    {"Glow",                "CrtGlow",       "uCrtGlow",       0.0f,  1.0f,  0.15f, "", "A soft halo around bright parts of the picture, as light scatters in the glass\nof a tube. It adds light; it never darkens.\n\n0 turns it off. Higher values make bright areas bloom into their surroundings,\nwhich also washes out the bright, busy screens many DS games have.", false, "Tube"},
+    {"Edge darkening",      "CrtVignette",   "uCrtVignette",   0.0f,  1.0f,  0.22f, "", "How much darker the corners and edges are than the centre, as on a real tube.\n\n0 keeps the brightness even across the screen.", false, "Tube"},
+    {"Brightness",          "CrtBoost",      "uCrtBoost",      0.5f,  2.5f,  1.25f, "x", "Overall brightness. The scanline gaps and the phosphor mask both take light away,\nso the picture is brightened to make up for it. The default keeps mid-tones\nabout as bright as without the filter.\n\nHigher and bright colours clip to flat white (a white screen always does, unless\nthis is below about 0.85); lower and the picture looks dim.", false, "Tube"},
+    {"Picture blur",        "CrtLumaBlur",   "uCrtLumaBlur",   0.05f, 1.0f,  0.45f, "DS px", "How much the brightness of the picture is smeared sideways, the way a TV signal\nsoftens it. Only sideways: rows stay sharp top to bottom.\n\nLower is sharper. Around 0.45, 1-pixel checkerboards and dithering melt into an\neven shade, as they did on a real TV.\n\nOnly with Console set to Off: with a console, the signal itself sets the sharpness.", false, "Video signal"},
+    {"Colour bleed",        "CrtChromaBlur", "uCrtChromaBlur", 0.05f, 3.0f,  1.2f,  "DS px", "How far colour runs sideways into its neighbours, separately from brightness.\nTV signals carry colour with less detail than brightness, so colour edges are\nsofter than the picture itself.\n\nLower keeps colours crisp; higher lets them bleed further.\n\nOnly with Console set to Off: with a console, the signal itself sets the bleed.", false, "Video signal"},
+    {"Colour",              "CrtColour",     nullptr,          0.0f,  2.0f,  1.0f,  "x", "The TV's colour control: how strongly colour shows, from black and white at 0.\n\n1 shows the colour as the console sent it. Used with a console's signal; with\nthe signal off, colour is as the DS made it.", false, "Video signal"},
+    {"Tint",                "CrtTint",       nullptr,         -30.0f, 30.0f, 0.0f,  "deg", "The TV's tint (hue) control, in degrees. It turns every colour around the\ncolour wheel: negative toward purple, positive toward green, as on an NTSC set.\n\n0 is correct. Used with a console's signal.", false, "Video signal"},
+    {"Sharpness",           "CrtSharpness",  nullptr,          0.0f,  1.0f,  0.0f,  "", "The TV's sharpness control: it boosts fine detail in brightness (peaking), which\nalso gives edges a light halo. 0 is off. Used with a console's signal.", false, "Video signal"},
+    {"RF noise",            "CrtNoise",      nullptr,          0.0f,  1.0f,  0.0f,  "", "Snow from a weak RF signal: random noise added to the signal before the TV, so it\nshows in brightness and as colour speckle, different every frame.\n\nOnly with the RF cable.", false, "Video signal"},
+    {"RF ghost",            "CrtGhost",      nullptr,          0.0f,  0.5f,  0.0f,  "", "A ghost: a weaker copy of the signal arriving a little late, as from a reflection\nin the aerial lead. This is its strength, against the picture.\n\nOnly with the RF cable.", false, "Video signal"},
+    {"Ghost delay",         "CrtGhostDelay", nullptr,          0.2f,  4.0f,  1.0f,  "us", "How late the ghost arrives, in microseconds: about 2.4 DS pixels each at the\nMega Drive's 320-wide timing. Only with the RF cable and a ghost.", false, "Video signal"},
 };
 static constexpr int kNumCrtParams = sizeof(kCrtParams) / sizeof(kCrtParams[0]);
 
@@ -136,6 +150,10 @@ protected:
 public:
     std::atomic<float> gridParam[kNumGridParams];   // LCD filter, kGridParams order
     std::atomic<float> crtParam[kNumCrtParams];     // CRT filter, kCrtParams order
+    std::atomic<int> crtSignal{0};                  // video signal: Ntsc::Console (0 = off)
+    std::atomic<int> crtCable{Ntsc::Cable_Composite};
+    std::atomic<int> crtDecoder{Ntsc::Decoder_Standard};
+    Ntsc::Settings signalSettings() const;
     std::atomic<bool> subpixelSample{false};  // each stripe reads the upscaled picture where it sits
     std::atomic<int> subpixelLayout{0};
     std::atomic<int> blurReach[2] = {1, 1};   // DS pixels each way, horizontal and vertical (0 to 3)   // 0 none, 1 DS Lite, 2 DSi, 3 DSi XL
@@ -294,9 +312,21 @@ private:
     GLuint crtPrepassProgram = 0, crtProgram = 0;
     GLuint crtFramebuffer = 0, crtYiqTexture = 0, crtGlowTexture = 0;
     GLint crtPrepassLayerULoc = -1;
-    GLint crtSavedBinding[2] = {0, 0};   // units 1 and 2, put back after the CRT draw
+    GLint crtSavedBinding[3] = {0, 0, 0};   // units 1 to 3, put back after the CRT draw
     GLint crtScreenSizeULoc = -1, crtTransformULoc = -1, crtParamULoc[kNumCrtParams];
     void drawCrtPrepass(unsigned layers);
+
+    // CRT video signal chain: the kernel (weights) and decoded noise as textures, and a decode
+    // pass writing each shown screen's decoded lines, which the CRT pass then reads
+    static constexpr int kDecodedWidth = 1280;   // the widest decoded line (Mega Drive H32: 5 per pixel)
+    Ntsc::Signal crtChain;
+    unsigned crtChainUploaded = 0;
+    bool crtChainValid = false;
+    GLuint crtDecodeProgram = 0, crtDecodeFramebuffer = 0, crtDecodedTexture = 0, crtKernelTexture = 0, crtNoiseTexture = 0;
+    struct { GLint layer, pixelClocks, outStep, outPhases, taps, tapLeft, carrier, lineStep, framePhase, linePhaseOf, bias, noise, noiseLines, frame; } crtDecLoc{};
+    GLint crtSignalULoc = -1, crtSigPixelClocksULoc = -1, crtSigStepULoc = -1, crtSigHalfStepULoc = -1, crtSigWidthULoc = -1, crtSigTexWidthULoc = -1;
+    void uploadCrtChain();
+    void drawCrtDecode(unsigned layers, uint32_t frame);
 
     QMutex screenSettingsLock;
     WindowInfo windowInfo;

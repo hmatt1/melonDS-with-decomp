@@ -285,10 +285,75 @@ void main()
 }
 )";
 
+// Video signal chain (NtscSignal): each decoded sample of a line is an exact weighted sum of the
+// nearby DS pixels, with weights the CPU worked out by simulating the console's encoder and the
+// TV (KernelTex). Drawn at the decoded sample rate, one row per DS line, per shown screen.
+// SoftCrtFilter does the same through Ntsc::Signal::decodeLine.
+const char* kCrtDecodeFS = R"(#version 140
+
+uniform sampler2DArray ScreenTex;
+uniform sampler2D KernelTex;     // x: tap * 3 + output channel, y: line phase * out phases + out phase; rgb: weights per input channel
+uniform sampler2D NoiseTex;      // decoded RF noise lines: x: sample, y: line
+uniform float uLayer;
+uniform int uPixelClocks, uOutStep, uOutPhases, uTaps, uTapLeft;
+uniform int uCarrier, uLineStep, uFramePhase;
+uniform int uLinePhaseOf[16];
+uniform vec3 uBias;
+uniform float uNoise;
+uniform int uNoiseLines;
+uniform uint uFrame;
+
+out vec4 oColor;
+
+const ivec2 kDSRes = ivec2(256, 192);
+
+vec3 fetch(ivec2 t)
+{
+    ivec2 size = textureSize(ScreenTex, 0).xy;
+    ivec2 at = ivec2((vec2(t) + 0.5) * vec2(size) / vec2(kDSRes));
+    return texelFetch(ScreenTex, ivec3(at, int(uLayer)), 0).rgb;
+}
+
+uint hash32(uint x)
+{
+    x ^= x >> 16u; x *= 0x7feb352du;
+    x ^= x >> 15u; x *= 0x846ca68bu;
+    x ^= x >> 16u;
+    return x;
+}
+
+void main()
+{
+    int o = int(gl_FragCoord.x), row = int(gl_FragCoord.y);
+    int p = (o * uOutStep + uOutStep / 2) / uPixelClocks;
+    int lp = uLinePhaseOf[(uFramePhase + row * uLineStep) % uCarrier];
+    int ky = lp * uOutPhases + o % uOutPhases;
+    vec3 acc = uBias;
+    for (int k = 0; k < uTaps; k++)
+    {
+        int pp = p + k - uTapLeft;
+        if (pp < 0 || pp >= kDSRes.x) continue;
+        vec3 c = fetch(ivec2(pp, row));
+        acc.r += dot(texelFetch(KernelTex, ivec2(k * 3 + 0, ky), 0).rgb, c);
+        acc.g += dot(texelFetch(KernelTex, ivec2(k * 3 + 1, ky), 0).rgb, c);
+        acc.b += dot(texelFetch(KernelTex, ivec2(k * 3 + 2, ky), 0).rgb, c);
+    }
+    if (uNoiseLines > 0)
+    {
+        int nl = int(hash32(uint(row) * 7919u + uFrame * 104729u) % uint(uNoiseLines));
+        acc += uNoise * texelFetch(NoiseTex, ivec2(o, nl), 0).rgb;
+    }
+    oColor = vec4(clamp(acc, 0.0, 1.0), 1.0);   // the TV clips
+}
+)";
+
 const char* kCrtFS = R"(#version 140
 
 uniform sampler2DArray YiqTex;     // prepass: prefiltered luma, I, Q per DS pixel (nearest)
 uniform sampler2DArray GlowTex;    // prepass: glow per DS pixel, linear light (bilinear)
+uniform sampler2DArray DecodedTex; // video signal chain: decoded R'G'B' lines (bilinear), when uSignal
+uniform bool uSignal;
+uniform float uSigPixelClocks, uSigStep, uSigHalfStep, uSigWidth, uSigTexWidth;
 uniform float uCrtWarp;            // curvature 0..1
 uniform float uCrtLumaBlur;        // luma Gaussian sigma, DS px
 uniform float uCrtChromaBlur;      // chroma Gaussian sigma, DS px
@@ -366,19 +431,30 @@ void main()
     for (int r = 0; r < 2; r++)
     {
         int row = clamp(int(r0) + r, 0, 191);
-        float Y = 0.0;
-        vec2 IQ = vec2(0.0);
-        for (int k = 0; k < 9; k++)
+        vec3 rgb;
+        if (uSignal)
         {
-            vec3 t = texelFetch(YiqTex, ivec3(clamp(x0 + k, 0, 255), row, layer), 0).rgb;
-            Y += t.x * wl[k];
-            IQ += t.yz * wc[k];
+            // the decoded line, between its samples: sample o sits at (o * step + step / 2 + 0.5)
+            // master clocks into the line, a DS pixel being uSigPixelClocks
+            float of = clamp((p.x * uSigPixelClocks - uSigHalfStep - 0.5) / uSigStep, 0.0, uSigWidth - 1.0);
+            rgb = texture(DecodedTex, vec3((of + 0.5) / uSigTexWidth, (float(row) + 0.5) / 192.0, fTexcoord.z)).rgb;
         }
-        Y /= sl;
-        IQ /= sc;
-        vec3 rgb = clamp(vec3(Y + 0.956 * IQ.x + 0.621 * IQ.y,
-                              Y - 0.272 * IQ.x - 0.647 * IQ.y,
-                              Y - 1.106 * IQ.x + 1.703 * IQ.y), 0.0, 1.0);
+        else
+        {
+            float Y = 0.0;
+            vec2 IQ = vec2(0.0);
+            for (int k = 0; k < 9; k++)
+            {
+                vec3 t = texelFetch(YiqTex, ivec3(clamp(x0 + k, 0, 255), row, layer), 0).rgb;
+                Y += t.x * wl[k];
+                IQ += t.yz * wc[k];
+            }
+            Y /= sl;
+            IQ /= sc;
+            rgb = clamp(vec3(Y + 0.956 * IQ.x + 0.621 * IQ.y,
+                             Y - 0.272 * IQ.x - 0.647 * IQ.y,
+                             Y - 1.106 * IQ.x + 1.703 * IQ.y), 0.0, 1.0);
+        }
         col += beam(pow(rgb, vec3(2.4)), r == 0 ? f : 1.0 - f);
     }
     col *= 1.32;

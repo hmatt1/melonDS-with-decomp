@@ -93,6 +93,9 @@ ScreenPanel::ScreenPanel(QWidget* parent) : QWidget(parent)
         gridParam[i] = (float)mainWindow->getWindowConfig().GetDouble(kGridParams[i].key);
     for (int i = 0; i < kNumCrtParams; i++)
         crtParam[i] = (float)mainWindow->getWindowConfig().GetDouble(kCrtParams[i].key);
+    crtSignal = mainWindow->getWindowConfig().GetInt("CrtSignal");
+    crtCable = mainWindow->getWindowConfig().GetInt("CrtCable");
+    crtDecoder = mainWindow->getWindowConfig().GetInt("CrtDecoder");
     subpixelLayout = mainWindow->getWindowConfig().GetInt("SubpixelLayout");
     subpixelSample = mainWindow->getWindowConfig().GetBool("SubpixelSample");
     blurReach[0] = mainWindow->getWindowConfig().GetInt("BlurReachX");
@@ -150,6 +153,17 @@ void ScreenPanel::setFilter(bool filter)
 void ScreenPanel::setScreenFilter(int mode)
 {
     this->screenFilter = std::clamp(mode, 0, (int)screenFilter_MAX - 1);
+}
+
+Ntsc::Settings ScreenPanel::signalSettings() const
+{
+    Ntsc::Settings s;
+    s.console = std::clamp((int)crtSignal, 0, (int)Ntsc::Console_Count - 1);
+    s.cable = std::clamp((int)crtCable, 0, (int)Ntsc::Cable_Count - 1);
+    s.decoder = std::clamp((int)crtDecoder, 0, (int)Ntsc::Decoder_Count - 1);
+    s.colour = crtParam[crt_Colour]; s.tint = crtParam[crt_Tint]; s.sharpness = crtParam[crt_Sharpness];
+    s.noise = crtParam[crt_Noise]; s.ghost = crtParam[crt_Ghost]; s.ghostDelay = crtParam[crt_GhostDelay];
+    return s;
 }
 
 int screenFilterSetting(Config::Table& localCfg)
@@ -845,7 +859,7 @@ void ScreenPanelNative::paintEvent(QPaintEvent* event)
 
         QRect screenrc(0, 0, 256, 192);
 
-        static_assert(kNumGridParams == 9 && kNumCrtParams == 10, "the soft filter params below are filled by index");
+        static_assert(kNumGridParams == 9 && kNumCrtParams == crt_Count, "the soft filter params below are filled by index");
         const int mode = screenFilter;     // Off: the plain picture
         const bool useSoft = mode != screenFilter_Off;
         if (useSoft)
@@ -884,11 +898,13 @@ void ScreenPanelNative::paintEvent(QPaintEvent* event)
             else
             {
                 if (!crtFilter) crtFilter = std::make_unique<SoftCrtFilter>(threads);
-                SoftCrtParams p;   // kCrtParams order
-                p.curvature = crtParam[0]; p.lumaBlur = crtParam[1]; p.chromaBlur = crtParam[2];
-                p.beamMin = crtParam[3]; p.beamMax = crtParam[4];
-                p.mask = crtParam[5]; p.maskPx = crtParam[6];
-                p.glow = crtParam[7]; p.vignette = crtParam[8]; p.boost = crtParam[9];
+                SoftCrtParams p;
+                p.curvature = crtParam[crt_Curvature]; p.lumaBlur = crtParam[crt_LumaBlur]; p.chromaBlur = crtParam[crt_ChromaBlur];
+                p.beamMin = crtParam[crt_BeamMin]; p.beamMax = crtParam[crt_BeamMax];
+                p.mask = crtParam[crt_Mask]; p.maskPx = crtParam[crt_MaskPx];
+                p.glow = crtParam[crt_Glow]; p.vignette = crtParam[crt_Vignette]; p.boost = crtParam[crt_Boost];
+                p.signal = signalSettings();
+                p.frame = emuInstance->getNDS() ? emuInstance->getNDS()->NumFrames : 0;
                 crtFilter->process(src, dst, (int)filtered[0].bytesPerLine(), n, p, layers);
             }
         }
@@ -1046,8 +1062,8 @@ void ScreenPanelGL::initOpenGL()
     glUniform1i(glGetUniformLocation(crtProgram, "GlowTex"), 2);
     crtScreenSizeULoc = glGetUniformLocation(crtProgram, "uScreenSize");
     crtTransformULoc = glGetUniformLocation(crtProgram, "uTransform");
-    for (int i = 0; i < kNumCrtParams; i++)
-        crtParamULoc[i] = glGetUniformLocation(crtProgram, kCrtParams[i].uniform);
+    for (int i = 0; i < kNumCrtParams; i++)   // the signal chain's settings have no uniform
+        crtParamULoc[i] = kCrtParams[i].uniform ? glGetUniformLocation(crtProgram, kCrtParams[i].uniform) : -1;
 
     // the prepass targets: one layer per screen. The signal is read texel by texel (nearest);
     // the glow is read bilinearly between DS pixel centres
@@ -1065,6 +1081,51 @@ void ScreenPanelGL::initOpenGL()
         glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA16F, 256, 192, 2, 0, GL_RGBA, GL_FLOAT, nullptr);
     }
     glGenFramebuffers(1, &crtFramebuffer);
+
+    // video signal chain: the decode pass, and the main pass's uniforms for reading its lines
+    OpenGL::CompileVertexFragmentProgram(crtDecodeProgram,
+                                         kCrtPrepassVS, kCrtDecodeFS,
+                                         "CrtDecodeShader",
+                                         {},
+                                         {{"oColor", 0}});
+    glUseProgram(crtDecodeProgram);
+    glUniform1i(glGetUniformLocation(crtDecodeProgram, "ScreenTex"), 0);
+    glUniform1i(glGetUniformLocation(crtDecodeProgram, "KernelTex"), 4);
+    glUniform1i(glGetUniformLocation(crtDecodeProgram, "NoiseTex"), 5);
+    {
+        auto u = [this](const char* n) { return glGetUniformLocation(crtDecodeProgram, n); };
+        crtDecLoc = {u("uLayer"), u("uPixelClocks"), u("uOutStep"), u("uOutPhases"), u("uTaps"), u("uTapLeft"),
+                     u("uCarrier"), u("uLineStep"), u("uFramePhase"), u("uLinePhaseOf"), u("uBias"), u("uNoise"),
+                     u("uNoiseLines"), u("uFrame")};
+    }
+    glUseProgram(crtProgram);
+    glUniform1i(glGetUniformLocation(crtProgram, "DecodedTex"), 3);
+    crtSignalULoc = glGetUniformLocation(crtProgram, "uSignal");
+    crtSigPixelClocksULoc = glGetUniformLocation(crtProgram, "uSigPixelClocks");
+    crtSigStepULoc = glGetUniformLocation(crtProgram, "uSigStep");
+    crtSigHalfStepULoc = glGetUniformLocation(crtProgram, "uSigHalfStep");
+    crtSigWidthULoc = glGetUniformLocation(crtProgram, "uSigWidth");
+    crtSigTexWidthULoc = glGetUniformLocation(crtProgram, "uSigTexWidth");
+
+    GLuint decTex[3];
+    glGenTextures(3, decTex);
+    crtDecodedTexture = decTex[0]; crtKernelTexture = decTex[1]; crtNoiseTexture = decTex[2];
+    glBindTexture(GL_TEXTURE_2D_ARRAY, crtDecodedTexture);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA16F, kDecodedWidth, 192, 2, 0, GL_RGBA, GL_FLOAT, nullptr);
+    for (GLuint t : {crtKernelTexture, crtNoiseTexture})
+    {
+        glBindTexture(GL_TEXTURE_2D, t);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    }
+    glGenFramebuffers(1, &crtDecodeFramebuffer);
+    crtChainValid = false;
 
     const float vertices[] =
     {
@@ -1173,6 +1234,12 @@ void ScreenPanelGL::deinitOpenGL()
     glDeleteTextures(1, &crtGlowTexture);
     glDeleteProgram(crtPrepassProgram);
     glDeleteProgram(crtProgram);
+    glDeleteProgram(crtDecodeProgram);
+    glDeleteFramebuffers(1, &crtDecodeFramebuffer);
+    glDeleteTextures(1, &crtDecodedTexture);
+    glDeleteTextures(1, &crtKernelTexture);
+    glDeleteTextures(1, &crtNoiseTexture);
+    crtChainValid = false;
 
     for (const auto& [key, tex] : osdTextures)
     {
@@ -1262,6 +1329,108 @@ void ScreenPanelGL::drawCrtPrepass(unsigned layers)
     for (int b = 0; b < 2; b++) glColorMaski(b, mask[b][0], mask[b][1], mask[b][2], mask[b][3]);
 }
 
+// a texture unit's binding, put back when this goes out of scope (the OpenGL renderer shares the
+// context and doesn't always rebind what it reads)
+struct GLBindingKeeper
+{
+    GLenum unit, target;
+    GLint prev = 0;
+    GLBindingKeeper(GLenum u, GLenum t, GLenum query) : unit(u), target(t)
+    {
+        glActiveTexture(unit);
+        glGetIntegerv(query, &prev);
+    }
+    ~GLBindingKeeper()
+    {
+        glActiveTexture(unit);
+        glBindTexture(target, (GLuint)prev);
+        glActiveTexture(GL_TEXTURE0);
+    }
+};
+
+// The signal chain's kernel and decoded noise, as textures; again only when the settings changed
+void ScreenPanelGL::uploadCrtChain()
+{
+    if (crtChainValid && crtChainUploaded == crtChain.generation()) return;
+    crtChainUploaded = crtChain.generation();
+    crtChainValid = true;
+
+    // kernel: one RGBA texel per (tap, output channel) holding its weights for input R, G, B
+    const int taps = crtChain.taps(), rows = crtChain.linePhases() * crtChain.outPhases();
+    const std::vector<float>& wt = crtChain.weights();
+    std::vector<float> tex((size_t)taps * 3 * rows * 4, 0.f);
+    for (int r = 0; r < rows; r++)
+        for (int k = 0; k < taps; k++)
+            for (int co = 0; co < 3; co++)
+                for (int ci = 0; ci < 3; ci++)
+                    tex[(((size_t)r * taps + k) * 3 + co) * 4 + ci] = wt[((size_t)r * taps + k) * 9 + co * 3 + ci];
+    {
+        GLBindingKeeper keep(GL_TEXTURE4, GL_TEXTURE_2D, GL_TEXTURE_BINDING_2D);
+        glBindTexture(GL_TEXTURE_2D, crtKernelTexture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, taps * 3, rows, 0, GL_RGBA, GL_FLOAT, tex.data());
+    }
+
+    // decoded noise lines (RF), or one empty line
+    const int nl = std::max(crtChain.noiseLines(), 1), ow = crtChain.outWidth();
+    std::vector<float> nz((size_t)ow * nl * 4, 0.f);
+    if (crtChain.noiseLines())
+        for (size_t i = 0; i < (size_t)ow * nl; i++)
+            for (int c = 0; c < 3; c++) nz[i * 4 + c] = crtChain.noise()[i * 3 + c];
+    {
+        GLBindingKeeper keep(GL_TEXTURE5, GL_TEXTURE_2D, GL_TEXTURE_BINDING_2D);
+        glBindTexture(GL_TEXTURE_2D, crtNoiseTexture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, ow, nl, 0, GL_RGBA, GL_FLOAT, nz.data());
+    }
+}
+
+// The signal chain's decode pass: each shown screen's lines as the TV decodes them, into a layer of
+// crtDecodedTexture. The screen texture is bound on unit 0 and a vertex array is bound.
+void ScreenPanelGL::drawCrtDecode(unsigned layers, uint32_t frame)
+{
+    GLBindingKeeper keepK(GL_TEXTURE4, GL_TEXTURE_2D, GL_TEXTURE_BINDING_2D);
+    GLBindingKeeper keepN(GL_TEXTURE5, GL_TEXTURE_2D, GL_TEXTURE_BINDING_2D);
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, crtKernelTexture);
+    glActiveTexture(GL_TEXTURE5);
+    glBindTexture(GL_TEXTURE_2D, crtNoiseTexture);
+    glActiveTexture(GL_TEXTURE0);
+
+    const Ntsc::Timing& tm = Ntsc::timing(crtChain.settings().console);
+    glBindFramebuffer(GL_FRAMEBUFFER, crtDecodeFramebuffer);
+    glViewport(0, 0, crtChain.outWidth(), 192);
+    glUseProgram(crtDecodeProgram);
+    const GLenum buf = GL_COLOR_ATTACHMENT0;
+    glDrawBuffers(1, &buf);
+    glUniform1i(crtDecLoc.pixelClocks, tm.pixelClocks);
+    glUniform1i(crtDecLoc.outStep, tm.outStep);
+    glUniform1i(crtDecLoc.outPhases, crtChain.outPhases());
+    glUniform1i(crtDecLoc.taps, crtChain.taps());
+    glUniform1i(crtDecLoc.tapLeft, crtChain.tapLeft());
+    glUniform1i(crtDecLoc.carrier, crtChain.carrierClocks());
+    glUniform1i(crtDecLoc.lineStep, crtChain.lineClockStep());
+    glUniform1i(crtDecLoc.framePhase, crtChain.frameClockPhase(frame));
+    GLint phaseOf[16] = {};
+    for (int c = 0; c < crtChain.carrierClocks() && c < 16; c++) phaseOf[c] = crtChain.linePhaseOfClock(c);
+    glUniform1iv(crtDecLoc.linePhaseOf, 16, phaseOf);
+    glUniform3fv(crtDecLoc.bias, 1, crtChain.bias());
+    glUniform1f(crtDecLoc.noise, crtChain.settings().noise);
+    glUniform1i(crtDecLoc.noiseLines, crtChain.settings().noise > 0 ? crtChain.noiseLines() : 0);
+    glUniform1ui(crtDecLoc.frame, frame);
+
+    // the renderer's write masks, opened for this pass and put back after (see drawCrtPrepass)
+    GLboolean mask[2][4];
+    for (int b = 0; b < 2; b++) glGetBooleani_v(GL_COLOR_WRITEMASK, b, mask[b]);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    for (int l = 0; l < 2; l++)
+    {
+        if (!(layers & (1u << l))) continue;
+        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, crtDecodedTexture, 0, l);
+        glUniform1f(crtDecLoc.layer, (float)l);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
+    for (int b = 0; b < 2; b++) glColorMaski(b, mask[b][0], mask[b][1], mask[b][2], mask[b][3]);
+}
+
 void ScreenPanelGL::drawScreen()
 {
     if (!glContext) return;
@@ -1327,6 +1496,14 @@ void ScreenPanelGL::drawScreen()
             unsigned layers = 0;   // only the screens the layout shows
             for (int i = 0; i < numScreens; i++) layers |= 1u << screenKind[i];
             drawCrtPrepass(layers);
+            // the video signal chain, when a console is chosen: decode the shown screens' lines
+            crtChain.build(signalSettings());   // cheap when nothing changed
+            const bool chain = crtChain.active();
+            if (chain)
+            {
+                uploadCrtChain();
+                drawCrtDecode(layers, nds->NumFrames);
+            }
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             glViewport(0, 0, w, h);
 
@@ -1334,13 +1511,24 @@ void ScreenPanelGL::drawScreen()
             glUniform2f(crtScreenSizeULoc, w / factor, h / factor);
             for (int i = 0; i < kNumCrtParams; i++)
                 glUniform1f(crtParamULoc[i], crtParam[i]);
+            glUniform1i(crtSignalULoc, chain ? 1 : 0);
+            if (chain)
+            {
+                const Ntsc::Timing& tm = Ntsc::timing(crtChain.settings().console);
+                glUniform1f(crtSigPixelClocksULoc, (float)tm.pixelClocks);
+                glUniform1f(crtSigStepULoc, (float)tm.outStep);
+                glUniform1f(crtSigHalfStepULoc, (float)(tm.outStep / 2));
+                glUniform1f(crtSigWidthULoc, (float)crtChain.outWidth());
+                glUniform1f(crtSigTexWidthULoc, (float)kDecodedWidth);
+            }
             // the OpenGL renderer shares this context, and its final pass reads array textures
             // on units 1 and 2 that it doesn't always rebind: put back what was there after drawing
-            for (int u = 0; u < 2; u++)
+            // (unit 3, the decoded lines, likewise)
+            for (int u = 0; u < 3; u++)
             {
                 glActiveTexture(GL_TEXTURE1 + u);
                 glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &crtSavedBinding[u]);
-                glBindTexture(GL_TEXTURE_2D_ARRAY, u ? crtGlowTexture : crtYiqTexture);
+                glBindTexture(GL_TEXTURE_2D_ARRAY, u == 0 ? crtYiqTexture : u == 1 ? crtGlowTexture : crtDecodedTexture);
             }
             glActiveTexture(GL_TEXTURE0);
             transformLoc = crtTransformULoc;
@@ -1366,7 +1554,7 @@ void ScreenPanelGL::drawScreen()
         }
         if (mode == screenFilter_CRT)
         {
-            for (int u = 0; u < 2; u++)
+            for (int u = 0; u < 3; u++)
             {
                 glActiveTexture(GL_TEXTURE1 + u);
                 glBindTexture(GL_TEXTURE_2D_ARRAY, (GLuint)crtSavedBinding[u]);

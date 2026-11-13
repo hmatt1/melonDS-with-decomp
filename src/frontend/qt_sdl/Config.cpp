@@ -53,6 +53,7 @@ DefaultList<int> DefaultInts =
     {"Instance*.PixelGridThreads", 0},    // software screen filters (LCD, CRT): 0 = automatic
     {"Instance*.ScreenFilterMode", -1},  // Off / LCD / CRT; -1 = never chosen, follow PixelGrid
     {"Instance*.ScreenFilterLast", 1},   // the filter Alt+F turns back on
+    {"Instance*.Window*.CrtCable", 2},     // CRT video signal cable: composite (console: CrtSignal, 0 = off)
     {"Instance*.Window*.SubpixelLayout", 3},   // DSi XL
     {"Instance*.Window*.BlurReachY", 1},
     {"Instance*.Joystick", -1},
@@ -154,6 +155,8 @@ DefaultList<double> DefaultDoubles =
     {"Instance*.Window*.CrtGlow", 0.15},
     {"Instance*.Window*.CrtVignette", 0.22},
     {"Instance*.Window*.CrtBoost", 1.25},
+    {"Instance*.Window*.CrtColour", 1.0},      // video signal: the TV's controls, then RF
+    {"Instance*.Window*.CrtGhostDelay", 1.0},
 };
 
 LegacyEntry LegacyFile[] =

@@ -7,7 +7,10 @@
 #ifndef FILTERSETTINGSWINDOW_H
 #define FILTERSETTINGSWINDOW_H
 
+#include <array>
 #include <functional>
+#include <utility>
+#include <vector>
 
 #include <QCloseEvent>
 #include <QJsonObject>
@@ -18,6 +21,7 @@
 
 class QCheckBox;
 class QGridLayout;
+class QGroupBox;
 
 namespace Config { class Table; }
 
@@ -32,6 +36,9 @@ public:
     void setActive(bool on);
 
     QCheckBox* useBox = nullptr;
+    // each parameter's label, slider and value, to grey out the ones that don't apply
+    std::vector<std::array<QWidget*, 3>> rows;
+    void setParamEnabled(int i, bool on) { if (i >= 0 && i < (int)rows.size()) for (QWidget* w : rows[i]) if (w) w->setEnabled(on); }
 
 protected:
     void closeEvent(QCloseEvent* event) override
@@ -62,6 +69,10 @@ struct FilterWindowSpec
     // adds the filter's own controls: next to slider i at (paramRow + i, 3), or in whole rows
     // from `row` on (which it moves past). May be empty.
     std::function<FilterExtras(QWidget* win, QGridLayout* grid, int paramRow, int& row)> addExtras;
+    // adds controls at the top of a section's box, in rows from `row` on (which it moves past)
+    std::function<void(const char* section, QGroupBox* box, QGridLayout* grid, int& row)> sectionTop;
+    // read-only presets listed after Default: name, settings (a missing key means its default)
+    std::vector<std::pair<QString, QJsonObject>> builtins;
 };
 
 FilterWindow* buildFilterWindow(QWidget* parent, Config::Table& windowCfg, const FilterWindowSpec& spec);

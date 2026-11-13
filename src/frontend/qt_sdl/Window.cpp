@@ -17,6 +17,7 @@
 */
 
 #include <tuple>
+#include <QGroupBox>
 #include "Trace.h"
 #include "NDS.h"
 #include <stdlib.h>
@@ -824,7 +825,147 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
             crt.note = "Made for whole-number zooms (View > Screen sizing > Force integer scaling): "
                        "uneven ones give the scanlines a wavy pattern. The defaults suit 3x; at 6x or "
                        "more, a 2 px mask width keeps one triad per DS pixel.";
+
+            // video signal: which console's encoder and which cable feed the TV. The combo boxes
+            // go at the top of the "Video signal" box; the sliders that don't apply grey out
+            struct SignalUi { QComboBox* console = nullptr; QComboBox* cable = nullptr; QComboBox* decoder = nullptr; };
+            auto sigUi = std::make_shared<SignalUi>();
+            auto updateSignalRows = [this, sigUi]()
+            {
+                if (!crtWindow || !sigUi->console) return;
+                const int con = sigUi->console->currentIndex(), cab = sigUi->cable->currentIndex();
+                const bool chain = con != Ntsc::Console_Off;
+                const bool encoded = chain && cab != Ntsc::Cable_RGB;
+                const bool rf = encoded && cab == Ntsc::Cable_RF;
+                sigUi->cable->setEnabled(chain);
+                sigUi->decoder->setEnabled(encoded);
+                crtWindow->setParamEnabled(crt_LumaBlur, !chain);
+                crtWindow->setParamEnabled(crt_ChromaBlur, !chain);
+                for (int p : {crt_Colour, crt_Tint, crt_Sharpness}) crtWindow->setParamEnabled(p, encoded);
+                for (int p : {crt_Noise, crt_Ghost, crt_GhostDelay}) crtWindow->setParamEnabled(p, rf);
+            };
+            crt.sectionTop = [this, sigUi, updateSignalRows](const char* section, QGroupBox* box, QGridLayout* grid, int& row)
+            {
+                if (strcmp(section, "Video signal") != 0) return;
+                auto* conLabel = new QLabel("Console", box);
+                auto* con = new QComboBox(box);
+                con->addItems({"Off (simple blur)", "Mega Drive, 320 wide (H40)", "Mega Drive, 256 wide (H32)", "SNES"});
+                const QString conTip =
+                    "Which console's video encoder sends the picture to the TV, at that console's timing.\n\n"
+                    "The DS picture is put through the signal the way that console makes it: each pixel\n"
+                    "held for its clock, the colour carrier at its exact frequency and phase. Everything\n"
+                    "you see (colour bleed, rainbows, dithering that blends) comes out of that signal and\n"
+                    "how the TV decodes it, not from effect settings.\n\n"
+                    "Mega Drive, 320 wide: 1.875 pixels per colour cycle, the same on every line, so\n"
+                    "1-pixel dithering sits on the colour carrier: it blends, with still rainbows.\n"
+                    "Mega Drive, 256 wide and SNES: 1.5 pixels per colour cycle. The SNES shifts the\n"
+                    "carrier a third of a cycle each line, so its artifacts run diagonally.\n\n"
+                    "Off: no signal; Picture blur and Colour bleed set a simple sideways blur.\n\n"
+                    "Default: Off";
+                conLabel->setToolTip(conTip); con->setToolTip(conTip);
+                auto* cabLabel = new QLabel("Cable", box);
+                auto* cab = new QComboBox(box);
+                cab->addItems({"RGB", "S-Video", "Composite", "RF"});
+                const QString cabTip =
+                    "How the signal gets to the TV.\n\n"
+                    "RGB: no encoding at all, the sharpest picture.\n"
+                    "S-Video: brightness and colour on separate wires: colour is softer than brightness,\n"
+                    "but there are no rainbows.\n"
+                    "Composite: both on one wire; the TV has to pull them apart, so fine detail turns into\n"
+                    "colour (rainbows) and colour leaks into brightness.\n"
+                    "RF: composite through an aerial lead and tuner: a little softer, and it can add\n"
+                    "noise and a ghost (the RF sliders).\n\n"
+                    "Default: Composite";
+                cabLabel->setToolTip(cabTip); cab->setToolTip(cabTip);
+                {
+                    QSignalBlocker b1(con), b2(cab);
+                    con->setCurrentIndex(std::clamp(windowCfg.GetInt("CrtSignal"), 0, Ntsc::Console_Count - 1));
+                    cab->setCurrentIndex(std::clamp(windowCfg.GetInt("CrtCable"), 0, Ntsc::Cable_Count - 1));
+                }
+                auto* decLabel = new QLabel("TV decoder", box);
+                auto* dec = new QComboBox(box);
+                dec->addItems({"Standard (NTSC)", "Sony, US TV (CXA2025AS)", "Sony, Japanese TV (CXA2025AS)"});
+                const QString decTip =
+                    "How the TV turns the colour signal back into colour.\n\n"
+                    "Standard: the NTSC standard's colour axes, so colours come out as they went in.\n"
+                    "Sony US / Japanese: the axes of Sony's TV decoder IC from its datasheet. US sets\n"
+                    "pushed red and warmed skin tones (reds stronger, yellows toward orange); the\n"
+                    "Japanese setting is milder. Most TVs of the time did something like this.\n\n"
+                    "Not used with RGB.\n\nDefault: Standard (NTSC)";
+                decLabel->setToolTip(decTip); dec->setToolTip(decTip);
+                {
+                    QSignalBlocker b3(dec);
+                    dec->setCurrentIndex(std::clamp(windowCfg.GetInt("CrtDecoder"), 0, Ntsc::Decoder_Count - 1));
+                }
+                connect(dec, &QComboBox::currentIndexChanged, this, [this](int i)
+                {
+                    windowCfg.SetInt("CrtDecoder", i);
+                    if (panel) panel->crtDecoder = i;
+                });
+                connect(con, &QComboBox::currentIndexChanged, this, [this, updateSignalRows](int i)
+                {
+                    windowCfg.SetInt("CrtSignal", i);
+                    if (panel) panel->crtSignal = i;
+                    updateSignalRows();
+                });
+                connect(cab, &QComboBox::currentIndexChanged, this, [this, updateSignalRows](int i)
+                {
+                    windowCfg.SetInt("CrtCable", i);
+                    if (panel) panel->crtCable = i;
+                    updateSignalRows();
+                });
+                grid->addWidget(conLabel, row, 0);
+                grid->addWidget(con, row++, 1, 1, 2);
+                grid->addWidget(cabLabel, row, 0);
+                grid->addWidget(cab, row++, 1, 1, 2);
+                grid->addWidget(decLabel, row, 0);
+                grid->addWidget(dec, row++, 1, 1, 2);
+                sigUi->console = con;
+                sigUi->cable = cab;
+                sigUi->decoder = dec;
+            };
+            crt.addExtras = [sigUi](QWidget*, QGridLayout*, int, int&)
+            {
+                FilterExtras ex;
+                ex.toJson = [sigUi]()
+                {
+                    QJsonObject o;
+                    o["CrtSignal"] = sigUi->console->currentIndex();
+                    o["CrtCable"] = sigUi->cable->currentIndex();
+                    o["CrtDecoder"] = sigUi->decoder->currentIndex();
+                    return o;
+                };
+                ex.fromJson = [sigUi](const QJsonObject& o)
+                {
+                    sigUi->console->setCurrentIndex(std::clamp(o.value("CrtSignal").toInt(0), 0, Ntsc::Console_Count - 1));
+                    sigUi->cable->setCurrentIndex(std::clamp(o.value("CrtCable").toInt(Ntsc::Cable_Composite), 0, Ntsc::Cable_Count - 1));
+                    sigUi->decoder->setCurrentIndex(std::clamp(o.value("CrtDecoder").toInt(Ntsc::Decoder_Standard), 0, Ntsc::Decoder_Count - 1));
+                };
+                return ex;
+            };
+
+            // built-in presets: a console's signal through a fitting TV. A key not listed keeps
+            // its default (Default's tube settings suit a consumer TV at 3x)
+            auto preset = [](std::initializer_list<std::pair<const char*, double>> kv)
+            {
+                QJsonObject o;
+                for (const auto& [k, v] : kv) o[k] = v;
+                return o;
+            };
+            crt.builtins = {
+                {"Mega Drive 2 / Genesis - composite", preset({{"CrtSignal", Ntsc::Console_MDH40}, {"CrtCable", Ntsc::Cable_Composite}})},
+                {"Mega Drive 2 / Genesis - RF", preset({{"CrtSignal", Ntsc::Console_MDH40}, {"CrtCable", Ntsc::Cable_RF},
+                                                        {"CrtNoise", 0.15}, {"CrtGhost", 0.08}, {"CrtGhostDelay", 1.2}})},
+                {"SNES - S-Video", preset({{"CrtSignal", Ntsc::Console_SNES}, {"CrtCable", Ntsc::Cable_SVideo}})},
+                {"SNES - composite", preset({{"CrtSignal", Ntsc::Console_SNES}, {"CrtCable", Ntsc::Cable_Composite}})},
+                {"SNES - composite, US TV", preset({{"CrtSignal", Ntsc::Console_SNES}, {"CrtCable", Ntsc::Cable_Composite},
+                                                    {"CrtDecoder", Ntsc::Decoder_SonyUS}})},
+                {"Sony PVM - RGB", preset({{"CrtSignal", Ntsc::Console_SNES}, {"CrtCable", Ntsc::Cable_RGB},
+                                           {"CrtCurvature", 0.0}, {"CrtBeamMin", 0.16}, {"CrtBeamMax", 0.28},
+                                           {"CrtMask", 0.7}, {"CrtGlow", 0.05}, {"CrtVignette", 0.05}, {"CrtBoost", 1.35}})},
+            };
             crtWindow = buildFilterWindow(this, windowCfg, crt);
+            updateSignalRows();
         }
 
         connect(actLcdSettings, &QAction::triggered, this, [this]()

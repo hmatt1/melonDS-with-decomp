@@ -9,6 +9,7 @@ set(SOURCES_QT_SDL
     SoftFilterPool.cpp
     SoftLcdFilter.cpp
     SoftCrtFilter.cpp
+    NtscSignal.cpp
     FilterSettingsWindow.cpp
     Window.cpp
     EmuInstance.cpp

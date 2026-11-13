@@ -164,6 +164,8 @@ void SoftCrtFilter::dsStage(Layer& L, const uint32_t* src)
             uint32_t c = in[x];
             float r = ((c >> 16) & 255) * (1.f / 255.f), g = ((c >> 8) & 255) * (1.f / 255.f), b = (c & 255) * (1.f / 255.f);
             yRaw[x] = 0.299f * r + 0.587f * g + 0.114f * b;
+            float* rgbOut = &L.rgb[((size_t)y * kW + x) * 3];
+            rgbOut[0] = r; rgbOut[1] = g; rgbOut[2] = b;
             row[(x + kPad) * 3 + 1] = 0.596f * r - 0.274f * g - 0.322f * b;
             row[(x + kPad) * 3 + 2] = 0.211f * r - 0.523f * g + 0.312f * b;
         }
@@ -221,10 +223,44 @@ void SoftCrtFilter::rowStage(Layer& L, int y0, int y1)
 {
     const int P = t.phases, SW = kW * P;
     const bool curved = t.p.curvature > 0.f;
+    auto store = [&](uint16_t* o, const float* rgb)
+    {
+        if (curved)   // 8-bit levels, already as offsets into the beam table
+            for (int c = 0; c < 3; c++)
+                o[c] = (uint16_t)((int)(std::min(std::max(rgb[c], 0.f), 1.f) * (kBeamLevels - 1) + 0.5f) * (kBeamSteps + 1));
+        else
+            for (int c = 0; c < 3; c++)
+                o[c] = (uint16_t)(std::min(std::max(rgb[c], 0.f), 1.f) * (kLevels - 1) + 0.5f);
+    };
+    // the video signal chain: the row as the TV decodes it, read at every phase column (linear
+    // between decoded samples, as the shader's filtered read); the TV clips to 0..1
+    thread_local std::vector<float> decoded;
+    const bool chain = signal.active();
+    const Ntsc::Timing& tm = Ntsc::timing(t.p.signal.console);
     for (int y = y0; y < y1; y++)
     {
         const float* row = &L.yiq[(size_t)y * kRowW * 3];
         uint16_t* sig = &L.sig[(size_t)y * SW * 3];
+        if (chain)
+        {
+            const int OW = signal.outWidth();
+            decoded.resize((size_t)OW * 3);
+            signal.decodeLine(&L.rgb[(size_t)y * kW * 3], decoded.data(), y, frame);
+            for (int col = 0; col < SW; col++)
+            {
+                // decoded sample o sits at (o * step + step / 2 + 0.5) / pixel clocks, in DS pixels
+                float pos = (col + 0.5f) / P;
+                float of = (pos * tm.pixelClocks - tm.outStep / 2 - 0.5f) / tm.outStep;
+                of = std::clamp(of, 0.f, (float)(OW - 1));
+                int o0 = std::min((int)of, OW - 2);
+                float fr = of - o0;
+                float rgb[3];
+                for (int c = 0; c < 3; c++)
+                    rgb[c] = decoded[o0 * 3 + c] + (decoded[(o0 + 1) * 3 + c] - decoded[o0 * 3 + c]) * fr;
+                store(sig + col * 3, rgb);
+            }
+        }
+        else
         for (int x = 0; x < kW; x++)
         {
             const float* tap = row + x * 3;   // the DS pixel 4 to the left, padded
@@ -242,13 +278,7 @@ void SoftCrtFilter::rowStage(Layer& L, int y0, int y1)
                 float rgb[3] = {Y + 0.956f * I + 0.621f * Q,
                                 Y - 0.272f * I - 0.647f * Q,
                                 Y - 1.106f * I + 1.703f * Q};
-                uint16_t* o = sig + (x * P + i) * 3;
-                if (curved)   // 8-bit levels, already as offsets into the beam table
-                    for (int c = 0; c < 3; c++)
-                        o[c] = (uint16_t)((int)(std::min(std::max(rgb[c], 0.f), 1.f) * (kBeamLevels - 1) + 0.5f) * (kBeamSteps + 1));
-                else
-                    for (int c = 0; c < 3; c++)
-                        o[c] = (uint16_t)(std::min(std::max(rgb[c], 0.f), 1.f) * (kLevels - 1) + 0.5f);
+                store(sig + (x * P + i) * 3, rgb);
             }
         }
 
@@ -377,6 +407,8 @@ void SoftCrtFilter::process(const uint32_t* const src[2], uint32_t* const dst[2]
 
     if (!t.valid || t.n != n || !(t.p == p))
         makeTables(n, p);
+    signal.build(p.signal);   // cheap when nothing changed
+    frame = p.frame;
 
     const int H = kH * n;
     const bool curved = p.curvature > 0.f;
@@ -384,6 +416,7 @@ void SoftCrtFilter::process(const uint32_t* const src[2], uint32_t* const dst[2]
     {
         Layer& L = layer[list[i]];
         L.yiq.resize((size_t)kH * kRowW * 3);
+        L.rgb.resize((size_t)kH * kW * 3);
         L.glow.resize((size_t)kW * kH * 3);
         L.sig.resize((size_t)kH * kW * t.phases * 3);
         L.glowH.resize((size_t)kH * kW * t.phases * 3);

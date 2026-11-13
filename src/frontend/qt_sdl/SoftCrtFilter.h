@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "SoftFilterPool.h"
+#include "NtscSignal.h"
 
 struct SoftCrtParams
 {
@@ -43,12 +44,14 @@ struct SoftCrtParams
     float glow = 0.15f;
     float vignette = 0.22f;
     float boost = 1.25f;
+    Ntsc::Settings signal;       // video signal chain; console Off = the YIQ blur above
+    uint32_t frame = 0;          // the emulator's frame, for the carrier phase (not compared)
 
     bool operator==(const SoftCrtParams& o) const
     {
         return curvature == o.curvature && lumaBlur == o.lumaBlur && chromaBlur == o.chromaBlur &&
                beamMin == o.beamMin && beamMax == o.beamMax && mask == o.mask && maskPx == o.maskPx &&
-               glow == o.glow && vignette == o.vignette && boost == o.boost;
+               glow == o.glow && vignette == o.vignette && boost == o.boost && signal == o.signal;
     }
 };
 
@@ -84,6 +87,7 @@ private:
     struct Layer
     {
         std::vector<float> yiq;          // [192][256 + 8][3]: prefiltered luma, I, Q, edge-padded
+        std::vector<float> rgb;          // [192][256][3]: the source as R'G'B' 0..1, for the signal chain
         std::vector<float> glow;         // [192][256][3], linear, x glow strength
         std::vector<float> glowTmp;      // [192][256][3], the horizontal glow pass
         std::vector<uint16_t> sig;       // [192][256 * phases][3]: signal, 12-bit gamma level
@@ -98,6 +102,8 @@ private:
 
     std::unique_ptr<SoftFilterPool> pool;
     Tables t;
+    Ntsc::Signal signal;
+    uint32_t frame = 0;
     Layer layer[2];
 };
 
