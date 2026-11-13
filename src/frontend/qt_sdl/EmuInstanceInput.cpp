@@ -22,6 +22,9 @@
 #include "Platform.h"
 #include "SDL_gamecontroller.h"
 #include "SDL_sensor.h"
+#include <atomic>
+#include <thread>
+#include "Trace.h"
 #include "main.h"
 #include "Config.h"
 
@@ -71,6 +74,43 @@ const char* EmuInstance::hotkeyNames[HK_MAX] =
 };
 
 std::shared_ptr<SDL_mutex> EmuInstance::joyMutexGlobal = nullptr;
+
+// SDL's joystick init scans every input device (~140 ms on Linux), so it runs on a worker
+// while the window is built. Until it is done no joystick call may run: inputProcess() skips
+// them and picks the controller up on a later frame, the way it handles a hot-plugged one.
+static std::thread joyInitThread;
+static std::atomic<bool> joyReady{false};
+
+static void joystickInit()
+{
+    TRACE_SDL_STARTUP("joystick init (worker)");
+    {
+        TRACE_SDL_STARTUP("SDL_Init(JOYSTICK)");
+        if (SDL_Init(SDL_INIT_JOYSTICK) < 0) printf("SDL couldn't init joystick\n");
+    }
+    {
+        TRACE_SDL_STARTUP("SDL_Init(SENSOR)");
+        if (SDL_Init(SDL_INIT_SENSOR) < 0) printf("SDL couldn't init motion sensors\n");
+    }
+    SDL_JoystickEventState(SDL_ENABLE);
+    joyReady.store(true, std::memory_order_release);
+}
+
+void EmuInstance::joystickInitStart()
+{
+#ifdef __linux__
+    joyInitThread = std::thread(joystickInit);
+#else
+    // macOS and Windows tie joystick events to the thread that inits them: stay on this one
+    joystickInit();
+#endif
+}
+
+void EmuInstance::joystickInitWait()
+{
+    // only called from the GUI thread, so no two joins can race
+    if (joyInitThread.joinable()) joyInitThread.join();
+}
 
 
 void EmuInstance::inputInit()
@@ -226,6 +266,8 @@ void EmuInstance::setJoystick(int id)
 
 void EmuInstance::openJoystick()
 {
+    if (!joyReady.load(std::memory_order_acquire)) return;
+
     if (controller) SDL_GameControllerClose(controller);
 
     if (joystick) SDL_JoystickClose(joystick);
@@ -420,19 +462,22 @@ bool EmuInstance::joystickButtonDown(int val)
 void EmuInstance::inputProcess()
 {
     SDL_LockMutex(joyMutex.get());
-    SDL_JoystickUpdate();
+    if (joyReady.load(std::memory_order_acquire))
+    {
+        SDL_JoystickUpdate();
 
-    if (joystick)
-    {
-        if (!SDL_JoystickGetAttached(joystick))
+        if (joystick)
         {
-            SDL_JoystickClose(joystick);
-            joystick = nullptr;
+            if (!SDL_JoystickGetAttached(joystick))
+            {
+                SDL_JoystickClose(joystick);
+                joystick = nullptr;
+            }
         }
-    }
-    if (!joystick && (SDL_NumJoysticks() > 0))
-    {
-        openJoystick();
+        if (!joystick && (SDL_NumJoysticks() > 0))
+        {
+            openJoystick();
+        }
     }
 
     joyInputMask = 0xFFF;

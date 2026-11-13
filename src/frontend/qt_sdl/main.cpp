@@ -379,18 +379,7 @@ int main(int argc, char** argv)
     SDL_SetHint(SDL_HINT_APP_NAME, "melonDS");
 
     TRACE_SDL_STARTUP_MESSAGE("SDL init begins");
-    if ([] { TRACE_SDL_STARTUP("SDL_Init(HAPTIC)"); return SDL_Init(SDL_INIT_HAPTIC); }() < 0)
-    {
-        printf("SDL couldn't init rumble\n");
-    }
-    if ([] { TRACE_SDL_STARTUP("SDL_Init(JOYSTICK)"); return SDL_Init(SDL_INIT_JOYSTICK); }() < 0)
-    {
-        printf("SDL couldn't init joystick\n");
-    }
-    if ([] { TRACE_SDL_STARTUP("SDL_Init(SENSOR)"); return SDL_Init(SDL_INIT_SENSOR); }() < 0)
-    {
-        printf("SDL couldn't init motion sensors\n");
-    }
+    // No SDL_INIT_HAPTIC: nothing uses SDL_Haptic, and rumble goes through SDL_GameControllerRumble.
     if ([] { TRACE_SDL_STARTUP("SDL_Init(AUDIO)"); return SDL_Init(SDL_INIT_AUDIO); }() < 0)
     {
         const char* err = SDL_GetError();
@@ -401,10 +390,11 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    { TRACE_SDL_STARTUP("SDL_JoystickEventState"); SDL_JoystickEventState(SDL_ENABLE); }
-
     { TRACE_SDL_STARTUP("SDL_InitSubSystem(VIDEO)"); SDL_InitSubSystem(SDL_INIT_VIDEO); }
     { TRACE_SDL_STARTUP("SDL screensaver calls"); SDL_EnableScreenSaver(); SDL_DisableScreenSaver(); }
+
+    // last SDL_Init on this thread: SDL_Init calls must not overlap the worker's
+    EmuInstance::joystickInitStart();
 
     TRACE_QT_STEP("startup: config load");
     if (!Config::Load())
@@ -518,6 +508,7 @@ int main(int argc, char** argv)
 
     Config::Save();
 
+    EmuInstance::joystickInitWait();
     { TRACE_SDL_STARTUP("SDL_Quit"); SDL_Quit(); }
     TRACE_QT_STEP_END();
     return ret;

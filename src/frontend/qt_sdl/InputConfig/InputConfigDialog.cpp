@@ -78,6 +78,7 @@ InputConfigDialog::InputConfigDialog(QWidget* parent) : QDialog(parent), ui(new 
 
     joystickID = instcfg.GetInt("JoystickID");
 
+    EmuInstance::joystickInitWait();
     int njoy = SDL_NumJoysticks();
     if (njoy > 0)
     {
