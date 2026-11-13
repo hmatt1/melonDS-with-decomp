@@ -569,6 +569,7 @@ ports and a per-launch token. The first request on each connection must be
 | `writes.list` | Write history for an address or range, by frame window, CPU and writer PC range (`size = 0` searches all memory). Pages of up to 100,000, newest first via `skip`, with the `total`. Reports `history_wrapped` and `oldest_frame`. With `session`, a saved session's history instead of the running one's (`history_source` says from which file) |
 | `sessions.list` | Saved sessions of this game, newest first: frames, size, and whether a history file kept all of its writes |
 | `coverage.get` | Executed / read / written / DMA ranges, optionally only outside known functions. With `kind = write` and `writer_from` / `writer_to`, it returns the bytes a function wrote last; this needs no write history, so it works when history has wrapped |
+| `analysis.get` | The unreached-code snapshot for one CPU: `start`, `end`, `kind` (`arm`, `thumb`, `data`) and `why`. `addr` and `size` limit it; `size` 0 is the whole snapshot. Paged with `limit`, `truncated` and `next_addr` |
 | `calls.get` | Observed callers and callees (infers the function entry if unknown). A branch to a known function entry (`b func`, conditional or not) counts as a call of kind `tail_call`. Entries are known from observed calls and from the knowledge store's functions: the callee's code is credited to the callee, and the Call graph marks the edge |
 | `callstack.get` | Shadow call stack |
 | `origin.get` | Provenance chain (ROM file and offset → loads → copies), taint labels, and the archived files the bytes equal. A merged label's run also says how it was made (`how`, `how_pc`, `how_frame`, `how_steps`) |
@@ -590,7 +591,8 @@ ports and a per-launch token. The first request on each connection must be
 | Control endpoint | |
 |---|---|
 | `game.boot`, `game.reset` | Boot a ROM, reset |
-| `execution.control` | `pause`, `resume`, `step`, `break`, `run_frames` (then pause) |
+| `execution.control` | `pause`, `resume`, `step`, `step_over`, `break`, `run_frames` (then pause). `step_over` runs until a call returns and requires `count` 1 |
+| `analysis.run`, `analysis.cancel`, `analysis.clear` | While paused or in a break, mark code the recording has not reached. The run replies with the status-bar summary. Cancel keeps the previous snapshot; clear removes the marks and is refused while a walk is running |
 | `input.send` | Hold buttons / touch for N frames; returns the frame number and both screens |
 | `state.save`, `state.load` | Savestates |
 | `breakpoint.set`, `breakpoint.clear` | Exec / read / write / access breakpoints with conditions |

@@ -514,6 +514,46 @@ void ApiServer::Handle(Conn* c, const QJsonValue& id, const QString& method, con
         return;
     }
 
+    if (method == "analysis.get")
+    {
+        WBApi::AnalysisGetParams p;
+        if (!WBApi::AnalysisGetParams::fromJson(params, p, err)) return bad(err);
+        u32 cpu;
+        if (!WBQ::ParseCpu(p.cpu, cpu, err)) return bad(err);
+        u32 limit = std::max<u32>(p.limit, 1);
+        u32 lo = p.addr;
+        u32 hi = 0xFFFFFFFFu;
+        if (p.size) hi = p.addr > 0xFFFFFFFFu - p.size ? 0xFFFFFFFFu : p.addr + p.size;
+        // A window is a copy: AnalysisNear returns a temporary. The whole snapshot lives on the host.
+        std::vector<WBQ::AnalysisHints::Range> window;
+        const std::vector<WBQ::AnalysisHints::Range>* src;
+        if (p.size)
+        {
+            window = Host->AnalysisNear((int)cpu, lo, hi).Ranges;
+            src = &window;
+        }
+        else src = &Host->AnalysisAll((int)cpu);
+        WBApi::AnalysisGetResult r;
+        for (const WBQ::AnalysisHints::Range& g : *src)
+        {
+            if (!p.size && g.End <= lo) continue;
+            if (r.ranges.size() >= limit)
+            {
+                r.truncated = true;
+                r.next_addr = g.Start;
+                break;
+            }
+            WBApi::AnalysisRange row;
+            row.start = g.Start;
+            row.end = g.End;
+            row.kind = WBQ::KindName(g.Kind);
+            row.why = g.Why;
+            r.ranges.push_back(row);
+        }
+        Reply(sock, id, r.toJson());
+        return;
+    }
+
     if (method == "calls.get")
     {
         WBApi::CallsParams p;
@@ -1709,9 +1749,10 @@ void ApiServer::Handle(Conn* c, const QJsonValue& id, const QString& method, con
             QTimer::singleShot(30, this, [=]() { Reply(sock, id, result(false, cpu)); });
             return;
         }
-        if (act == "step" || act == "break")
+        if (act == "step" || act == "step_over" || act == "break")
         {
             if (Host->Core().JITActive()) { Error(sock, id, ErrUnavailable, "stepping needs the interpreter: turn the JIT off"); return; }
+            if (act == "step_over" && p.count != 1) return bad("step_over steps one instruction");
             auto conn = std::make_shared<QMetaObject::Connection>();
             auto done = std::make_shared<bool>(false);
             if (p.wait)
@@ -1723,15 +1764,19 @@ void ApiServer::Handle(Conn* c, const QJsonValue& id, const QString& method, con
                     disconnect(*conn);
                     Reply(sock, id, result(false, cpu));
                 });
-                QTimer::singleShot(10000, this, [=]()
-                {
-                    if (*done) return;
-                    *done = true;
-                    disconnect(*conn);
-                    Reply(sock, id, result(true, cpu));
-                });
+                // one instruction finishes quickly. A call that step_over runs into often does not,
+                // and a short timer would report interrupted while the game was still going.
+                if (act != "step_over")
+                    QTimer::singleShot(10000, this, [=]()
+                    {
+                        if (*done) return;
+                        *done = true;
+                        disconnect(*conn);
+                        Reply(sock, id, result(true, cpu));
+                    });
             }
             if (act == "step") Host->Step((int)cpu, std::max<u32>(p.count, 1));
+            else if (act == "step_over") Host->StepOver((int)cpu);
             else Host->BreakNow((int)cpu);
             if (!p.wait) Reply(sock, id, result(false, cpu));
             return;
@@ -1748,7 +1793,91 @@ void ApiServer::Handle(Conn* c, const QJsonValue& id, const QString& method, con
             }
             return;
         }
-        return bad("action must be pause, resume, step, break or run_frames");
+        return bad("action must be pause, resume, step, step_over, break or run_frames");
+    }
+
+    if (method == "analysis.run")
+    {
+        WBApi::AnalysisRunParams p;
+        if (!WBApi::AnalysisRunParams::fromJson(params, p, err)) return bad(err);
+        WBStatus st = Host->Status();
+        if (st.EmuState == WBStatus::NoGame) { Error(sock, id, ErrNoGame, "no game running"); return; }
+        if (st.EmuState != WBStatus::Paused && st.EmuState != WBStatus::Break)
+        { Error(sock, id, ErrUnavailable, "Pause the game first"); return; }
+        if (Host->AnalysisRunning()) { Error(sock, id, ErrUnavailable, "analysis is already running"); return; }
+
+        auto replyOutcome = [=](const char* outcome, const QString& summary)
+        {
+            WBApi::AnalysisRunResult r;
+            r.outcome = outcome;
+            r.summary = summary;
+            Reply(sock, id, r.toJson());
+        };
+        if (!p.wait)
+        {
+            Host->RunStaticAnalysis();
+            replyOutcome("started", QString());
+            return;
+        }
+
+        // Connect before starting. The walk finishes on this thread later, so a second
+        // connection can cancel or resume while this request is still open.
+        auto done = std::make_shared<bool>(false);
+        auto finConn = std::make_shared<QMetaObject::Connection>();
+        auto stConn = std::make_shared<QMetaObject::Connection>();
+        auto finish = [=](const char* outcome, const QString& summary)
+        {
+            if (*done) return;
+            *done = true;
+            disconnect(*finConn);
+            disconnect(*stConn);
+            replyOutcome(outcome, summary);
+        };
+        *finConn = connect(Host, &WBHost::analysisFinished, this, [=](const QString& text, int, quint32, quint32, quint32)
+        {
+            finish("finished", text);
+        });
+        *stConn = connect(Host, &WBHost::statusChanged, this, [=]()
+        {
+            if (*done || Host->AnalysisRunning()) return;
+            // The finished path clears the busy flag, then emits analysisFinished, then statusChanged.
+            // Wait until that returns so a success is not reported as a cancel.
+            QTimer::singleShot(0, this, [=]()
+            {
+                if (*done || Host->AnalysisRunning()) return;
+                WBStatus s = Host->Status();
+                bool held = s.EmuState == WBStatus::Paused || s.EmuState == WBStatus::Break;
+                finish(held ? "cancelled" : "abandoned", QString());
+            });
+        });
+        Host->RunStaticAnalysis();
+        if (!*done && !Host->AnalysisRunning())
+        {
+            *done = true;
+            disconnect(*finConn);
+            disconnect(*stConn);
+            Error(sock, id, ErrUnavailable, "analysis did not start");
+        }
+        return;
+    }
+
+    if (method == "analysis.cancel")
+    {
+        Host->CancelStaticAnalysis();
+        WBApi::Ok r;
+        r.ok = true;
+        Reply(sock, id, r.toJson());
+        return;
+    }
+
+    if (method == "analysis.clear")
+    {
+        if (Host->AnalysisRunning()) { Error(sock, id, ErrUnavailable, "analysis is still running"); return; }
+        Host->ClearStaticAnalysis();
+        WBApi::Ok r;
+        r.ok = true;
+        Reply(sock, id, r.toJson());
+        return;
     }
 
     if (method == "input.send")
