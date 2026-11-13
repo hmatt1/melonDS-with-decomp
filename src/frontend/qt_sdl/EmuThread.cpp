@@ -489,7 +489,7 @@ void EmuThread::run()
             emuInstance->wbHost->UpdateStatus(0);
 
             // serves workbench queries while paused (returns early when one arrives)
-            emuInstance->wbHost->IdleWait(75);
+            { TRACE_EMU("idle: IdleWait(75)"); emuInstance->wbHost->IdleWait(75); }
 
             emuInstance->drawScreen();
         }
@@ -503,6 +503,9 @@ void EmuThread::sendMessage(Message msg)
     msgMutex.lock();
     msgQueue.enqueue(msg);
     msgMutex.unlock();
+    // wake the idle loop (WBHost::IdleWait waits up to 75 ms for debugger jobs): an empty job ends the
+    // wait, so the message is handled now and not up to 75 ms later
+    if (emuInstance && emuInstance->wbHost) emuInstance->wbHost->Core().Dbg.PostJob([] {});
 }
 
 void EmuThread::waitMessage(int num)
@@ -538,6 +541,7 @@ void EmuThread::handleMessages()
             break;
 
         case msg_EmuRun:
+            TRACE_EMU_MESSAGE("msg_EmuRun");
             emuStatus = emuStatus_Running;
             emuPauseStack = emuPauseStackRunning;
             emuActive = true;
@@ -621,15 +625,18 @@ void EmuThread::handleMessages()
             break;
 
         case msg_BootROM:
-            emuInstance->wbHost->OnGameClosing();
+        {
+            TRACE_EMU("msg_BootROM");
+            { TRACE_EMU("workbench OnGameClosing"); emuInstance->wbHost->OnGameClosing(); }
             msgResult = 0;
             if (!emuInstance->loadROM(msg.param.value<QStringList>(), true, msgError))
                 break;
 
             assert(emuInstance->nds != nullptr);
-            emuInstance->nds->Start();
+            { TRACE_EMU("NDS::Start"); emuInstance->nds->Start(); }
             msgResult = 1;
             break;
+        }
 
         case msg_BootFirmware:
             emuInstance->wbHost->OnGameClosing();

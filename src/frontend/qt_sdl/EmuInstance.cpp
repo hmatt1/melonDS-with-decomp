@@ -1290,15 +1290,16 @@ bool EmuInstance::updateConsole() noexcept
     }
 
 
-    auto arm9bios = loadARM9BIOS();
+    TRACE_EMU("updateConsole");
+    auto arm9bios = [&] { TRACE_EMU("updateConsole: load ARM9 BIOS"); return loadARM9BIOS(); }();
     if (!arm9bios)
         return false;
 
-    auto arm7bios = loadARM7BIOS();
+    auto arm7bios = [&] { TRACE_EMU("updateConsole: load ARM7 BIOS"); return loadARM7BIOS(); }();
     if (!arm7bios)
         return false;
 
-    auto firmware = loadFirmware(consoleType);
+    auto firmware = [&] { TRACE_EMU("updateConsole: load firmware"); return loadFirmware(consoleType); }();
     if (!firmware)
         return false;
 
@@ -1367,7 +1368,7 @@ bool EmuInstance::updateConsole() noexcept
         args = &(*dsiargs);
     }
 
-    renderLock.lock();
+    { TRACE_EMU("updateConsole: wait for renderLock"); renderLock.lock(); }
     if ((!nds) || (consoleType != nds->ConsoleType))
     {
         if (nds)
@@ -1380,12 +1381,15 @@ bool EmuInstance::updateConsole() noexcept
         if (consoleType == 1)
             nds = new DSi(std::move(dsiargs.value()), this);
         else
+        {
+            TRACE_EMU("updateConsole: new NDS");
             nds = new NDS(std::move(ndsargs), this);
-        wbHost->AttachNDS(nds);
+        }
+        { TRACE_EMU("updateConsole: workbench AttachNDS"); wbHost->AttachNDS(nds); }
 
-        nds->Reset();
+        { TRACE_EMU("updateConsole: first NDS::Reset"); nds->Reset(); }
         loadRTCData();
-        emuThread->updateVideoRenderer();
+        { TRACE_EMU("updateConsole: updateVideoRenderer"); emuThread->updateVideoRenderer(); }
     }
     else
     {
@@ -1413,7 +1417,7 @@ bool EmuInstance::updateConsole() noexcept
     }
 
     // loads the carts later -- to be sure that everything else is initialized
-    nds->SetNDSCart(std::move(nextndscart));
+    { TRACE_EMU("updateConsole: SetNDSCart"); nds->SetNDSCart(std::move(nextndscart)); }
     if (consoleType == 1)
         nds->EjectGBACart();
     else
@@ -1902,6 +1906,8 @@ bool EmuInstance::loadROM(QStringList filepath, bool reset, QString& errorstr)
     std::string basepath;
     std::string romname;
 
+    TRACE_EMU_STEPS();
+    TRACE_EMU_STEP("loadROM: read ROM file");
     if (!loadROMData(filepath, filedata, filelen, basepath, romname))
     {
         errorstr = "Failed to load the DS ROM.";
@@ -1917,6 +1923,7 @@ bool EmuInstance::loadROM(QStringList filepath, bool reset, QString& errorstr)
     u32 savelen = 0;
     std::unique_ptr<u8[]> savedata = nullptr;
 
+    TRACE_EMU_STEP("loadROM: read save file");
     std::string savname = getAssetPath(false, localCfg.GetString("SaveFilePath"), ".sav");
     std::string origsav = savname;
     savname += instanceFileSuffix();
@@ -1957,6 +1964,7 @@ bool EmuInstance::loadROM(QStringList filepath, bool reset, QString& errorstr)
             .SRAMLength = savelen,
     };
 
+    TRACE_EMU_STEP("loadROM: NDSCart::ParseROM");
     auto cart = NDSCart::ParseROM(std::move(filedata), filelen, this, std::move(cartargs));
     if (!cart)
     {
@@ -1970,22 +1978,28 @@ bool EmuInstance::loadROM(QStringList filepath, bool reset, QString& errorstr)
         nextCart = std::move(cart);
         changeCart = true;
 
+        TRACE_EMU_STEP("loadROM: updateConsole");
         if (!updateConsole())
         {
             errorstr = "Failed to load the DS ROM.";
             return false;
         }
 
+        TRACE_EMU_STEP("loadROM: firmware save manager");
         initFirmwareSaveManager();
+        TRACE_EMU_STEP("loadROM: NDS::Reset");
         nds->Reset();
 
+        TRACE_EMU_STEP("loadROM: direct boot");
         if (globalCfg.GetBool("Emu.DirectBoot") || nds->NeedsDirectBoot())
         { // If direct boot is enabled or forced...
             nds->SetupDirectBoot(romname);
         }
 
+        TRACE_EMU_STEP("loadROM: battery and clock");
         setBatteryLevels();
         setDateTime();
+        TRACE_EMU_STEP("loadROM: workbench OnRomLoaded");
         wbHost->OnRomLoaded(filepath.join('|'), filelen);
     }
     else
@@ -2003,6 +2017,7 @@ bool EmuInstance::loadROM(QStringList filepath, bool reset, QString& errorstr)
         }
     }
 
+    TRACE_EMU_STEP("loadROM: save manager");
     cartType = 0;
     ndsSave = std::make_unique<SaveManager>(savname);
 

@@ -194,10 +194,11 @@ void WBHost::OnRomLoaded(const QString& path, u32 filelen)
         WB.Taint.Enable(false);
     }
     const NDSCart::CartCommon* cart = nds->GetNDSCart();
-    WB.OnRomLoaded(cart->GetROM(), cart->GetROMLength(), filelen);
-    WB.Taint.SetAllRomFiles(Cfg.OriginAllRomFiles);
-    ApplyHistoryFile(nullptr);
-    StartArchiveIndex();
+    // zones, not steps: this runs inside loadROM's steps, and steps don't nest
+    { TRACE_EMU("OnRomLoaded: parse ROM (NitroROM and hashes)"); WB.OnRomLoaded(cart->GetROM(), cart->GetROMLength(), filelen); }
+    { TRACE_EMU("OnRomLoaded: data origin sources"); WB.Taint.SetAllRomFiles(Cfg.OriginAllRomFiles); }
+    { TRACE_EMU("OnRomLoaded: history file"); ApplyHistoryFile(nullptr); }
+    { TRACE_EMU("OnRomLoaded: start archive index"); StartArchiveIndex(); }
     if (RecordAtBoot)
     {
         if (WB.JITActive())
@@ -217,10 +218,11 @@ void WBHost::OnRomLoaded(const QString& path, u32 filelen)
     }
     QMetaObject::invokeMethod(this, [this, path]()
     {
+        TRACE_QT("ROM loaded: on the GUI thread");
         CurRomPath = path;
         AllTimeData.reset();
-        OpenKnowledgeStore();
-        emit romChanged();
+        { TRACE_QT("OpenKnowledgeStore"); OpenKnowledgeStore(); }
+        { TRACE_QT("romChanged handlers"); emit romChanged(); }
         emit recordingChanged();
     }, Qt::QueuedConnection);
 }

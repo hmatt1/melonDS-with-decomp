@@ -27,6 +27,8 @@
 //   TRACE_QT_NAMED(text)        the same with a name made at run time (const char*)
 //   TRACE_QT_STEP("name")       a step of straight-line code: ends the previous step, starts this one
 //   TRACE_QT_STEP_END()         ends the last step
+//   TRACE_QT_STEPS()            ends the last step when this scope exits (functions with early returns);
+//                               one function with steps at a time per thread: steps don't nest
 //   TRACE_QT_MESSAGE("text")    a marker on the timeline
 // and the same for EMU and RENDER.
 
@@ -46,12 +48,14 @@ inline void Step(const ___tracy_source_location_data* loc)
     StepCtx = ___tracy_emit_zone_begin(loc, 1);
     StepOpen = true;
 }
+struct StepScope { ~StepScope() { StepEnd(); } };
 }
 
 #define TRACE_ZONE_(name) ZoneScopedN(name)
 #define TRACE_NAMED_(text) ZoneTransientN(TracyConcat(traceZone, TracyLine), text, true)
 #define TRACE_STEP_(name) do { static const ___tracy_source_location_data traceLoc{name, __func__, TracyFile, (uint32_t)TracyLine, 0}; Trace::Step(&traceLoc); } while (0)
 #define TRACE_STEP_END_() Trace::StepEnd()
+#define TRACE_STEPS_() Trace::StepScope TracyConcat(traceSteps, TracyLine)
 #define TRACE_MESSAGE_(text) TracyMessageL(text)
 #endif
 
@@ -62,12 +66,14 @@ inline void Step(const ___tracy_source_location_data* loc)
 #define TRACE_QT_NAMED(text) TRACE_NAMED_(text)
 #define TRACE_QT_STEP(name) TRACE_STEP_(name)
 #define TRACE_QT_STEP_END() TRACE_STEP_END_()
+#define TRACE_QT_STEPS() TRACE_STEPS_()
 #define TRACE_QT_MESSAGE(text) TRACE_MESSAGE_(text)
 #else
 #define TRACE_QT(name) TRACE_OFF_()
 #define TRACE_QT_NAMED(text) TRACE_OFF_()
 #define TRACE_QT_STEP(name) TRACE_OFF_()
 #define TRACE_QT_STEP_END() TRACE_OFF_()
+#define TRACE_QT_STEPS() TRACE_OFF_()
 #define TRACE_QT_MESSAGE(text) TRACE_OFF_()
 #endif
 
@@ -76,12 +82,14 @@ inline void Step(const ___tracy_source_location_data* loc)
 #define TRACE_EMU_NAMED(text) TRACE_NAMED_(text)
 #define TRACE_EMU_STEP(name) TRACE_STEP_(name)
 #define TRACE_EMU_STEP_END() TRACE_STEP_END_()
+#define TRACE_EMU_STEPS() TRACE_STEPS_()
 #define TRACE_EMU_MESSAGE(text) TRACE_MESSAGE_(text)
 #else
 #define TRACE_EMU(name) TRACE_OFF_()
 #define TRACE_EMU_NAMED(text) TRACE_OFF_()
 #define TRACE_EMU_STEP(name) TRACE_OFF_()
 #define TRACE_EMU_STEP_END() TRACE_OFF_()
+#define TRACE_EMU_STEPS() TRACE_OFF_()
 #define TRACE_EMU_MESSAGE(text) TRACE_OFF_()
 #endif
 
@@ -90,12 +98,14 @@ inline void Step(const ___tracy_source_location_data* loc)
 #define TRACE_RENDER_NAMED(text) TRACE_NAMED_(text)
 #define TRACE_RENDER_STEP(name) TRACE_STEP_(name)
 #define TRACE_RENDER_STEP_END() TRACE_STEP_END_()
+#define TRACE_RENDER_STEPS() TRACE_STEPS_()
 #define TRACE_RENDER_MESSAGE(text) TRACE_MESSAGE_(text)
 #else
 #define TRACE_RENDER(name) TRACE_OFF_()
 #define TRACE_RENDER_NAMED(text) TRACE_OFF_()
 #define TRACE_RENDER_STEP(name) TRACE_OFF_()
 #define TRACE_RENDER_STEP_END() TRACE_OFF_()
+#define TRACE_RENDER_STEPS() TRACE_OFF_()
 #define TRACE_RENDER_MESSAGE(text) TRACE_OFF_()
 #endif
 
