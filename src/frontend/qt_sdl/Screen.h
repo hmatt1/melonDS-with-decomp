@@ -323,7 +323,7 @@ private:
     unsigned crtChainUploaded = 0;
     bool crtChainValid = false;
     GLuint crtDecodeProgram = 0, crtDecodeFramebuffer = 0, crtDecodedTexture = 0, crtKernelTexture = 0, crtNoiseTexture = 0;
-    struct { GLint layer, pixelClocks, outStep, outPhases, taps, tapLeft, carrier, lineStep, framePhase, linePhaseOf, bias, noise, noiseLines, frame; } crtDecLoc{};
+    struct { GLint layer, pixelClocks, outStep, outPhases, taps, tapLeft, carrier, lineStep, framePhase, linePhaseOf, bias, noise, noiseLines, frame, frameSwitch, rows, pal; } crtDecLoc{};
     GLint crtSignalULoc = -1, crtSigPixelClocksULoc = -1, crtSigStepULoc = -1, crtSigHalfStepULoc = -1, crtSigWidthULoc = -1, crtSigTexWidthULoc = -1;
     void uploadCrtChain();
     void drawCrtDecode(unsigned layers, uint32_t frame);

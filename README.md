@@ -207,8 +207,8 @@ the mask width to 2. The edge of the curved screen is antialiased.
 #### Video signal
 
 The CRT settings' **Video signal** section sends the DS picture to the TV the way a real
-console's video encoder would. The signal is simulated at the console's master clock and decoded
-the way a consumer NTSC TV decodes it. Colour bleed, rainbows on fine detail and dithering that
+console's video encoder would, NTSC or PAL. The signal is simulated at the console's master clock
+and decoded the way a consumer TV decodes it. Colour bleed, rainbows on fine detail and dithering that
 blends into solid colour all come out of that simulation, not from effect sliders. It is off by
 default, which gives the simple blur set by Picture blur and Colour bleed.
 
@@ -220,11 +220,26 @@ default, which gives the simple blur set by Picture blur and Colour bleed.
   * **SNES:** 1.5 DS pixels per colour cycle. The carrier moves a third of a cycle per line, so
     the artifacts run diagonally. Every other frame has a short line, so the pattern alternates
     between two frames.
+  * **Mega Drive PAL (H40 or H32):** the European signal, with a 4.43 MHz carrier and V's phase
+    flipped every line. 1.5 (H40) or 1.2 (H32) DS pixels per colour cycle, so dithering doesn't
+    sit on the carrier the way it does on a 320-wide NTSC Mega Drive. Lines are exactly 285
+    cycles, so the artifacts stand still, but the odd 313-line frame flips the line switch every
+    frame.
+  * **SNES PAL:** 1.2 DS pixels per colour cycle; the carrier moves a sixth of a cycle per line,
+    a 6-line pattern that stays still from frame to frame.
 * **Cable:** RGB (no encoding), S-Video (colour softer than brightness, no rainbows), Composite,
   or RF (composite through a tuner, with optional noise and a ghost).
 * **TV decoder:**
-  * the NTSC standard's colour axes;
-  * the "red push" axes of Sony's CXA2025AS TV decoder, US or Japanese setting.
+  * NTSC: the standard's colour axes, or the "red push" axes of Sony's CXA2025AS TV decoder, US
+    or Japanese setting.
+  * PAL:
+    * PAL-D, 1990s TV: the delay line nearly every PAL set had, as Philips' TDA4665 did it. Each
+      line's colour is averaged with the line above's, locked to the console's lines. Colour is
+      softer top to bottom and hue errors cancel out.
+    * PAL-D, 1980s TV: the older glass delay line, a fixed 63.943 µs. These consoles' lines are
+      longer than broadcast PAL's, so the line above's colour lands a little to the right: 2.25
+      pixels on a 320-wide Mega Drive, 0.8 on a SNES.
+    * PAL-S: no delay line.
 * **TV controls:** Colour, Tint and Sharpness, as on the set.
 
 Built-in presets sit under Default in the preset list. They can't be overwritten; save your own
@@ -235,6 +250,9 @@ variants under new names.
 * SNES - S-Video
 * SNES - composite
 * SNES - composite, US TV
+* Mega Drive 2 (PAL) - composite
+* Mega Drive 2 (PAL) - RF
+* SNES (PAL) - composite
 * Sony PVM - RGB
 
 What the simulation is built on:
@@ -244,6 +262,10 @@ What the simulation is built on:
     master/10 (H32); 3420 clocks per line.
   * SNES: master clock 21.47727 MHz; carrier = master/6; pixels = master/4; 1364 clocks per line,
     with a 1360-clock line every other frame.
+  * Mega Drive PAL: master clock 53.203424 MHz; carrier = master/12; 3420 clocks per line, 313
+    lines per frame (Genesis Plus GX; Kabuto's hardware notes).
+  * SNES PAL: one 17.734475 MHz crystal; master clock = 6/5 of it (21.28137 MHz, 4.8 carrier
+    cycles' worth); pixels = master/4; 1364 clocks per line, 312 lines (fullsnes).
 * **Mega Drive 2 encoder:** the Sony CXA1645 datasheet:
   * standard colour axes and luma;
   * a chroma band-pass after the modulator;
@@ -251,8 +273,11 @@ What the simulation is built on:
   * a luma delay line.
 * **SNES encoder:** the SMPTE 170M colour-difference filter template. The board's own filter
   values aren't documented.
-* **TV:** a 3.58 MHz luma trap and a ±0.5 MHz chroma band-pass. It demodulates against the colour
-  burst as received, as a TV does.
+* **TV:** demodulates against the colour burst as received, as a TV does.
+  * NTSC: a 3.58 MHz luma trap and a ±0.5 MHz chroma band-pass.
+  * PAL: Philips' TDA8362: a 4.43 MHz trap (Q 2), a chroma band-pass (Q 3), U/V low-pass about
+    1 MHz on the standard axes. The delay lines are as above (ITU-R BT.470; TDA4665; Telefunken's
+    63.943 µs glass line).
 * **Exactness:** the chain is linear, so it is computed once per setting as each output sample's
   weights over nearby pixels. Applying those weights gives the simulation's result to within
   1/10000 (tested), on both OpenGL and the CPU.
@@ -262,7 +287,7 @@ Not simulated, because the hardware isn't documented well enough to do it accura
 * the early Mega Drive 2 boards' Samsung KA2195D encoder (the blurriest ones);
 * the Mega Drive 1's discrete filters;
 * the NES, which builds its signal from palette numbers, not from RGB;
-* PAL;
+* the PAL Mega Drive 1's Fujitsu MB3514 encoder (no datasheet);
 * comb-filter TVs (these consoles' lines don't alternate carrier phase the way a comb filter
   needs).
 

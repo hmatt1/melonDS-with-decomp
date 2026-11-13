@@ -828,7 +828,11 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
 
             // video signal: which console's encoder and which cable feed the TV. The combo boxes
             // go at the top of the "Video signal" box; the sliders that don't apply grey out
-            struct SignalUi { QComboBox* console = nullptr; QComboBox* cable = nullptr; QComboBox* decoder = nullptr; };
+            struct SignalUi
+            {
+                QComboBox* console = nullptr; QComboBox* cable = nullptr; QComboBox* decoder = nullptr;
+                std::function<void(int console, int select)> fillDecoders;
+            };
             auto sigUi = std::make_shared<SignalUi>();
             auto updateSignalRows = [this, sigUi]()
             {
@@ -849,7 +853,8 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
                 if (strcmp(section, "Video signal") != 0) return;
                 auto* conLabel = new QLabel("Console", box);
                 auto* con = new QComboBox(box);
-                con->addItems({"Off (simple blur)", "Mega Drive, 320 wide (H40)", "Mega Drive, 256 wide (H32)", "SNES"});
+                con->addItems({"Off (simple blur)", "Mega Drive, 320 wide (H40)", "Mega Drive, 256 wide (H32)", "SNES",
+                               "Mega Drive PAL, 320 wide (H40)", "Mega Drive PAL, 256 wide (H32)", "SNES PAL"});
                 const QString conTip =
                     "Which console's video encoder sends the picture to the TV, at that console's timing.\n\n"
                     "The DS picture is put through the signal the way that console makes it: each pixel\n"
@@ -859,7 +864,10 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
                     "Mega Drive, 320 wide: 1.875 pixels per colour cycle, the same on every line, so\n"
                     "1-pixel dithering sits on the colour carrier: it blends, with still rainbows.\n"
                     "Mega Drive, 256 wide and SNES: 1.5 pixels per colour cycle. The SNES shifts the\n"
-                    "carrier a third of a cycle each line, so its artifacts run diagonally.\n\n"
+                    "carrier a third of a cycle each line, so its artifacts run diagonally.\n"
+                    "PAL consoles: the European PAL signal, with its own carrier (4.43 MHz) and V's phase\n"
+                    "flipped every line; a PAL TV's delay line averages colour over two lines, so colour\n"
+                    "edges are softer top to bottom and hue errors cancel out.\n\n"
                     "Off: no signal; Picture blur and Colour bleed set a simple sideways blur.\n\n"
                     "Default: Off";
                 conLabel->setToolTip(conTip); con->setToolTip(conTip);
@@ -884,28 +892,59 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
                 }
                 auto* decLabel = new QLabel("TV decoder", box);
                 auto* dec = new QComboBox(box);
-                dec->addItems({"Standard (NTSC)", "Sony, US TV (CXA2025AS)", "Sony, Japanese TV (CXA2025AS)"});
                 const QString decTip =
-                    "How the TV turns the colour signal back into colour.\n\n"
+                    "How the TV turns the colour signal back into colour; the choices follow the console.\n\n"
+                    "NTSC:\n"
                     "Standard: the NTSC standard's colour axes, so colours come out as they went in.\n"
                     "Sony US / Japanese: the axes of Sony's TV decoder IC from its datasheet. US sets\n"
                     "pushed red and warmed skin tones (reds stronger, yellows toward orange); the\n"
                     "Japanese setting is milder. Most TVs of the time did something like this.\n\n"
-                    "Not used with RGB.\n\nDefault: Standard (NTSC)";
+                    "PAL:\n"
+                    "PAL-D, 1990s: the delay line nearly every PAL set had, as Philips' TDA4665 did it:\n"
+                    "each line's colour averaged with the line above's, locked to the console's lines.\n"
+                    "Colour is softer top to bottom and hue errors cancel out.\n"
+                    "PAL-D, 1980s: the older glass delay line, a fixed 64 us minus a quarter cycle. These\n"
+                    "consoles' lines are longer than broadcast PAL's, so the line above's colour lands a\n"
+                    "little to the right (2.25 pixels on a 320-wide Mega Drive), smearing colour edges.\n"
+                    "PAL-S: no delay line. Sharper colour top to bottom, but any phase error shows as\n"
+                    "alternating lines of slightly different hue (Hanover bars).\n\n"
+                    "Not used with RGB.\n\nDefault: Standard (NTSC), or PAL-D 1990s for a PAL console";
                 decLabel->setToolTip(decTip); dec->setToolTip(decTip);
+                // the decoders that fit the console, each item's data its Ntsc::Decoder value
+                auto fillDecoders = [dec](int console, int select)
                 {
-                    QSignalBlocker b3(dec);
-                    dec->setCurrentIndex(std::clamp(windowCfg.GetInt("CrtDecoder"), 0, Ntsc::Decoder_Count - 1));
-                }
-                connect(dec, &QComboBox::currentIndexChanged, this, [this](int i)
+                    QSignalBlocker b(dec);
+                    dec->clear();
+                    if (Ntsc::isPal(console))
+                    {
+                        dec->addItem("PAL-D, 1990s TV (TDA4665 delay line)", (int)Ntsc::Decoder_PalD);
+                        dec->addItem("PAL-D, 1980s TV (glass delay line)", (int)Ntsc::Decoder_PalDGlass);
+                        dec->addItem("PAL-S (no delay line)", (int)Ntsc::Decoder_PalS);
+                    }
+                    else
+                    {
+                        dec->addItem("Standard (NTSC)", (int)Ntsc::Decoder_Standard);
+                        dec->addItem("Sony, US TV (CXA2025AS)", (int)Ntsc::Decoder_SonyUS);
+                        dec->addItem("Sony, Japanese TV (CXA2025AS)", (int)Ntsc::Decoder_SonyJP);
+                    }
+                    int i = dec->findData(Ntsc::decoderFor(console, select));
+                    dec->setCurrentIndex(i < 0 ? 0 : i);
+                };
+                fillDecoders(con->currentIndex(), windowCfg.GetInt("CrtDecoder"));
+                sigUi->fillDecoders = fillDecoders;
+                auto storeDecoder = [this, dec]()
                 {
-                    windowCfg.SetInt("CrtDecoder", i);
-                    if (panel) panel->crtDecoder = i;
-                });
-                connect(con, &QComboBox::currentIndexChanged, this, [this, updateSignalRows](int i)
+                    int d = dec->currentData().toInt();
+                    windowCfg.SetInt("CrtDecoder", d);
+                    if (panel) panel->crtDecoder = d;
+                };
+                connect(dec, &QComboBox::currentIndexChanged, this, [storeDecoder](int) { storeDecoder(); });
+                connect(con, &QComboBox::currentIndexChanged, this, [this, updateSignalRows, fillDecoders, dec, storeDecoder](int i)
                 {
                     windowCfg.SetInt("CrtSignal", i);
                     if (panel) panel->crtSignal = i;
+                    fillDecoders(i, dec->currentData().toInt());   // keeps the choice if it fits
+                    storeDecoder();
                     updateSignalRows();
                 });
                 connect(cab, &QComboBox::currentIndexChanged, this, [this, updateSignalRows](int i)
@@ -932,14 +971,17 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
                     QJsonObject o;
                     o["CrtSignal"] = sigUi->console->currentIndex();
                     o["CrtCable"] = sigUi->cable->currentIndex();
-                    o["CrtDecoder"] = sigUi->decoder->currentIndex();
+                    o["CrtDecoder"] = sigUi->decoder->currentData().toInt();
                     return o;
                 };
                 ex.fromJson = [sigUi](const QJsonObject& o)
                 {
                     sigUi->console->setCurrentIndex(std::clamp(o.value("CrtSignal").toInt(0), 0, Ntsc::Console_Count - 1));
                     sigUi->cable->setCurrentIndex(std::clamp(o.value("CrtCable").toInt(Ntsc::Cable_Composite), 0, Ntsc::Cable_Count - 1));
-                    sigUi->decoder->setCurrentIndex(std::clamp(o.value("CrtDecoder").toInt(Ntsc::Decoder_Standard), 0, Ntsc::Decoder_Count - 1));
+                    // the console's change already refilled the decoders; pick the preset's
+                    const int want = Ntsc::decoderFor(sigUi->console->currentIndex(), o.value("CrtDecoder").toInt(Ntsc::Decoder_Standard));
+                    int i = sigUi->decoder->findData(want);
+                    sigUi->decoder->setCurrentIndex(i < 0 ? 0 : i);
                 };
                 return ex;
             };
@@ -960,6 +1002,12 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
                 {"SNES - composite", preset({{"CrtSignal", Ntsc::Console_SNES}, {"CrtCable", Ntsc::Cable_Composite}})},
                 {"SNES - composite, US TV", preset({{"CrtSignal", Ntsc::Console_SNES}, {"CrtCable", Ntsc::Cable_Composite},
                                                     {"CrtDecoder", Ntsc::Decoder_SonyUS}})},
+                {"Mega Drive 2 (PAL) - composite", preset({{"CrtSignal", Ntsc::Console_MDH40Pal}, {"CrtCable", Ntsc::Cable_Composite},
+                                                           {"CrtDecoder", Ntsc::Decoder_PalD}})},
+                {"Mega Drive 2 (PAL) - RF", preset({{"CrtSignal", Ntsc::Console_MDH40Pal}, {"CrtCable", Ntsc::Cable_RF},
+                                                    {"CrtDecoder", Ntsc::Decoder_PalD}, {"CrtNoise", 0.15}, {"CrtGhost", 0.08}, {"CrtGhostDelay", 1.2}})},
+                {"SNES (PAL) - composite", preset({{"CrtSignal", Ntsc::Console_SNESPal}, {"CrtCable", Ntsc::Cable_Composite},
+                                                   {"CrtDecoder", Ntsc::Decoder_PalD}})},
                 {"Sony PVM - RGB", preset({{"CrtSignal", Ntsc::Console_SNES}, {"CrtCable", Ntsc::Cable_RGB},
                                            {"CrtCurvature", 0.0}, {"CrtBeamMin", 0.16}, {"CrtBeamMax", 0.28},
                                            {"CrtMask", 0.7}, {"CrtGlow", 0.05}, {"CrtVignette", 0.05}, {"CrtBoost", 1.35}})},

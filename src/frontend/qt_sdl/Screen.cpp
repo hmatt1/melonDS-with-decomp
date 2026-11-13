@@ -1096,7 +1096,7 @@ void ScreenPanelGL::initOpenGL()
         auto u = [this](const char* n) { return glGetUniformLocation(crtDecodeProgram, n); };
         crtDecLoc = {u("uLayer"), u("uPixelClocks"), u("uOutStep"), u("uOutPhases"), u("uTaps"), u("uTapLeft"),
                      u("uCarrier"), u("uLineStep"), u("uFramePhase"), u("uLinePhaseOf"), u("uBias"), u("uNoise"),
-                     u("uNoiseLines"), u("uFrame")};
+                     u("uNoiseLines"), u("uFrame"), u("uFrameSwitch"), u("uRows"), u("uPal")};
     }
     glUseProgram(crtProgram);
     glUniform1i(glGetUniformLocation(crtProgram, "DecodedTex"), 3);
@@ -1356,7 +1356,7 @@ void ScreenPanelGL::uploadCrtChain()
     crtChainValid = true;
 
     // kernel: one RGBA texel per (tap, output channel) holding its weights for input R, G, B
-    const int taps = crtChain.taps(), rows = crtChain.linePhases() * crtChain.outPhases();
+    const int taps = crtChain.taps(), rows = crtChain.linePhases() * crtChain.outPhases() * crtChain.rows();
     const std::vector<float>& wt = crtChain.weights();
     std::vector<float> tex((size_t)taps * 3 * rows * 4, 0.f);
     for (int r = 0; r < rows; r++)
@@ -1409,9 +1409,12 @@ void ScreenPanelGL::drawCrtDecode(unsigned layers, uint32_t frame)
     glUniform1i(crtDecLoc.carrier, crtChain.carrierClocks());
     glUniform1i(crtDecLoc.lineStep, crtChain.lineClockStep());
     glUniform1i(crtDecLoc.framePhase, crtChain.frameClockPhase(frame));
-    GLint phaseOf[16] = {};
-    for (int c = 0; c < crtChain.carrierClocks() && c < 16; c++) phaseOf[c] = crtChain.linePhaseOfClock(c);
-    glUniform1iv(crtDecLoc.linePhaseOf, 16, phaseOf);
+    glUniform1i(crtDecLoc.frameSwitch, crtChain.frameSwitch(frame));
+    glUniform1i(crtDecLoc.rows, crtChain.rows());
+    glUniform1i(crtDecLoc.pal, Ntsc::isPal(crtChain.settings().console) ? 1 : 0);
+    GLint phaseOf[64] = {};
+    for (int c = 0; c < 2 * crtChain.carrierClocks() && c < 64; c++) phaseOf[c] = crtChain.linePhaseOfClock(c);
+    glUniform1iv(crtDecLoc.linePhaseOf, 64, phaseOf);
     glUniform3fv(crtDecLoc.bias, 1, crtChain.bias());
     glUniform1f(crtDecLoc.noise, crtChain.settings().noise);
     glUniform1i(crtDecLoc.noiseLines, crtChain.settings().noise > 0 ? crtChain.noiseLines() : 0);

@@ -292,12 +292,13 @@ void main()
 const char* kCrtDecodeFS = R"(#version 140
 
 uniform sampler2DArray ScreenTex;
-uniform sampler2D KernelTex;     // x: tap * 3 + output channel, y: line phase * out phases + out phase; rgb: weights per input channel
+uniform sampler2D KernelTex;     // x: tap * 3 + output channel, y: (line phase * out phases + out phase) * rows + row; rgb: weights per input channel
 uniform sampler2D NoiseTex;      // decoded RF noise lines: x: sample, y: line
 uniform float uLayer;
 uniform int uPixelClocks, uOutStep, uOutPhases, uTaps, uTapLeft;
-uniform int uCarrier, uLineStep, uFramePhase;
-uniform int uLinePhaseOf[16];
+uniform int uCarrier, uLineStep, uFramePhase, uFrameSwitch, uRows;
+uniform bool uPal;
+uniform int uLinePhaseOf[64];    // 2 * carrier clock phase + PAL switch -> line phase
 uniform vec3 uBias;
 uniform float uNoise;
 uniform int uNoiseLines;
@@ -326,17 +327,24 @@ void main()
 {
     int o = int(gl_FragCoord.x), row = int(gl_FragCoord.y);
     int p = (o * uOutStep + uOutStep / 2) / uPixelClocks;
-    int lp = uLinePhaseOf[(uFramePhase + row * uLineStep) % uCarrier];
-    int ky = lp * uOutPhases + o % uOutPhases;
+    int sw = uPal ? (uFrameSwitch + row) & 1 : 0;
+    int lp = uLinePhaseOf[2 * ((uFramePhase + row * uLineStep) % uCarrier) + sw];
     vec3 acc = uBias;
-    for (int k = 0; k < uTaps; k++)
+    // this row, and with a PAL-D TV the row above (black above the picture)
+    for (int rr = 0; rr < uRows; rr++)
     {
-        int pp = p + k - uTapLeft;
-        if (pp < 0 || pp >= kDSRes.x) continue;
-        vec3 c = fetch(ivec2(pp, row));
-        acc.r += dot(texelFetch(KernelTex, ivec2(k * 3 + 0, ky), 0).rgb, c);
-        acc.g += dot(texelFetch(KernelTex, ivec2(k * 3 + 1, ky), 0).rgb, c);
-        acc.b += dot(texelFetch(KernelTex, ivec2(k * 3 + 2, ky), 0).rgb, c);
+        int srcRow = row - rr;
+        if (srcRow < 0) continue;
+        int ky = (lp * uOutPhases + o % uOutPhases) * uRows + rr;
+        for (int k = 0; k < uTaps; k++)
+        {
+            int pp = p + k - uTapLeft;
+            if (pp < 0 || pp >= kDSRes.x) continue;
+            vec3 c = fetch(ivec2(pp, srcRow));
+            acc.r += dot(texelFetch(KernelTex, ivec2(k * 3 + 0, ky), 0).rgb, c);
+            acc.g += dot(texelFetch(KernelTex, ivec2(k * 3 + 1, ky), 0).rgb, c);
+            acc.b += dot(texelFetch(KernelTex, ivec2(k * 3 + 2, ky), 0).rgb, c);
+        }
     }
     if (uNoiseLines > 0)
     {

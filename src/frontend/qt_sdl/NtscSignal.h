@@ -1,12 +1,14 @@
 /*
-    NTSC video signal chain for the CRT filter: the DS picture as a console's video encoder would
-    send it and an NTSC TV would decode it.
+    Video signal chain for the CRT filter: the DS picture as a console's video encoder would send
+    it and a TV would decode it, NTSC or PAL.
 
-    The chain is simulated at the console's master clock, so every timing relation is exact and
-    in whole clocks: pixels are held for the pixel divider's clocks (the DAC step), the colour
-    carrier runs at master / carrier divider, and each line starts at the carrier phase its
-    length in clocks gives it. Encoder and TV filters are causal (analog-style) filters, so colour
-    lags luma the way it does on real hardware.
+    The chain is simulated at the console's master clock (or a whole multiple of it), so every
+    timing relation is exact: pixels are held for the pixel divider's clocks (the DAC step), the
+    colour carrier makes a fixed number of cycles per fixed number of clocks, and each line starts
+    at the carrier phase its length in clocks gives it. Encoder and TV filters are causal
+    (analog-style) filters, so colour lags luma the way it does on real hardware. PAL flips V's
+    phase every line (the PAL switch), and a PAL-D TV mixes each line's chroma with the previous
+    line's through its delay line, so with PAL-D an output depends on two DS rows.
 
     Everything from DS pixel to decoded R'G'B' is linear and periodic in the carrier phase, so the
     decoded output at any sample is an exact weighted sum of nearby pixels. build() simulates
@@ -40,11 +42,19 @@ struct V4
 };
 #endif
 
-enum Console { Console_Off = 0, Console_MDH40, Console_MDH32, Console_SNES, Console_Count };
+// (PAL ones after the NTSC ones, so saved settings keep their meaning)
+enum Console { Console_Off = 0, Console_MDH40, Console_MDH32, Console_SNES,
+               Console_MDH40Pal, Console_MDH32Pal, Console_SNESPal, Console_Count };
 enum Cable { Cable_RGB = 0, Cable_SVideo, Cable_Composite, Cable_RF, Cable_Count };
-// how the TV turns chroma back into colour differences: the NTSC standard's axes, or the
-// "red push" axes of a Sony TV decoder IC (CXA2025AS, US and Japanese settings)
-enum Decoder { Decoder_Standard = 0, Decoder_SonyUS, Decoder_SonyJP, Decoder_Count };
+// how the TV turns chroma back into colour differences. NTSC: the standard's axes, or the "red
+// push" axes of a Sony TV decoder IC (CXA2025AS, US and Japanese settings). PAL: with a delay line
+// (PAL-D): the 1990s kind on demodulated colour, locked to the incoming line (Philips TDA4661 /
+// TDA4665), or the 1980s glass one on the chroma signal itself (a fixed 63.943 us); or without one
+// (PAL-S)
+enum Decoder { Decoder_Standard = 0, Decoder_SonyUS, Decoder_SonyJP, Decoder_PalD, Decoder_PalS, Decoder_PalDGlass, Decoder_Count };
+bool isPal(int console);
+// the decoder a console's TV uses: a PAL decoder for PAL consoles, an NTSC one otherwise
+int decoderFor(int console, int decoder);
 
 struct Settings
 {
@@ -71,10 +81,15 @@ struct Timing
     const char* name;
     double masterHz;
     int pixelClocks;        // master clocks per DS pixel
-    int carrierClocks;      // master clocks per colour carrier cycle
+    int carrierClocks;      // the carrier makes carrierCycles cycles in this many master clocks
     int lineClocks;         // master clocks per line (the visible part of every line)
     int outStep;            // master clocks between decoded samples (divides pixelClocks)
     long long frameClocks[2];   // master clocks per frame, even and odd frames
+    int carrierCycles;      // see carrierClocks (1 when the carrier is master / divider)
+    int linesPerFrame[2];   // lines per frame, even and odd frames (for PAL's line switch)
+    int sub;                // simulation clocks per master clock with the glass delay line (so it is whole)
+    bool pal;
+    double fsc() const { return masterHz * carrierCycles / carrierClocks; }
 };
 const Timing& timing(int console);
 
@@ -94,22 +109,28 @@ public:
     // where decoded sample 0 sits, in DS pixels from the left edge of pixel 0 (its clock's centre)
     float outOffset() const { return off0; }
 
-    // the carrier phase a line starts at, as an index into the kernel's line phases
+    // a line's state (the carrier phase it starts at, and for PAL the line switch), as an index
+    // into the kernel's line phases
     int linePhase(int row, uint32_t frame) const;
-    // the same in parts, for the GPU: a line starts at (frameClockPhase(frame) + row * lineClockStep())
-    // mod carrierClocks() clocks into the carrier, and linePhaseOfClock() maps that to an index
+    // the same in parts, for the GPU: a line starts (frameClockPhase(frame) + row * lineClockStep())
+    // mod carrierClocks() clocks into the carrier pattern, its switch is (frameSwitch(frame) + row)
+    // & 1 (always 0 for NTSC), and linePhaseOfClock(2 * clock + switch) is the index
     int frameClockPhase(uint32_t frame) const;
+    int frameSwitch(uint32_t frame) const;
     int lineClockStep() const;
     int carrierClocks() const;
-    int linePhaseOfClock(int clock) const { return linePhaseOf.empty() ? 0 : linePhaseOf[clock]; }
+    int linePhaseOfClock(int key) const { return linePhaseOf.empty() ? 0 : linePhaseOf[key]; }
 
-    // rgb: kWidth gamma R'G'B' triples (0..1); out: outWidth() decoded R'G'B' triples, not clipped
-    void decodeLine(const float* rgb, float* out, int row, uint32_t frame) const;
+    // rgb: kWidth gamma R'G'B' triples (0..1) of this row; prev: the row above (null for none:
+    // black), used with a PAL-D TV; out: outWidth() decoded R'G'B' triples, not clipped
+    void decodeLine(const float* rgb, const float* prev, float* out, int row, uint32_t frame) const;
     // the chain sample by sample (the reference for decodeLine); noise as decodeLine adds it
-    void simulateLine(const float* rgb, float* out, int row, uint32_t frame, bool noise) const;
+    void simulateLine(const float* rgb, const float* prev, float* out, int row, uint32_t frame, bool noise) const;
 
-    // kernel layout, for the GPU: weights[((phase * outPhases + o) * taps + k) * 9 + 3 * outChannel + inChannel]
-    // applied to pixel (pixel of the output) + k - tapLeft
+    // kernel layout, for the GPU:
+    // weights[(((phase * outPhases + o) * rows + r) * taps + k) * 9 + 3 * outChannel + inChannel]
+    // applied to pixel (pixel of the output) + k - tapLeft of the row r rows up
+    int rows() const { return nRows; }
     int linePhases() const { return nLinePhase; }
     int outPhases() const { return nOutPhase; }
     int taps() const { return nTaps; }
@@ -123,16 +144,24 @@ public:
 
 private:
     struct Chain;
-    void runChain(const float* rgb, float* out, int lineStartPhase, const float* noiseIn) const;
+    void buildChain();
+    void finalize();
+    void outputMatrix(float m[3][4]) const;
+    void runChain(const float* rgb, const float* prev, float* out, int lineStartPhase, int lineSwitch,
+                  const float* noiseIn) const;
 
     Settings set;
     bool built = false;
     unsigned gen = 0;
-    int opp = 1, nLinePhase = 1, nOutPhase = 1, nTaps = 1, tapL = 0;
+    int opp = 1, nLinePhase = 1, nOutPhase = 1, nTaps = 1, tapL = 0, nRows = 1;
     float off0 = 0.5f;
     float base[3] = {0, 0, 0};
-    std::vector<int> linePhaseOf;      // carrier phase (clocks, mod carrier) -> line phase index
+    std::vector<int> linePhaseOf;      // 2 * carrier phase (clocks, mod carrier) + switch -> line phase index
     std::vector<int> linePhaseClock;   // line phase index -> carrier phase in clocks
+    std::vector<int> linePhaseSwitch;  // line phase index -> PAL switch (0 or 1)
+    std::vector<float> rawKernel;       // per tap: the four TV signals (luma, its high-pass, U, V) x input R, G, B
+    float rawBase[4] = {0, 0, 0, 0};
+    std::vector<float> rawNoise;        // noise lines as the four TV signals
     std::vector<float> kernel;
     std::vector<V4> kernel4;           // the same, per (tap, input channel): weights to output R, G, B
     int nNoise = 0;

@@ -245,7 +245,8 @@ void SoftCrtFilter::rowStage(Layer& L, int y0, int y1)
         {
             const int OW = signal.outWidth();
             decoded.resize((size_t)OW * 3);
-            signal.decodeLine(&L.rgb[(size_t)y * kW * 3], decoded.data(), y, frame);
+            // the row above too: a PAL-D TV's delay line mixes the previous line's chroma in
+            signal.decodeLine(&L.rgb[(size_t)y * kW * 3], y > 0 ? &L.rgb[(size_t)(y - 1) * kW * 3] : nullptr, decoded.data(), y, frame);
             for (int col = 0; col < SW; col++)
             {
                 // decoded sample o sits at (o * step + step / 2 + 0.5) / pixel clocks, in DS pixels
