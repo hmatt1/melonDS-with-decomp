@@ -1056,6 +1056,13 @@ void CDockManager::restoreHiddenFloatingWidgets()
 }
 
 //============================================================================
+void CDockManager::registerDockWidget(CDockWidget* Dockwidget)
+{
+	d->DockWidgetsMap.insert(Dockwidget->objectName(), Dockwidget);
+	Dockwidget->setDockManager(this);
+}
+
+//============================================================================
 CDockAreaWidget* CDockManager::addDockWidget(DockWidgetArea area,
 	CDockWidget* Dockwidget, CDockAreaWidget* DockAreaWidget, int Index)
 {

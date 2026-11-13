@@ -116,6 +116,7 @@ public:
     int bootROM(const QStringList& filename, QString& errorstr);
     // bootROM in two halves, so the GUI can do other work while the emulation thread loads the ROM:
     // start sends the boot, finish waits for it and starts the emulation. Every start needs its finish
+    void startRunning();  // emulator thread only: what msg_EmuRun does
     void bootROMStart(const QStringList& filename);
     int bootROMFinish(QString& errorstr);
     int bootFirmware(QString& errorstr);

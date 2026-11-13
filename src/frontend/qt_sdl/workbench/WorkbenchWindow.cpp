@@ -205,7 +205,21 @@ WorkbenchWindow::WorkbenchWindow(WBHost* host) : QMainWindow(nullptr), H(host)
     DescribePanels();
     BuildMenus();
     BuildStatusBar();
-    DefaultLayout();
+    // The default layout costs a whole layout build (~400 ms), and the last-used layout is restored over
+    // it on show. So when the default is known from an earlier run (its saved state, for this set of
+    // panels), the panels are only registered here, and the last-used layout is the only one built.
+    {
+        Config::Table cfg = Config::GetGlobalTable();
+        if (!H->Settings().DefaultLayout && cfg.GetQString("Workbench.DefaultLayoutKey") == DefaultLayoutKey())
+            DefaultState = QByteArray::fromBase64(cfg.GetQString("Workbench.DefaultLayout").toLatin1());
+    }
+    if (DefaultState.isEmpty()) DefaultLayout();
+    else
+    {
+        // known to the dock manager but not placed: the layout restore on show places them
+        for (ads::CDockWidget* d : Docks) DockMgr->registerDockWidget(d);
+        DefaultCached = true;
+    }
 
     Config::Table cfg = Config::GetGlobalTable();
     QByteArray geom = QByteArray::fromBase64(cfg.GetQString("Workbench.WindowGeometry").toLatin1());
@@ -356,7 +370,13 @@ void WorkbenchWindow::FinishLayout()
 {
     TRACE_QT("WorkbenchWindow::FinishLayout");
     if (!Workspaces.empty()) return;
-    DefaultState = DockMgr->saveState(LayoutVersion);
+    if (!DefaultCached)
+    {
+        DefaultState = DockMgr->saveState(LayoutVersion);
+        Config::Table cfg = Config::GetGlobalTable();
+        cfg.SetQString("Workbench.DefaultLayout", QString::fromLatin1(DefaultState.toBase64()));
+        cfg.SetQString("Workbench.DefaultLayoutKey", DefaultLayoutKey());
+    }
     // the current workspace's layout; one that can't be restored falls back to the workspace's default
     InitWorkspaces();
     RebuildWorkspaceMenu();
@@ -375,12 +395,12 @@ void WorkbenchWindow::FinishLayout()
         connect(wait, &QTimer::timeout, this, [this, wait, since]()
         {
             WBStatus st = H->Status();
-            bool ready = st.EmuState != WBStatus::NoGame && st.Frame >= 30;
+            bool ready = st.EmuState != WBStatus::NoGame && st.Frame >= 1;
             if (!ready && QDateTime::currentMSecsSinceEpoch() - since < 10000) return;
             wait->deleteLater();
             if (ActEmbed->isChecked()) SetEmbeddedScreen(true);
         });
-        wait->start(250);
+        wait->start(10);
     }
     // the first time (and until it is turned off), say what the switches do
     // (shown without taking the keyboard focus)
@@ -789,6 +809,14 @@ void WorkbenchWindow::BuildPanels()
         connect(this, &WorkbenchWindow::navigated, p, [p](u32 a) { p->OnNavigate(a); });
         connect(this, &WorkbenchWindow::selectionChanged, p, [p](u32 a, u32 s) { p->OnSelection(a, s); });
     }
+}
+
+QString WorkbenchWindow::DefaultLayoutKey() const
+{
+    // a saved default layout is only good for the same layout format and the same panels
+    QString key = QString::number(LayoutVersion);
+    for (ads::CDockWidget* d : Docks) key += ' ' + d->objectName();
+    return key;
 }
 
 void WorkbenchWindow::DefaultLayout()

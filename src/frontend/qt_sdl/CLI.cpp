@@ -59,6 +59,7 @@ CommandLineOptions* ManageArgs(QApplication& melon)
     parser.addOption(QCommandLineOption("record", "Turn recording on once the game boots (write history and data origin stay off unless their own flags are set)"));
     parser.addOption(QCommandLineOption("write-history", "Turn recording and write history on once the game boots"));
     parser.addOption(QCommandLineOption("data-origin", "Turn recording and data origin on once the game boots"));
+    parser.addOption(QCommandLineOption("default-layout", "Open the workbench with the default layout, not the one used last"));
     parser.addOption(QCommandLineOption("no-record", "Leave recording, write history and data origin off"));
     parser.addOption(QCommandLineOption("no-write-history", "Leave write history off"));
     parser.addOption(QCommandLineOption("no-data-origin", "Leave data origin off"));
@@ -77,6 +78,7 @@ CommandLineOptions* ManageArgs(QApplication& melon)
     options->writeHistory = parser.isSet("write-history");
     options->dataOrigin = parser.isSet("data-origin");
     options->record = parser.isSet("record") || options->writeHistory || options->dataOrigin;
+    options->defaultLayout = parser.isSet("default-layout");
     options->noRecord = parser.isSet("no-record");
     options->noWriteHistory = parser.isSet("no-write-history");
     options->noDataOrigin = parser.isSet("no-data-origin");

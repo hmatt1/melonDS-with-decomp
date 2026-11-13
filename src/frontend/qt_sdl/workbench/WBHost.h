@@ -97,6 +97,7 @@ struct WBSettings
 {
     QString KnowledgeStorePath;     // empty: <melonDS dir>/workbench/<gamecode>_<sha1>/knowledge.db
     QString KnowledgeStoreOverride; // --kb on the command line; never saved
+    bool DefaultLayout = false;     // --default-layout: start with the default layout; never saved
     bool WorkbenchOnly = false;     // -wo on the command line: game in the workbench, main window hidden; never saved
     QString SourceRoot;             // decomp git tree
     QString CompareCommand;         // build compare command template; empty: WBHost::DefaultCompareCommand

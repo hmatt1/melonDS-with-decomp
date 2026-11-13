@@ -404,8 +404,9 @@ void WorkbenchWindow::InitWorkspaces()
     QByteArray legacy = QByteArray::fromBase64(cfg.GetQString("Workbench.DockState").toLatin1());
     if (cur.isEmpty() && !legacy.isEmpty()) Workspaces[0].State = legacy;
     Workspace& w = Workspaces[CurWorkspace];
-    // an unchanged built-in: making its layout leaves the panels in it (the default layout is showing now)
-    if (w.State.isEmpty()) EnsureDefault(w);
+    if (H->Settings().DefaultLayout) w.State.clear();     // --default-layout: the last-used one is replaced on save
+    // an unchanged built-in: making its layout leaves the panels in it (when the default layout is showing)
+    if (w.State.isEmpty()) { EnsureDefault(w); if (DefaultCached && w.State == DefaultState) RestoreLayout(w.State); }
     else if (!RestoreLayout(w.State)) RestoreLayout(EnsureDefault(w));
 }
 

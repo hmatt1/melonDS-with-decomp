@@ -546,12 +546,7 @@ void EmuThread::handleMessages()
 
         case msg_EmuRun:
             TRACE_EMU_MESSAGE("msg_EmuRun");
-            emuStatus = emuStatus_Running;
-            emuPauseStack = emuPauseStackRunning;
-            emuActive = true;
-
-            emuInstance->audioEnable();
-            emit windowEmuStart();
+            startRunning();
             break;
 
         case msg_EmuPause:
@@ -642,6 +637,8 @@ void EmuThread::handleMessages()
 
             assert(emuInstance->nds != nullptr);
             { TRACE_EMU("NDS::Start"); emuInstance->nds->Start(); }
+            // run straight away: frames start while the GUI is still busy (building the workbench at startup)
+            startRunning();
             msgResult = bootResult = 1;
             break;
         }
@@ -899,6 +896,16 @@ int EmuThread::bootROM(const QStringList& filename, QString& errorstr)
     return bootROMFinish(errorstr);
 }
 
+void EmuThread::startRunning()
+{
+    emuStatus = emuStatus_Running;
+    emuPauseStack = emuPauseStackRunning;
+    emuActive = true;
+
+    emuInstance->audioEnable();
+    emit windowEmuStart();
+}
+
 void EmuThread::bootROMStart(const QStringList& filename)
 {
     sendMessage({.type = msg_BootROM, .param = filename});
@@ -913,10 +920,8 @@ int EmuThread::bootROMFinish(QString& errorstr)
         return bootResult;
     }
 
-    sendMessage(msg_EmuRun);
-    waitMessage();
     errorstr = "";
-    return msgResult;
+    return bootResult;
 }
 
 int EmuThread::bootFirmware(QString& errorstr)

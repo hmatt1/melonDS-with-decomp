@@ -224,6 +224,7 @@ private:
     void UpdateStatus();
     void Tick();
     void DefaultLayout();
+    QString DefaultLayoutKey() const;
     ads::CDockWidget* AddDock(const QString& title, const QString& name, QWidget* w);
     void SaveLayout();
 
@@ -304,6 +305,7 @@ private:
     ads::CDockManager* DockMgr = nullptr;
     std::vector<ads::CDockWidget*> Docks;
     QByteArray DefaultState;
+    bool DefaultCached = false;     // DefaultState came from the config: the default layout was never built
     QByteArray SavedState;               // the layout last written to the config
     static constexpr int LayoutVersion = 1;    // bumped when panels are added or renamed
     int SaveTicks = 0;

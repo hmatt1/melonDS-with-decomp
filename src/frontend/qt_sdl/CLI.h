@@ -37,6 +37,7 @@ struct CommandLineOptions
     // decomp workbench
     bool workbench = false;
     bool workbenchOnly = false;
+    bool defaultLayout = false;
     bool api = false;
     int apiPort = 0;
     bool apiMemoryWrite = false;

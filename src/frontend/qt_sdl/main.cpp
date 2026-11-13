@@ -22,6 +22,7 @@
 #include <string.h>
 
 #include <optional>
+#include <thread>
 #include <string>
 
 #include <QApplication>
@@ -36,6 +37,8 @@
 #include <QVector>
 #include <QCommandLineParser>
 #include <QStandardPaths>
+#include <QFileInfo>
+#include <QFile>
 #ifndef _WIN32
 #include <QGuiApplication>
 #include <QSocketNotifier>
@@ -182,10 +185,9 @@ void broadcastInstanceCommand(int cmd, QVariant& param, int sourceinst)
 }
 
 
-void pathInit()
+void pathInit(const QString& appdirpath)
 {
     // First, check for the portable directory next to the executable.
-    QString appdirpath = QCoreApplication::applicationDirPath();
     QString portablepath = appdirpath + QDir::separator() + "portable";
 
 #if defined(__APPLE__)
@@ -301,6 +303,18 @@ static void signalHandler(int signal)
 int main(int argc, char** argv)
 {
     TRACE_QT_STEP("startup: before QApplication");
+#ifdef __linux__
+    // the config (paths, then melonDS.toml) loads on a worker from the start, alongside QApplication and
+    // SDL; nothing reads it before "startup: config load" waits for it. The executable's folder (for a
+    // portable setup) comes from /proc, as QCoreApplication doesn't exist yet
+    bool configLoaded = false;
+    std::thread configThread([&configLoaded]()
+    {
+        TRACE_QT("config load (worker)");
+        pathInit(QFileInfo(QFile::symLinkTarget("/proc/self/exe")).absolutePath());
+        configLoaded = Config::Load();
+    });
+#endif
     sysTimer.start();
     srand(time(nullptr));
 
@@ -368,7 +382,9 @@ int main(int argc, char** argv)
     if (quitOnSignal) QObject::connect(quitOnSignal, &QSocketNotifier::activated, &melon, []() { qApp->quit(); });
 #endif
     TRACE_QT_STEP("startup: paths and arguments");
-    pathInit();
+#ifndef __linux__
+    pathInit(QCoreApplication::applicationDirPath());
+#endif
 
     CLI::CommandLineOptions* options = CLI::ManageArgs(melon);
 
@@ -397,7 +413,12 @@ int main(int argc, char** argv)
     EmuInstance::joystickInitStart();
 
     TRACE_QT_STEP("startup: config load");
-    if (!Config::Load())
+#ifdef __linux__
+    configThread.join();
+#else
+    bool configLoaded = Config::Load();
+#endif
+    if (!configLoaded)
         QMessageBox::critical(nullptr,
                               "melonDS",
                               "Unable to write to config.\nPlease check the write permissions of the folder you placed melonDS in.");
@@ -440,6 +461,7 @@ int main(int argc, char** argv)
         WBHost* wb = emuInstances[0]->getWorkbench();
         if (options->knowledgeStore) wb->Settings().KnowledgeStoreOverride = *options->knowledgeStore;
         wb->Settings().WorkbenchOnly = options->workbenchOnly;
+        wb->Settings().DefaultLayout = options->defaultLayout;
         bool api = options->api || wb->Settings().ApiEnabled;
         if (api)
             wb->StartApi(options->apiPort ? options->apiPort : wb->Settings().ApiPort,
