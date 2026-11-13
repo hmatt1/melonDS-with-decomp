@@ -240,6 +240,7 @@ private:
         QByteArray Geometry;
         int Screen = -1;
     };
+    const QByteArray& EnsureDefault(Workspace& w);    // a built-in's layout, made the first time it is needed
     int ScreenMode() const;
     void CaptureWorkspace(Workspace& w);
     void ApplyWorkspace(int idx, bool layout);

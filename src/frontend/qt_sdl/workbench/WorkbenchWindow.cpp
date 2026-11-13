@@ -90,6 +90,7 @@ bool WBPanel::IsShown() const
 
 void WorkbenchWindow::ApplyDarkTheme()
 {
+    TRACE_QT("WorkbenchWindow::ApplyDarkTheme");
     QPalette pal;
     const QColor window = WBColor::Window();
     const QColor base = WBColor::Base();
@@ -142,6 +143,7 @@ void WorkbenchWindow::StampButton(QAbstractButton* b)
 
 void WorkbenchWindow::ApplyChrome()
 {
+    TRACE_QT("WorkbenchWindow::ApplyChrome");
     const QString sheet = WBColor::WidgetStyleSheet();
     setStyleSheet(sheet);
     if (!DockMgr) return;
@@ -183,7 +185,10 @@ WorkbenchWindow::WorkbenchWindow(WBHost* host) : QMainWindow(nullptr), H(host)
     ads::CDockManager::setConfigFlag(ads::CDockManager::XmlCompressionEnabled, false);
     ads::CDockManager::setAutoHideConfigFlags(ads::CDockManager::DefaultAutoHideConfig);
     ads::CDockManager::setAutoHideConfigFlag(ads::CDockManager::AutoHideCloseOnOutsideMouseClick, true);
-    DockMgr = new ads::CDockManager(this);
+    {
+        TRACE_QT("ads::CDockManager constructor");
+        DockMgr = new ads::CDockManager(this);
+    }
     ApplyChrome();
     {
         auto* watch = new QFileSystemWatcher(this);
@@ -709,29 +714,30 @@ void WorkbenchWindow::CaptureUi(const QString& dock, int maxWidth, UiCaptureFn c
 
 void WorkbenchWindow::BuildPanels()
 {
-    DisasmView = new DisasmPanel(this);
-    MemoryView = new MemoryPanel(this);
+    TRACE_QT("WorkbenchWindow::BuildPanels");
+    { TRACE_QT("panel: DisasmPanel"); DisasmView = new DisasmPanel(this); }
+    { TRACE_QT("panel: MemoryPanel"); MemoryView = new MemoryPanel(this); }
     // no central widget: every panel, the disassembly included, can dock, float or close
 
-    AddDock("Disassembly", "dock_disasm", DisasmView);
-    AddDock("Memory", "dock_memory", MemoryView);
-    AddDock("Functions", "dock_functions", new FunctionsPanel(this));
-    AddDock("Bookmarks", "dock_bookmarks", new BookmarksPanel(this));
-    AddDock("Registers", "dock_registers", new RegistersPanel(this));
-    AddDock("Inspector", "dock_inspector", new InspectorPanel(this));
-    AddDock("Annotations", "dock_annotations", new AnnotationsPanel(this));
-    AddDock("Call stack", "dock_callstack", new CallStackPanel(this));
-    AddDock("Call graph", "dock_callgraph", new CallGraphPanel(this));
-    AddDock("Cross-references", "dock_xrefs", new XrefsPanel(this));
-    AddDock("Coverage map", "dock_coverage", new CoveragePanel(this));
-    AddDock("Write history", "dock_history", new WriteHistoryPanel(this));
-    AddDock("Data origin", "dock_origin", new DataOriginPanel(this));
-    AddDock("Overlays", "dock_overlays", new OverlaysPanel(this));
-    AddDock("Compare setup", "dock_compare_setup", new CompareSetupPanel(this));
-    AddDock("Source and diff", "dock_source", new SourcePanel(this));
-    AddDock("Decompiler", "dock_decompiler", new DecompilerPanel(this));
-    AddDock("Search", "dock_search", new SearchPanel(this));
-    AddDock("Game archive", "dock_archive", ArchiveView = new ArchivePanel(this));
+    { TRACE_QT("panel: Disassembly"); AddDock("Disassembly", "dock_disasm", DisasmView); }
+    { TRACE_QT("panel: Memory"); AddDock("Memory", "dock_memory", MemoryView); }
+    { TRACE_QT("panel: Functions"); AddDock("Functions", "dock_functions", new FunctionsPanel(this)); }
+    { TRACE_QT("panel: Bookmarks"); AddDock("Bookmarks", "dock_bookmarks", new BookmarksPanel(this)); }
+    { TRACE_QT("panel: Registers"); AddDock("Registers", "dock_registers", new RegistersPanel(this)); }
+    { TRACE_QT("panel: Inspector"); AddDock("Inspector", "dock_inspector", new InspectorPanel(this)); }
+    { TRACE_QT("panel: Annotations"); AddDock("Annotations", "dock_annotations", new AnnotationsPanel(this)); }
+    { TRACE_QT("panel: Call stack"); AddDock("Call stack", "dock_callstack", new CallStackPanel(this)); }
+    { TRACE_QT("panel: Call graph"); AddDock("Call graph", "dock_callgraph", new CallGraphPanel(this)); }
+    { TRACE_QT("panel: Cross-references"); AddDock("Cross-references", "dock_xrefs", new XrefsPanel(this)); }
+    { TRACE_QT("panel: Coverage map"); AddDock("Coverage map", "dock_coverage", new CoveragePanel(this)); }
+    { TRACE_QT("panel: Write history"); AddDock("Write history", "dock_history", new WriteHistoryPanel(this)); }
+    { TRACE_QT("panel: Data origin"); AddDock("Data origin", "dock_origin", new DataOriginPanel(this)); }
+    { TRACE_QT("panel: Overlays"); AddDock("Overlays", "dock_overlays", new OverlaysPanel(this)); }
+    { TRACE_QT("panel: Compare setup"); AddDock("Compare setup", "dock_compare_setup", new CompareSetupPanel(this)); }
+    { TRACE_QT("panel: Source and diff"); AddDock("Source and diff", "dock_source", new SourcePanel(this)); }
+    { TRACE_QT("panel: Decompiler"); AddDock("Decompiler", "dock_decompiler", new DecompilerPanel(this)); }
+    { TRACE_QT("panel: Search"); AddDock("Search", "dock_search", new SearchPanel(this)); }
+    { TRACE_QT("panel: Game archive"); AddDock("Game archive", "dock_archive", ArchiveView = new ArchivePanel(this)); }
     connect(ArchiveView, &ArchivePanel::located, this, [this](int member, u32 addr, u32 size)
     {
         if (member != NavigateToArchived) return;
@@ -740,7 +746,7 @@ void WorkbenchWindow::BuildPanels()
         GoTo(addr);
         SetSelection(addr, size);
     });
-    AddDock("NARC/SDAT files", "dock_containers", ContainersView = new ContainersPanel(this));
+    { TRACE_QT("panel: NARC/SDAT files"); AddDock("NARC/SDAT files", "dock_containers", ContainersView = new ContainersPanel(this)); }
     connect(ContainersView, &ContainersPanel::located, this, [this](int global, u32 addr, u32 size)
     {
         if (global != NavigateToContained) return;
@@ -749,10 +755,10 @@ void WorkbenchWindow::BuildPanels()
         GoTo(addr);
         SetSelection(addr, size);
     });
-    AddDock("Graphics", "dock_graphics", new GraphicsPanel(this));
-    AddDock("Breakpoints", "dock_breakpoints", new BreakpointsPanel(this));
-    AddDock("Recording", "dock_recording", new RecordingPanel(this));
-    AddDock("Getting started", "dock_start", new GettingStartedPanel(this));
+    { TRACE_QT("panel: Graphics"); AddDock("Graphics", "dock_graphics", new GraphicsPanel(this)); }
+    { TRACE_QT("panel: Breakpoints"); AddDock("Breakpoints", "dock_breakpoints", new BreakpointsPanel(this)); }
+    { TRACE_QT("panel: Recording"); AddDock("Recording", "dock_recording", new RecordingPanel(this)); }
+    { TRACE_QT("panel: Getting started"); AddDock("Getting started", "dock_start", new GettingStartedPanel(this)); }
 
     // the game screen: a placeholder until the game is shown here
     GameHost = new QWidget();
@@ -776,7 +782,7 @@ void WorkbenchWindow::BuildPanels()
     pl->addStretch();
     gl->addWidget(GamePlaceholder);
     // at least one DS screen wide, so the game is never cropped
-    AddDock("Game screen", "dock_game", GameHost)->setMinimumSize(270, 220);
+    { TRACE_QT("panel: Game screen"); AddDock("Game screen", "dock_game", GameHost)->setMinimumSize(270, 220); }
 
     for (WBPanel* p : Panels)
     {
@@ -787,6 +793,7 @@ void WorkbenchWindow::BuildPanels()
 
 void WorkbenchWindow::DefaultLayout()
 {
+    TRACE_QT("WorkbenchWindow::DefaultLayout");
     // centre column: disassembly over memory over the bottom tabs; left: functions + bookmarks;
     // right: registers, inspector, annotations. The side columns run the full height
     // (the dock manager only knows docks once they are added)
@@ -874,6 +881,7 @@ void WorkbenchWindow::UseTargetCpu(const CmdTarget& t)
 
 void WorkbenchWindow::BuildMenus()
 {
+    TRACE_QT("WorkbenchWindow::BuildMenus");
     // Every command is made here once, with its id, name and key. Names end in "..." only when the
     // command asks for more before it acts (a dialog or a prompt).
     auto add = [this](QMenu* menu, const char* id, const QString& text, std::function<void()> fn,
@@ -1044,7 +1052,7 @@ void WorkbenchWindow::BuildMenus()
     WorkspaceMenu = win->addMenu("Workspaces");
     add(win, "panels", "Panels...", [this]() { ShowPanelPalette(); }, {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P)});
     win->addSeparator();
-    add(win, "reset_layout", "Reset layout", [this]() { if (!Workspaces.empty()) { RestoreLayout(Workspaces[CurWorkspace].Default); SaveLayout(); } });
+    add(win, "reset_layout", "Reset layout", [this]() { if (!Workspaces.empty()) { RestoreLayout(EnsureDefault(Workspaces[CurWorkspace])); SaveLayout(); } });
 
     QMenu* help = mb->addMenu("&Help");
     add(help, "getting_started", "Getting started", [this]() { ShowPanel("dock_start"); });
@@ -1056,6 +1064,7 @@ void WorkbenchWindow::BuildMenus()
 
 void WorkbenchWindow::BuildStatusBar()
 {
+    TRACE_QT("WorkbenchWindow::BuildStatusBar");
     auto badge = [this](const QString& text, const QString& bg)
     {
         QLabel* l = new QLabel(text, this);
