@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace
 {
@@ -337,21 +338,20 @@ void SoftCrtFilter::outStage(Layer& L, int y0, int y1, uint32_t* dst, int stride
     }
 }
 
-// stage 3, curved screen: each output pixel finds its warped point and works it out there, as
-// kCrtFS does. The sideways signal and glow come from the nearest of the 2n phase columns, the
-// beams from a table by level and distance. Outside the curved screen is black
-void SoftCrtFilter::curvedStage(Layer& L, int y0, int y1, uint32_t* dst, int stride)
+// The curved screen's geometry, per output pixel: where the warp puts it (its signal column and
+// rows), its edge darkening and the antialiased edge. It depends only on the zoom and settings, so
+// it is worked out once here, and the curved stage only does the colour work per frame
+void SoftCrtFilter::makeGeometry()
 {
-    const Luts& lut = luts();
     const int n = t.n, W = kW * n, H = kH * n, P = t.phases, SW = kW * P;
     const float wx = t.p.curvature * kWarpX, wy = t.p.curvature * kWarpY, vig = t.p.vignette;
-    const float* beamT = t.beam.data();
-    for (int Y = y0; Y < y1; Y++)
+    t.geo.resize((size_t)W * H);
+    for (int Y = 0; Y < H; Y++)
     {
-        uint32_t* o = dst + (size_t)Y * stride;
         const float cy0 = t.cy[Y];
         for (int x = 0; x < W; x++)
         {
+            Geo& gq = t.geo[(size_t)Y * W + x];
             float cx0 = t.cx[x];
             float cx = cx0 * (1.f + cy0 * cy0 * wx);
             float cy = cy0 * (1.f + cx0 * cx0 * wy);
@@ -359,57 +359,109 @@ void SoftCrtFilter::curvedStage(Layer& L, int y0, int y1, uint32_t* dst, int str
             // antialiased edge, as kCrtFS: how far inside, in output pixels (one output pixel is
             // about 1/W of u and 1/H of v; the warp changes that by a few percent at most)
             float edge = std::min(std::min(u, 1.f - u) * W, std::min(v, 1.f - v) * H) + 0.5f;
-            if (edge <= 0.f) { o[x] = 0xFF000000u; continue; }
-            const bool onEdge = edge < 1.f;   // only the outermost pixel of the curve
-            if (onEdge) { u = std::clamp(u, 0.f, 1.f); v = std::clamp(v, 0.f, 1.f); }
+            if (edge <= 0.f) { gq.off = kOutside; continue; }
+            u = std::clamp(u, 0.f, 1.f); v = std::clamp(v, 0.f, 1.f);
             float px = u * kW, py = v * kH;
-
-            // signal column: the nearest phase
-            int sx = std::min((int)(px * P), SW - 1);
-            float yy = py - 0.5f;                 // -0.5 .. 191.5
-            int r0 = (int)(yy + 1.f) - 1;         // floor, without a call
+            int sx = std::min((int)(px * P), SW - 1);      // signal column: the nearest phase
+            float yy = py - 0.5f;                          // -0.5 .. 191.5
+            int r0 = (int)(yy + 1.f) - 1;                  // floor
             float f = yy - r0;
             int ra = std::clamp(r0, 0, kH - 1), rb = std::clamp(r0 + 1, 0, kH - 1);
-            const uint16_t* sa = &L.sig[((size_t)ra * SW + sx) * 3];
-            const uint16_t* sb = &L.sig[((size_t)rb * SW + sx) * 3];
+            gq.off = (uint32_t)(((size_t)ra * SW + sx) * 3);
+            gq.rowStep = (uint16_t)((rb - ra) * SW * 3);
+            gq.f = (uint16_t)std::lround(f * 65535.f);
+            gq.vig = (uint16_t)std::lround((vig > 0.f ? vignette(cx, cy, vig) : 1.f) * 65535.f);
+            gq.edge = (uint16_t)std::lround(std::min(edge, 1.f) * 65535.f);
+        }
+    }
+}
+
+// stage 3, curved screen: each output pixel works out its warped point (from the geometry table)
+// as kCrtFS does. The sideways signal and glow come from the nearest of the 2n phase columns, the
+// beams from a table by level and distance. Outside the curved screen is black
+void SoftCrtFilter::curvedStage(Layer& L, int y0, int y1, uint32_t* dst, int stride)
+{
+    const Luts& lut = luts();
+    const int n = t.n, W = kW * n;
+    const float* beamT = t.beam.data();
+    const uint16_t* sig = L.sig.data();
+    const float* glow = L.glowH.data();
+    const float* gain = t.gain.data();
+    constexpr float k16 = 1.f / 65535.f;
+    for (int Y = y0; Y < y1; Y++)
+    {
+        uint32_t* o = dst + (size_t)Y * stride;
+        const Geo* gr = &t.geo[(size_t)Y * W];
+        for (int x = 0; x < W; x++)
+        {
+            const Geo& gq = gr[x];
+            if (gq.off == kOutside) { o[x] = 0xFF000000u; continue; }
+            const uint16_t* sa = sig + gq.off;
+            const uint16_t* sb = sa + gq.rowStep;
+            const float* g0 = glow + gq.off;
+            const float* g1 = g0 + gq.rowStep;
+            const float f = gq.f * k16;
             // the two rows are f and 1 - f away: table steps and weights
             float fa = f * kBeamSteps, fb = (1.f - f) * kBeamSteps;
             int ia = std::min((int)fa, kBeamSteps - 1), ib = std::min((int)fb, kBeamSteps - 1);
             float wa = fa - ia, wb = fb - ib;
-
-            // glow: already widened to the phase columns; lerped between the beams' two rows
-            const float* g0 = &L.glowH[((size_t)ra * SW + sx) * 3];
-            const float* g1 = &L.glowH[((size_t)rb * SW + sx) * 3];
-
-            float vg = vig > 0.f ? vignette(cx, cy, vig) : 1.f;
+            const float vg = gq.vig * k16;
             float col[3];
             for (int c = 0; c < 3; c++)
             {
                 const float* ta = beamT + sa[c] + ia;
                 const float* tb = beamT + sb[c] + ib;
                 float beam = ta[0] + (ta[1] - ta[0]) * wa + tb[0] + (tb[1] - tb[0]) * wb;
-                col[c] = (beam + g0[c] + (g1[c] - g0[c]) * f) * t.gain[x * 3 + c] * vg;
+                col[c] = (beam + g0[c] + (g1[c] - g0[c]) * f) * gain[x * 3 + c] * vg;
             }
-            if (onEdge)   // blended after clamping, as kCrtFS does
+            if (gq.edge != 65535)   // the outermost pixel of the curve: blended after clamping, as kCrtFS does
+            {
+                const float edge = gq.edge * k16;
                 for (float& v : col) v = std::min(v, 1.f) * edge;
+            }
             o[x] = encode(lut, col[0], col[1], col[2]);
         }
     }
 }
-
 void SoftCrtFilter::process(const uint32_t* const src[2], uint32_t* const dst[2], int dstStride, int n,
                             const SoftCrtParams& p, unsigned layers)
 {
     n = std::clamp(n, 1, 16);
-    int list[2], nl = 0;
-    for (int l = 0; l < 2; l++)
-        if (layers & (1u << l)) list[nl++] = l;
-    if (!nl) return;
-
     if (!t.valid || t.n != n || !(t.p == p))
+    {
         makeTables(n, p);
+        if (p.curvature > 0.f) makeGeometry(); else t.geo.clear();
+        tablesGen++;
+    }
     signal.build(p.signal);   // cheap when nothing changed
     frame = p.frame;
+
+    // a screen whose picture, settings and output are the same as last time is left as it is:
+    // DS games often draw at 30 fps, and one screen is often a still menu or map. What changes
+    // from frame to frame regardless (the signal's carrier pattern on some consoles) is part of
+    // the check, and RF noise, new every frame, never skips
+    const bool noisy = signal.active() && p.signal.cable == Ntsc::Cable_RF && p.signal.noise > 0.f;
+    const int frameKey = signal.active() ? signal.frameClockPhase(frame) * 2 + signal.frameSwitch(frame) : 0;
+    int list[2], nl = 0;
+    for (int l = 0; l < 2; l++)
+    {
+        if (!(layers & (1u << l))) continue;
+        Layer& L = layer[l];
+        const bool same = !noisy && L.cacheOk && L.cacheTables == tablesGen && L.cacheSignal == signal.generation() &&
+                          L.cacheFrameKey == frameKey && L.cacheDst == dst[l] && L.cacheStride == dstStride &&
+                          L.lastSrc.size() == (size_t)kW * kH &&
+                          std::memcmp(L.lastSrc.data(), src[l], (size_t)kW * kH * 4) == 0;
+        if (same) continue;
+        list[nl++] = l;
+        L.lastSrc.assign(src[l], src[l] + (size_t)kW * kH);
+        L.cacheOk = !noisy;
+        L.cacheTables = tablesGen;
+        L.cacheSignal = signal.generation();
+        L.cacheFrameKey = frameKey;
+        L.cacheDst = dst[l];
+        L.cacheStride = dstStride;
+    }
+    if (!nl) return;
 
     const int H = kH * n;
     const bool curved = p.curvature > 0.f;

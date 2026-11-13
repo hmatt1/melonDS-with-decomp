@@ -60,6 +60,8 @@ enum { screenFilter_Off = 0, screenFilter_LCD = 1, screenFilter_CRT = 2, screenF
 namespace Config { class Table; }
 // the instance's screen filter; before there was a choice of filter, PixelGrid said LCD or off
 int screenFilterSetting(Config::Table& localCfg);
+// threads the software (CPU) screen filters use
+int softFilterThreads(Config::Table& localCfg);
 
 
 // a screen filter's slider: name, config key (per window), shader uniform, range, default, unit

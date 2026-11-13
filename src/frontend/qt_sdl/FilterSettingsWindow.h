@@ -20,6 +20,7 @@
 #include "Screen.h"
 
 class QCheckBox;
+class QLabel;
 class QGridLayout;
 class QGroupBox;
 
@@ -36,6 +37,9 @@ public:
     void setActive(bool on);
 
     QCheckBox* useBox = nullptr;
+    QLabel* drawnBy = nullptr;
+    // says what draws the filter: the GPU, or the CPU on this many threads
+    void setDrawnBy(bool gpu, int threads);
     // each parameter's label, slider and value, to grey out the ones that don't apply
     std::vector<std::array<QWidget*, 3>> rows;
     void setParamEnabled(int i, bool on) { if (i >= 0 && i < (int)rows.size()) for (QWidget* w : rows[i]) if (w) w->setEnabled(on); }

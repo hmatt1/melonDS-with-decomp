@@ -75,6 +75,9 @@ private:
 
     std::unique_ptr<SoftFilterPool> pool;
     Table table[2];
+    // what each screen was last filtered from, to skip it when nothing changed
+    struct Last { std::vector<uint32_t> src; bool valid = false; const uint32_t* dst = nullptr; int stride = 0; };
+    Last lastIn[2];
 };
 
 #endif

@@ -2638,6 +2638,9 @@ void MainWindow::updateScreenFilterMenu()
     const int mode = screenFilterSetting(emuInstance->getLocalConfig());
     if (lcdWindow) lcdWindow->setActive(mode == screenFilter_LCD);
     if (crtWindow) crtWindow->setActive(mode == screenFilter_CRT);
+    const int threads = softFilterThreads(emuInstance->getLocalConfig());
+    if (lcdWindow) lcdWindow->setDrawnBy(hasOGL, threads);
+    if (crtWindow) crtWindow->setDrawnBy(hasOGL, threads);
     if (!actScreenFilter[mode]) return;
     actScreenFilter[mode]->setChecked(true);
     const char* by = hasOGL ? "Drawn by an OpenGL shader (Config > Video settings uses OpenGL)"

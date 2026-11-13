@@ -24,6 +24,15 @@
 
 #include "Config.h"
 
+void FilterWindow::setDrawnBy(bool gpu, int threads)
+{
+    if (!drawnBy) return;
+    drawnBy->setText(gpu
+        ? QString("Drawn by the GPU (OpenGL), at almost no cost to the emulator.")
+        : QString("Drawn on the CPU, on %1 threads. On a slower or 2-core PC this can cost frames: "
+                  "Config > Video settings > OpenGL display has the GPU draw it instead.").arg(threads));
+}
+
 void FilterWindow::setActive(bool on)
 {
     if (!useBox) return;
@@ -64,9 +73,15 @@ FilterWindow* buildFilterWindow(QWidget* parent, Config::Table& windowCfg, const
     QObject::connect(win->useBox, &QCheckBox::toggled, win, [set = spec.setActive](bool on) { if (set) set(on); });
     grid->addWidget(win->useBox, 0, 0, 1, 4);
 
+    // what draws the filter: the GPU, or the CPU (where a slow PC may want the GPU instead)
+    win->drawnBy = new QLabel(win);
+    win->drawnBy->setWordWrap(true);
+    win->drawnBy->setEnabled(false);   // greyed: a note, not a control
+    grid->addWidget(win->drawnBy, 1, 0, 1, 4);
+
     // one slider per parameter; a change applies on the next frame. Parameters with a section go
     // in a box of that name, which the filter can start with its own controls (sectionTop)
-    const int paramRow = 1;
+    const int paramRow = 2;
     auto sliders = std::make_shared<std::vector<QSlider*>>();
     QGridLayout* target = grid;
     const char* curSection = nullptr;

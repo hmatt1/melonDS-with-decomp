@@ -166,6 +166,14 @@ Ntsc::Settings ScreenPanel::signalSettings() const
     return s;
 }
 
+int softFilterThreads(Config::Table& localCfg)
+{
+    // PixelGridThreads, or 0 for half the logical cores, 2 to 4 (the emulator itself needs the rest)
+    int threads = localCfg.GetInt("PixelGridThreads");
+    if (threads <= 0) threads = std::clamp((int)std::thread::hardware_concurrency() / 2, 2, 4);
+    return threads;
+}
+
 int screenFilterSetting(Config::Table& localCfg)
 {
     int mode = localCfg.GetInt("ScreenFilterMode");
@@ -878,10 +886,7 @@ void ScreenPanelNative::paintEvent(QPaintEvent* event)
             for (int i = 0; i < numScreens; i++) layers |= 1u << screenKind[i];
             const uint32_t* src[2] = {(const uint32_t*)screen[0].constBits(), (const uint32_t*)screen[1].constBits()};
             uint32_t* dst[2] = {(uint32_t*)filtered[0].bits(), (uint32_t*)filtered[1].bits()};
-            // threads for the software filters: PixelGridThreads, or 0 for half the logical cores,
-            // 2 to 4 (the emulator itself needs the rest)
-            int threads = emuInstance->getLocalConfig().GetInt("PixelGridThreads");
-            if (threads <= 0) threads = std::clamp((int)std::thread::hardware_concurrency() / 2, 2, 4);
+            const int threads = softFilterThreads(emuInstance->getLocalConfig());
 
             if (mode == screenFilter_LCD)
             {

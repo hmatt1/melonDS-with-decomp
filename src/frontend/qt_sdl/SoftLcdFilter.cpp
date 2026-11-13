@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace
 {
@@ -164,9 +165,23 @@ void SoftLcdFilter::process(const uint32_t* const src[2], uint32_t* const dst[2]
     for (int layer = 0; layer < 2; layer++)
         if (layers & (1u << layer))
         {
-            list[nl++] = layer;
+            bool rebuilt = false;
             if (table[layer].n != n || table[layer].layer != layer || !(table[layer].p == p))
+            {
                 makeTable(table[layer], n, p, layer);
+                rebuilt = true;
+            }
+            // a screen whose picture and settings are as last time is left as it is (DS games
+            // often draw at 30 fps, and one screen is often a still menu or map)
+            Last& last = lastIn[layer];
+            if (!rebuilt && last.valid && last.dst == dst[layer] && last.stride == dstStride &&
+                std::memcmp(last.src.data(), src[layer], (size_t)kW * kH * 4) == 0)
+                continue;
+            last.src.assign(src[layer], src[layer] + (size_t)kW * kH);
+            last.valid = true;
+            last.dst = dst[layer];
+            last.stride = dstStride;
+            list[nl++] = layer;
         }
     if (!nl) return;
 

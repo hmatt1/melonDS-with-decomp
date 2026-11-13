@@ -305,21 +305,31 @@ What draws a filter follows Config > **Video settings**:
   the CPU. They are the fallback, so the filters work without OpenGL; they look the same at
   whole-number zooms.
 
-The software filters use half the logical cores, 2 to 4 threads, by default. To set the number,
-put `PixelGridThreads` under `[Instance0]` in `melonDS.toml` (0 means automatic). Per frame, for
-both screens:
+The software filters run in parallel: each stage is split into bands of rows across a pool of
+threads, and the thread drawing the window works too. By default the pool uses half the logical
+cores, 2 to 4 threads. To set the number, put `PixelGridThreads` under `[Instance0]` in
+`melonDS.toml` (0 means automatic).
 
-| Filter | Zoom | 2 threads | 4 threads |
-|---|---|---|---|
-| LCD (DSi XL stripes and blur) | 4x | 2.6 ms | 1.4 ms |
-| CRT, flat (curvature 0) | 3x | 3.7 ms | 2.1 ms |
-| CRT, curved (the default) | 3x | 8.6 ms | 4.6 ms |
-| CRT, flat (curvature 0) | 4x | 6.0 ms | 3.2 ms |
-| CRT, curved (the default) | 4x | 14.1 ms | 7.4 ms |
+A screen that hasn't changed since the last frame isn't filtered again. Many DS games draw at
+30 fps, and one screen is often a still menu or map. Settings, zoom and, for a console's signal,
+the frame's carrier pattern have to match too; RF noise is new every frame, so with it every
+frame is filtered. A screen the layout doesn't show (Top only, Bottom only) isn't filtered at all.
 
-A console's video signal on the CPU costs about 3 ms per screen on one thread, split across the
-threads with the rest. On OpenGL it is a small extra pass. A screen the layout doesn't show (Top
-only, Bottom only) isn't filtered.
+Per frame at 3x zoom, on 2 threads:
+
+| Filter | Both screens changing | Top screen only |
+|---|---|---|
+| LCD (DSi XL stripes and blur, 4x) | 2.6 ms | about half |
+| CRT, flat (curvature 0) | 3.7 ms | 2.0 ms |
+| CRT, curved (the default) | 6.1 ms | 3.1 ms |
+| CRT, curved, Mega Drive composite | 9.5 ms | 4.9 ms |
+| CRT, curved, SNES PAL composite | 10.7 ms | 5.5 ms |
+
+Four threads take about half as long. In TrackMania DS with the Software renderer, on a PC limited
+to 4 cores, every filter and signal holds 60 fps. On 2 cores, where the filter and the emulator
+compete, the CRT drops to about 45 fps. There, turn on Config > Video settings > **OpenGL display**:
+the GPU then draws the filters, and the same game holds 60 fps on 2 cores with any filter and
+signal. Each filter's settings window says which one is drawing it.
 
 ## Credits
 

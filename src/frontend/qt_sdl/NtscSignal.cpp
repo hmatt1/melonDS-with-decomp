@@ -746,19 +746,22 @@ void Signal::decodeLine(const float* rgb, const float* prev, float* out, int row
             for (int x = 0; x < kWidth; x++) row4[rr][pad + x] = V4{src[x * 3], src[x * 3 + 1], src[x * 3 + 2], 0.f};
     }
     const V4 b4{base[0], base[1], base[2], 0.f};
-    for (int o = 0; o < W; o++)
-    {
-        int p = (o * step + step / 2) / pc;
-        V4 acc = b4;
+    // one output phase at a time, so its weights stay in the L1 cache for all its outputs
+    for (int op = 0; op < nOutPhase && op < W; op++)
         for (int rr = 0; rr < nRows; rr++)
         {
-            const V4* kw = &kernel4[((((size_t)L * nOutPhase + o % nOutPhase) * nRows + rr) * nTaps) * 3];
-            const V4* px = &row4[rr][pad + p - tapL];
-            for (int k = 0; k < nTaps; k++, kw += 3, px++)
-                acc += kw[0] * (*px)[0] + kw[1] * (*px)[1] + kw[2] * (*px)[2];
+            const V4* kw0 = &kernel4[((((size_t)L * nOutPhase + op) * nRows + rr) * nTaps) * 3];
+            for (int o = op; o < W; o += nOutPhase)
+            {
+                const int p = (o * step + step / 2) / pc;
+                V4 acc = rr == 0 ? b4 : V4{out[o * 3], out[o * 3 + 1], out[o * 3 + 2], 0.f};
+                const V4* kw = kw0;
+                const V4* px = &row4[rr][pad + p - tapL];
+                for (int k = 0; k < nTaps; k++, kw += 3, px++)
+                    acc += kw[0] * (*px)[0] + kw[1] * (*px)[1] + kw[2] * (*px)[2];
+                out[o * 3 + 0] = acc[0]; out[o * 3 + 1] = acc[1]; out[o * 3 + 2] = acc[2];
+            }
         }
-        out[o * 3 + 0] = acc[0]; out[o * 3 + 1] = acc[1]; out[o * 3 + 2] = acc[2];
-    }
     if (nNoise && set.noise > 0)
     {
         const float* nl = &noiseData[(size_t)noiseLineFor(row, frame) * W * 3];

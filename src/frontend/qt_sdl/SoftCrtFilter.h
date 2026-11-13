@@ -71,6 +71,17 @@ public:
 private:
     static constexpr int kTaps = 9;
 
+    // a curved-screen output pixel's geometry (see makeGeometry)
+    struct Geo
+    {
+        uint32_t off;         // first row's signal / glow offset (kOutside: off the curved screen)
+        uint16_t rowStep;     // to the second row: one row of signal, or 0 at the edges
+        uint16_t f;           // distance below the first row's centre, /65535
+        uint16_t vig;         // edge darkening, /65535
+        uint16_t edge;        // antialiased edge, /65535 (65535: fully inside)
+    };
+    static constexpr uint32_t kOutside = 0xFFFFFFFFu;
+
     struct Tables
     {
         int n = 0;
@@ -82,6 +93,7 @@ private:
                                          // curved: [256 levels][65 distances]
         std::vector<float> gain;         // [column][3]: mask x brightness
         std::vector<float> cx, cy;       // screen position -1..1 of each output column / row
+        std::vector<Geo> geo;            // curved: per output pixel (both screens share it)
     };
 
     struct Layer
@@ -91,17 +103,25 @@ private:
         std::vector<float> glow;         // [192][256][3], linear, x glow strength
         std::vector<float> glowTmp;      // [192][256][3], the horizontal glow pass
         std::vector<uint16_t> sig;       // [192][256 * phases][3]: signal, 12-bit gamma level
-        std::vector<float> glowH;        // flat only: [192][256n][3]
+        std::vector<float> glowH;        // [192][256 * phases][3]
+        // what this screen was last filtered from, to skip it when nothing changed
+        std::vector<uint32_t> lastSrc;
+        bool cacheOk = false;
+        unsigned cacheTables = 0, cacheSignal = 0;
+        int cacheFrameKey = 0, cacheStride = 0;
+        const uint32_t* cacheDst = nullptr;
     };
 
     void makeTables(int n, const SoftCrtParams& p);
     void dsStage(Layer& L, const uint32_t* src);
     void rowStage(Layer& L, int y0, int y1);
     void outStage(Layer& L, int y0, int y1, uint32_t* dst, int stride);
+    void makeGeometry();
     void curvedStage(Layer& L, int y0, int y1, uint32_t* dst, int stride);
 
     std::unique_ptr<SoftFilterPool> pool;
     Tables t;
+    unsigned tablesGen = 0;
     Ntsc::Signal signal;
     uint32_t frame = 0;
     Layer layer[2];
