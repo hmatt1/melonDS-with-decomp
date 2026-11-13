@@ -26,7 +26,8 @@
 
 #include <QWidget>
 #include <memory>
-#include "SoftPixelFilter.h"
+#include "SoftLcdFilter.h"
+#include "SoftCrtFilter.h"
 #include <QImage>
 #include <QMutex>
 #include <QScreen>
@@ -53,6 +54,51 @@ const struct { int id; float ratio; const char* label; } aspectRatios[] =
 constexpr int AspectRatiosNum = sizeof(aspectRatios) / sizeof(aspectRatios[0]);
 
 
+// View > Screen filter: one per instance (all its windows); each window keeps its own settings
+enum { screenFilter_Off = 0, screenFilter_LCD = 1, screenFilter_CRT = 2, screenFilter_MAX };
+namespace Config { class Table; }
+// the instance's screen filter; before there was a choice of filter, PixelGrid said LCD or off
+int screenFilterSetting(Config::Table& localCfg);
+
+
+// a screen filter's slider: name, config key (per window), shader uniform, range, default, unit
+// shown after the value, tooltip, whole numbers only
+struct GridParamDef { const char* name; const char* key; const char* uniform; float min, max, def; const char* unit; const char* tip; bool integer = false; };
+// steps a parameter's slider has: whole numbers for integer ones
+inline int gridParamSteps(const struct GridParamDef& d) { return d.integer ? (int)(d.max - d.min) : 1000; }
+
+// LCD filter (kScreenFS, SoftLcdFilter)
+static const GridParamDef kGridParams[] =
+{
+    {"Vertical lines",    "GridDarkness", "uGridDark",  0.0f, 1.0f, 0.10f, "", "How dark the vertical grid lines between pixels are. 0 means no line at all,\n1 means a black line.\n\nThe line sits on the right edge of each DS pixel, inside it. With subpixels on,\nthe line covers the right-hand LED stripe more than the others, so the other\nstripes are dimmed to match and the line stays neutral instead of tinting the picture."}, // darkness: 0 = none, 1 = black
+    {"Horizontal lines",  "GridDarknessH", "uGridDarkH", 0.0f, 1.0f, 0.50f, "", "How dark the horizontal grid lines between pixel rows are. 0 means no line at all,\n1 means a black line.\n\nThe line sits along the bottom edge of each DS pixel, inside it. On a real DSi XL\nthe gap between LED rows is thin, so a low value (around 0.1 to 0.2) at 4x or more\nlooks closest. It crosses all three LED stripes equally, so it never tints the picture."}, // darkness: 0 = none, 1 = black
+    {"Line width",        "GridWidthPx",  "uGridWidth", 0.0f, 4.0f, 1.0f, "px", "Width of the grid lines, in whole screen pixels. The lines are drawn on the\nscreen's own pixels, so a width in between would only look uneven; at 1 each\nline is exactly one screen pixel wide at any zoom.\n\n0 hides the lines whatever the darkness sliders say.", true},
+    {"Softness",          "GridSoft",     "uGridSoft",  0.0f, 4.0f, 3.0f, "px", "Belongs to the grid lines only. It sets how gradually each dark line fades\ninto the pixel next to it, measured in screen pixels.\n\nAt 0 a line has a hard edge. Higher values give a soft ramp, so lines look\nsmooth at zooms where they'd otherwise fall unevenly on the screen's pixels.\nIt never touches the picture itself."},  // edge antialiasing, output pixels
+    {"Subpixel strength", "SubpixelStrength", "uSubStrength", 0.0f, 1.0f, 0.6f, "", "How strongly each DS pixel is split into the coloured LED stripes of a real screen.\n\nEach DS pixel becomes three columns, one per LED colour, in the order chosen under\nSubpixels. At 0 there are no stripes. At 1 each column shows only its own colour,\nwhich makes the picture about a third as bright; that is expected. The stripes are\napplied in linear light and balanced at every zoom, so they don't tint the picture."}, // 0 = off, 1 = each stripe only its colour
+    {"Keep brightness",   "SubpixelKeep", "uSubKeep",   0.0f, 1.0f, 0.9f, "", "How much of the light the subpixel stripes take away is given back.\n\nAt 0 the stripes simply darken the picture (at full strength to a third).\nAt 1 the picture keeps its full brightness: the lit stripe is made brighter,\nand whatever doesn't fit in it spills over evenly onto the pixel's other\nstripes, so nothing clips and no colour shifts. Bright areas then show the\nstripes less, much like a real backlit screen. Values in between give part\nof the light back. Does nothing with Subpixels set to None."},
+    {"Horizontal blur",   "BlurStrengthX", "uBlurX",    0.0f, 1.0f, 0.08f, "", "Acts on the picture. Each DS pixel borrows colour from its neighbours to the left\nand right: the box next to the slider sets how many DS pixels away it looks, and the\nslider sets how much those neighbours count against the pixel's own colour.\n\nIt's a plain average of the stored colours, so light and dark pull equally. Text\ngets softer and loses some contrast, but stays the same thickness. It's applied\nfirst, before the stripes and grid lines are drawn on top. At 1 the pixel and all\nits neighbours within reach count equally (a full box blur)."}, // weight of the neighbours within reach
+    {"Vertical blur",     "BlurStrengthY", "uBlurY",    0.0f, 1.0f, 0.04f, "", "Acts on the picture. Each DS pixel borrows colour from its neighbours above and\nbelow: the box next to the slider sets how many DS pixels away it looks, and the\nslider sets how much those neighbours count against the pixel's own colour.\n\nIt's a plain average of the stored colours, so light and dark pull equally. Text\ngets softer and loses some contrast, but stays the same thickness. It's applied\nfirst, before the stripes and grid lines are drawn on top. At 1 the pixel and all\nits neighbours within reach count equally (a full box blur)."},
+    {"Halo",              "BlurHalo",     "uHalo",      0.0f, 1.0f, 0.0f, "", "Changes how the blur averages. At 0 it's the plain average described for the blur.\nAt 1 it averages as light, so bright pixels add much more than dark ones take away.\n\nLight details then spread into their dark surroundings: white text on dark gets\nthicker and glows, while dark text on light stays almost the same. Values in between\nmix the two. Halo only works through the blur, so with both blur strengths at 0\nit does nothing."},  // 0 = plain blur, 1 = blur as light (bright spreads)
+};
+static constexpr int kNumGridParams = sizeof(kGridParams) / sizeof(kGridParams[0]);
+
+// CRT filter (kCrtPrepassFS + kCrtFS, SoftCrtFilter); the order is the one SoftCrtParams is filled in
+static const GridParamDef kCrtParams[] =
+{
+    {"Curvature",           "CrtCurvature",  "uCrtWarp",       0.0f,  1.0f,  0.25f, "", "How much the picture bulges, like the curved glass of an old tube.\n\n0 is a flat screen. Anything outside the curved edge is black.\nThe curve is a little stronger top to bottom than side to side, as on a real set."},
+    {"Picture blur",        "CrtLumaBlur",   "uCrtLumaBlur",   0.05f, 1.0f,  0.45f, "DS px", "How much the brightness of the picture is smeared sideways, the way a TV signal\nsoftens it. Only sideways: rows stay sharp top to bottom.\n\nLower is sharper. Around 0.45, 1-pixel checkerboards and dithering melt into an\neven shade, as they did on a real TV."},
+    {"Colour bleed",        "CrtChromaBlur", "uCrtChromaBlur", 0.05f, 3.0f,  1.2f,  "DS px", "How far colour runs sideways into its neighbours, separately from brightness.\nTV signals carry colour with less detail than brightness, so colour edges are\nsofter than the picture itself.\n\nLower keeps colours crisp; higher lets them bleed further."},
+    {"Scanline width, dark",   "CrtBeamMin", "uCrtBeamMin",    0.10f, 0.5f,  0.21f, "rows", "How thick each scanline is in dark parts of the picture, in DS rows.\n\nThinner lines leave wider black gaps between rows, so the scanlines show more.\nThicker lines fill the gaps in. Each DS row is drawn as one beam; scanlines need\nabout 5 screen pixels per DS row to show clearly."},
+    {"Scanline width, bright", "CrtBeamMax", "uCrtBeamMax",    0.10f, 0.8f,  0.40f, "rows", "How thick each scanline is in bright parts of the picture, in DS rows.\n\nOn a real tube a brighter beam is wider, so bright areas fill the gaps between\nrows while dark areas keep visible scanlines. Keep it at or above the dark width\nfor that look; set both the same for even scanlines everywhere."},
+    {"Mask strength",       "CrtMask",       "uCrtMask",       0.0f,  1.0f,  1.0f,  "", "How strongly the red, green and blue phosphor stripes of the tube show.\n\nThe stripes run top to bottom, like an aperture-grille tube. At 0 there are no\nstripes. At 1 each stripe is brightened in its own colour and the others dimmed,\nwhich darkens the picture a little overall; Brightness makes up for it."},
+    {"Mask width",          "CrtMaskPx",     "uCrtMaskPx",     1.0f,  4.0f,  2.0f,  "px", "Width of each phosphor stripe, in screen pixels. The stripes are laid on the\nscreen's own pixels, so they stay the same size whatever the zoom.\n\nAt 1 the stripes are so fine they can look like a colour tint; 2 or more is\nclearer, and wider suits large screens.", true},
+    {"Glow",                "CrtGlow",       "uCrtGlow",       0.0f,  1.0f,  0.26f, "", "A soft halo around bright parts of the picture, as light scatters in the glass\nof a tube. It adds light; it never darkens.\n\n0 turns it off. Higher values make bright areas bloom into their surroundings."},
+    {"Edge darkening",      "CrtVignette",   "uCrtVignette",   0.0f,  1.0f,  0.22f, "", "How much darker the corners and edges are than the centre, as on a real tube.\n\n0 keeps the brightness even across the screen."},
+    {"Brightness",          "CrtBoost",      "uCrtBoost",      0.5f,  2.5f,  1.5f,  "x", "Overall brightness. The scanline gaps and the phosphor mask both take light away,\nso the picture is brightened to make up for it.\n\nToo high and bright colours clip to white; too low and the picture looks dim."},
+};
+static constexpr int kNumCrtParams = sizeof(kCrtParams) / sizeof(kCrtParams[0]);
+
+
 class ScreenPanel : public QWidget
 {
     Q_OBJECT
@@ -62,7 +108,7 @@ public:
     virtual ~ScreenPanel();
 
     void setFilter(bool filter);
-    void setPixelGrid(bool enable);
+    void setScreenFilter(int mode);   // screenFilter_Off, _LCD or _CRT
 
     void setMouseHide(bool enable, int delay);
 
@@ -86,9 +132,10 @@ protected:
     EmuInstance* emuInstance;
 
     bool filter;
-    bool pixelGrid = true;
+    int screenFilter = screenFilter_LCD;
 public:
-    std::atomic<float> gridParam[9];
+    std::atomic<float> gridParam[kNumGridParams];   // LCD filter, kGridParams order
+    std::atomic<float> crtParam[kNumCrtParams];     // CRT filter, kCrtParams order
     std::atomic<bool> subpixelSample{false};  // each stripe reads the upscaled picture where it sits
     std::atomic<int> subpixelLayout{0};
     std::atomic<int> blurReach[2] = {1, 1};   // DS pixels each way, horizontal and vertical (0 to 3)   // 0 none, 1 DS Lite, 2 DSi, 3 DSi XL
@@ -189,29 +236,15 @@ private:
     void* bottomBuffer;
 
     QImage screen[2];
-    // software pixel grid (View > Software pixel grid): the shader's look without OpenGL
-    std::unique_ptr<SoftPixelFilter> softFilter;
+    // software screen filters: the shaders' look without OpenGL
+    std::unique_ptr<SoftLcdFilter> lcdFilter;
+    std::unique_ptr<SoftCrtFilter> crtFilter;
     QImage filtered[2];
     QTransform screenTrans[kMaxScreenTransforms];
 };
 
 
-struct GridParamDef { const char* name; const char* key; const char* uniform; float min, max, def; const char* tip; bool integer = false; };
-// steps a parameter's slider has: whole numbers for integer ones
-inline int gridParamSteps(const struct GridParamDef& d) { return d.integer ? (int)(d.max - d.min) : 1000; }
-static const GridParamDef kGridParams[] =
-{
-    {"Vertical lines",    "GridDarkness", "uGridDark",  0.0f, 1.0f, 0.10f, "How dark the vertical grid lines between pixels are. 0 means no line at all,\n1 means a black line.\n\nThe line sits on the right edge of each DS pixel, inside it. With subpixels on,\nthe line covers the right-hand LED stripe more than the others, so the other\nstripes are dimmed to match and the line stays neutral instead of tinting the picture."}, // darkness: 0 = none, 1 = black
-    {"Horizontal lines",  "GridDarknessH", "uGridDarkH", 0.0f, 1.0f, 0.50f, "How dark the horizontal grid lines between pixel rows are. 0 means no line at all,\n1 means a black line.\n\nThe line sits along the bottom edge of each DS pixel, inside it. On a real DSi XL\nthe gap between LED rows is thin, so a low value (around 0.1 to 0.2) at 4x or more\nlooks closest. It crosses all three LED stripes equally, so it never tints the picture."}, // darkness: 0 = none, 1 = black
-    {"Line width (px)",   "GridWidthPx",  "uGridWidth", 0.0f, 4.0f, 1.0f, "Width of the grid lines, in whole screen pixels. The lines are drawn on the\nscreen's own pixels, so a width in between would only look uneven; at 1 each\nline is exactly one screen pixel wide at any zoom.\n\n0 hides the lines whatever the darkness sliders say.", true},
-    {"Softness (px)",     "GridSoft",     "uGridSoft",  0.0f, 4.0f, 3.0f, "Belongs to the grid lines only. It sets how gradually each dark line fades\ninto the pixel next to it, measured in screen pixels.\n\nAt 0 a line has a hard edge. Higher values give a soft ramp, so lines look\nsmooth at zooms where they'd otherwise fall unevenly on the screen's pixels.\nIt never touches the picture itself."},  // edge antialiasing, output pixels
-    {"Subpixel strength", "SubpixelStrength", "uSubStrength", 0.0f, 1.0f, 0.6f, "How strongly each DS pixel is split into the coloured LED stripes of a real screen.\n\nEach DS pixel becomes three columns, one per LED colour, in the order chosen under\nSubpixels. At 0 there are no stripes. At 1 each column shows only its own colour,\nwhich makes the picture about a third as bright; that is expected. The stripes are\napplied in linear light and balanced at every zoom, so they don't tint the picture."}, // 0 = off, 1 = each stripe only its colour
-    {"Keep brightness",   "SubpixelKeep", "uSubKeep",   0.0f, 1.0f, 0.9f, "How much of the light the subpixel stripes take away is given back.\n\nAt 0 the stripes simply darken the picture (at full strength to a third).\nAt 1 the picture keeps its full brightness: the lit stripe is made brighter,\nand whatever doesn't fit in it spills over evenly onto the pixel's other\nstripes, so nothing clips and no colour shifts. Bright areas then show the\nstripes less, much like a real backlit screen. Values in between give part\nof the light back. Does nothing with Subpixels set to None."},
-    {"Horizontal blur",   "BlurStrengthX", "uBlurX",    0.0f, 1.0f, 0.08f, "Acts on the picture. Each DS pixel borrows colour from its neighbours to the left\nand right: the box next to the slider sets how many DS pixels away it looks, and the\nslider sets how much those neighbours count against the pixel's own colour.\n\nIt's a plain average of the stored colours, so light and dark pull equally. Text\ngets softer and loses some contrast, but stays the same thickness. It's applied\nfirst, before the stripes and grid lines are drawn on top. At 1 the pixel and all\nits neighbours within reach count equally (a full box blur)."}, // weight of the neighbours within reach
-    {"Vertical blur",     "BlurStrengthY", "uBlurY",    0.0f, 1.0f, 0.04f, "Acts on the picture. Each DS pixel borrows colour from its neighbours above and\nbelow: the box next to the slider sets how many DS pixels away it looks, and the\nslider sets how much those neighbours count against the pixel's own colour.\n\nIt's a plain average of the stored colours, so light and dark pull equally. Text\ngets softer and loses some contrast, but stays the same thickness. It's applied\nfirst, before the stripes and grid lines are drawn on top. At 1 the pixel and all\nits neighbours within reach count equally (a full box blur)."},
-    {"Halo",              "BlurHalo",     "uHalo",      0.0f, 1.0f, 0.0f, "Changes how the blur averages. At 0 it's the plain average described for the blur.\nAt 1 it averages as light, so bright pixels add much more than dark ones take away.\n\nLight details then spread into their dark surroundings: white text on dark gets\nthicker and glows, while dark text on light stays almost the same. Values in between\nmix the two. Halo only works through the blur, so with both blur strengths at 0\nit does nothing."},  // 0 = plain blur, 1 = blur as light (bright spreads)
-};
-static constexpr int kNumGridParams = sizeof(kGridParams) / sizeof(kGridParams[0]);
+
 
 class ScreenPanelGL : public ScreenPanel
 {
@@ -254,7 +287,16 @@ private:
     GLuint screenVertexBuffer, screenVertexArray;
     GLuint screenTexture;
     GLuint screenShaderProgram;
-    GLint screenShaderTransformULoc, screenShaderScreenSizeULoc, screenShaderGridULoc, screenShaderGridParamULoc[9], screenShaderSubpixelULoc, screenShaderBlurReachULoc, screenShaderSubSampleULoc;
+    GLint screenShaderTransformULoc, screenShaderScreenSizeULoc, screenShaderGridULoc, screenShaderGridParamULoc[kNumGridParams], screenShaderSubpixelULoc, screenShaderBlurReachULoc, screenShaderSubSampleULoc;
+
+    // CRT filter: a prepass at DS resolution into two texture arrays (one layer per screen), then
+    // the main pass reading them
+    GLuint crtPrepassProgram = 0, crtProgram = 0;
+    GLuint crtFramebuffer = 0, crtYiqTexture = 0, crtGlowTexture = 0;
+    GLint crtPrepassLayerULoc = -1;
+    GLint crtSavedBinding[2] = {0, 0};   // units 1 and 2, put back after the CRT draw
+    GLint crtScreenSizeULoc = -1, crtTransformULoc = -1, crtParamULoc[kNumCrtParams];
+    void drawCrtPrepass(unsigned layers);
 
     QMutex screenSettingsLock;
     WindowInfo windowInfo;

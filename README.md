@@ -168,24 +168,61 @@ PYTHONPATH=tools/workbench/python python3 -m dswb --session \
 
 More: `tools/workbench/README.md` (API reference).
 
-## Pixel grid
+## Screen filters
 
-View > **Pixel grid** (Alt+F) draws the DS screens the way a real DS screen looks: thin lines
-between pixels, the coloured LED stripes of each pixel (DS Lite, DSi or DSi XL layout) and an
-optional blur. View > **Pixel grid settings...** sets how dark the lines are, the stripe
-layout and strength, and the blur. The setting applies to every window of an instance.
+View > **Screen filter** picks how the DS screens are drawn: **Off**, **LCD** or **CRT**. One
+filter is on at a time, and the choice applies to every window of an instance. **Turn filter
+on/off** (Alt+F) switches between Off and the filter used last.
 
-What draws it follows Config > **Video settings**:
+Each filter has its own settings window, also under View > Screen filter. At the top of each,
+**Use the LCD/CRT filter** turns that filter on (unticking it turns the screen filter off); the
+settings can be changed whether or not it is on. Every slider's tooltip says what it does and its
+default. The preset row saves and applies named sets of settings (`lcd-presets.json` and
+`crt-presets.json` next to `melonDS.toml`; presets saved under the old pixel grid name are
+carried over). Picking **Default** always restores the built-in values, even when it is the only
+entry.
+
+### LCD filter
+
+Draws the DS screens the way a real DS screen looks: thin lines between pixels, the coloured LED
+stripes of each pixel (DS Lite, DSi or DSi XL layout) and an optional blur. Its settings set how
+dark the lines are, the stripe layout and strength, and the blur.
+
+### CRT filter
+
+Draws the screens like an old CRT television, after the shader in spritecook.ai's "CRT shader for
+pixel art": a sideways-only signal blur in YIQ (sharp brightness, softer colour, so 1-pixel
+dithering melts into an even shade), Gaussian scanlines that widen on bright pixels, an
+aperture-grille mask of red, green and blue stripes in screen pixels, glow, edge darkening and
+screen curvature. Its settings: curvature, picture blur, colour bleed, the scanline width on dark
+and on bright pixels, mask strength and width, glow, edge darkening and brightness.
+
+It looks best at whole-number zooms of 4x or more (View > Screen sizing > Force integer
+scaling): scanlines need about 5 screen pixels per DS row, and uneven zooms can give them a wavy
+pattern.
+
+### What draws them
+
+What draws a filter follows Config > **Video settings**:
 
 * an OpenGL display, or the OpenGL (Classic) or OpenGL (Compute shader) renderer: the OpenGL
-  screen shader;
-* the Software renderer without the OpenGL display: a software version of the same filter,
-  on the CPU. It is the fallback, so the grid works without OpenGL; it looks the same at
+  screen shaders. The CRT one does the work that depends only on DS pixels (the colour signal and
+  the glow) once per frame at 256x192, so the per-pixel pass reads 19 texels instead of 43;
+* the Software renderer without the OpenGL display: software versions of the same filters, on
+  the CPU. They are the fallback, so the filters work without OpenGL; they look the same at
   whole-number zooms.
 
-The software filter runs on 2 threads by default, one per screen. More threads split each screen
-into bands of rows: set `PixelGridThreads` under `[Instance0]` in `melonDS.toml`. At 4x zoom with
-the DSi XL stripes and blur it takes about 9 ms per frame on 2 threads, about 4 ms on 7.
+The software filters use half the logical cores, 2 to 4 threads, by default. To set the number,
+put `PixelGridThreads` under `[Instance0]` in `melonDS.toml` (0 means automatic). Per frame, for
+both screens at 4x zoom:
+
+| Filter | 2 threads | 4 threads |
+|---|---|---|
+| LCD (DSi XL stripes and blur) | 2.6 ms | 1.4 ms |
+| CRT, flat (curvature 0) | 5.8 ms | 3.2 ms |
+| CRT, curved (the default) | 13.8 ms | 7.3 ms |
+
+A screen the layout doesn't show (Top only, Bottom only) isn't filtered.
 
 ## Credits
 

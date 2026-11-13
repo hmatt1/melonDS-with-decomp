@@ -1,5 +1,5 @@
 /*
-    Software version of the pixel grid screen shader (main_shaders.h, kScreenFS), for the
+    Software version of the LCD filter screen shader (main_shaders.h, kScreenFS), for the
     plain (non-OpenGL) display. Same parameters, same look at whole-number zooms.
 
     The work is split in two stages per screen:
@@ -13,16 +13,14 @@
     (256 * n * 4 bytes), so two threads never write the same cache line.
 */
 
-#ifndef SOFTPIXELFILTER_H
-#define SOFTPIXELFILTER_H
+#ifndef SOFTLCDFILTER_H
+#define SOFTLCDFILTER_H
 
-#include <condition_variable>
 #include <cstdint>
-#include <functional>
 #include <memory>
-#include <mutex>
-#include <thread>
 #include <vector>
+
+#include "SoftFilterPool.h"
 
 struct SoftFilterParams
 {
@@ -42,35 +40,16 @@ struct SoftFilterParams
     }
 };
 
-// A small pool of worker threads that run one batch of jobs at a time.
-class SoftFilterPool
+class SoftLcdFilter
 {
 public:
-    explicit SoftFilterPool(int threads);
-    ~SoftFilterPool();
-    int size() const { return (int)workers.size() + 1; }  // the calling thread works too
-    void run(int jobs, const std::function<void(int)>& job);
-
-private:
-    void loop();
-    std::vector<std::thread> workers;
-    std::mutex mtx;
-    std::condition_variable wake, done;
-    const std::function<void(int)>* cur = nullptr;
-    int jobsTotal = 0, nextJob = 0, jobsLeft = 0;
-    unsigned generation = 0;
-    bool quit = false;
-};
-
-class SoftPixelFilter
-{
-public:
-    explicit SoftPixelFilter(int threads = 2);
+    explicit SoftLcdFilter(int threads = 2);
 
     // src: two 256x192 XRGB8888 screens (top, bottom); dst: two (256n)x(192n) XRGB8888 images,
     // rows dstStride bytes apart. layer: 0 top, 1 bottom (the DSi XL bottom screen is R G B).
+    // layers: bit 0 top, bit 1 bottom; a screen the layout doesn't show is skipped.
     void process(const uint32_t* const src[2], uint32_t* const dst[2], int dstStride, int n,
-                 const SoftFilterParams& p);
+                 const SoftFilterParams& p, unsigned layers = 3);
 
     void setThreads(int threads);
     int threads() const { return pool ? pool->size() : 1; }

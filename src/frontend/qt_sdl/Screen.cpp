@@ -19,6 +19,7 @@
 #include <string.h>
 
 #include <optional>
+#include <thread>
 #include <cmath>
 
 #include <QPaintEvent>
@@ -86,10 +87,12 @@ ScreenPanel::ScreenPanel(QWidget* parent) : QWidget(parent)
     osdID = 1;
     
     loadConfig();
-    setFilter(false);   // blur is the pixel grid shader's, in DS pixels
-    setPixelGrid(emuInstance->getLocalConfig().GetBool("PixelGrid"));
+    setFilter(false);   // blur is the screen filters' own, in DS pixels
+    setScreenFilter(screenFilterSetting(emuInstance->getLocalConfig()));
     for (int i = 0; i < kNumGridParams; i++)
         gridParam[i] = (float)mainWindow->getWindowConfig().GetDouble(kGridParams[i].key);
+    for (int i = 0; i < kNumCrtParams; i++)
+        crtParam[i] = (float)mainWindow->getWindowConfig().GetDouble(kCrtParams[i].key);
     subpixelLayout = mainWindow->getWindowConfig().GetInt("SubpixelLayout");
     subpixelSample = mainWindow->getWindowConfig().GetBool("SubpixelSample");
     blurReach[0] = mainWindow->getWindowConfig().GetInt("BlurReachX");
@@ -144,9 +147,17 @@ void ScreenPanel::setFilter(bool filter)
     this->filter = filter;
 }
 
-void ScreenPanel::setPixelGrid(bool enable)
+void ScreenPanel::setScreenFilter(int mode)
 {
-    this->pixelGrid = enable;
+    this->screenFilter = std::clamp(mode, 0, (int)screenFilter_MAX - 1);
+}
+
+int screenFilterSetting(Config::Table& localCfg)
+{
+    int mode = localCfg.GetInt("ScreenFilterMode");
+    if (mode < 0 || mode >= screenFilter_MAX)   // never chosen: follow the old on/off switch
+        mode = localCfg.GetBool("PixelGrid") ? screenFilter_LCD : screenFilter_Off;
+    return mode;
 }
 
 void ScreenPanel::setMouseHide(bool enable, int delay)
@@ -834,29 +845,52 @@ void ScreenPanelNative::paintEvent(QPaintEvent* event)
 
         QRect screenrc(0, 0, 256, 192);
 
-        const bool useSoft = pixelGrid;   // grid off: the plain picture
-        if (useSoft && !softFilter)
-            softFilter = std::make_unique<SoftPixelFilter>(emuInstance->getLocalConfig().GetInt("PixelGridThreads"));
+        static_assert(kNumGridParams == 9 && kNumCrtParams == 10, "the soft filter params below are filled by index");
+        const int mode = screenFilter;     // Off: the plain picture
+        const bool useSoft = mode != screenFilter_Off;
         if (useSoft)
         {
             // filter at the whole zoom closest to the screen's size in device pixels, so the
-            // result is drawn 1:1 (the grid lines land on whole pixels, as with the shader)
+            // result is drawn 1:1 (grid lines, scanlines and mask stripes land on whole pixels,
+            // as with the shaders)
             const QTransform& t = screenTrans[0];
             float scale = std::sqrt(float(t.m11() * t.m11() + t.m12() * t.m12())) * devicePixelRatioF();
             int n = std::clamp((int)std::lround(scale), 1, 16);
             for (int k = 0; k < 2; k++)
                 if (filtered[k].width() != 256 * n)
                     filtered[k] = QImage(256 * n, 192 * n, QImage::Format_RGB32);
-            SoftFilterParams p;
-            p.grid = true;
-            p.gridDark = gridParam[0]; p.gridDarkH = gridParam[1]; p.gridWidth = gridParam[2]; p.gridSoft = gridParam[3];
-            p.subStrength = gridParam[4]; p.subKeep = gridParam[5];
-            p.blurX = gridParam[6]; p.blurY = gridParam[7]; p.halo = gridParam[8];
-            p.blurReachX = blurReach[0]; p.blurReachY = blurReach[1];
-            p.subpixel = subpixelLayout;
+            // only the screens the layout shows
+            unsigned layers = 0;
+            for (int i = 0; i < numScreens; i++) layers |= 1u << screenKind[i];
             const uint32_t* src[2] = {(const uint32_t*)screen[0].constBits(), (const uint32_t*)screen[1].constBits()};
             uint32_t* dst[2] = {(uint32_t*)filtered[0].bits(), (uint32_t*)filtered[1].bits()};
-            softFilter->process(src, dst, (int)filtered[0].bytesPerLine(), n, p);
+            // threads for the software filters: PixelGridThreads, or 0 for half the logical cores,
+            // 2 to 4 (the emulator itself needs the rest)
+            int threads = emuInstance->getLocalConfig().GetInt("PixelGridThreads");
+            if (threads <= 0) threads = std::clamp((int)std::thread::hardware_concurrency() / 2, 2, 4);
+
+            if (mode == screenFilter_LCD)
+            {
+                if (!lcdFilter) lcdFilter = std::make_unique<SoftLcdFilter>(threads);
+                SoftFilterParams p;
+                p.grid = true;
+                p.gridDark = gridParam[0]; p.gridDarkH = gridParam[1]; p.gridWidth = gridParam[2]; p.gridSoft = gridParam[3];
+                p.subStrength = gridParam[4]; p.subKeep = gridParam[5];
+                p.blurX = gridParam[6]; p.blurY = gridParam[7]; p.halo = gridParam[8];
+                p.blurReachX = blurReach[0]; p.blurReachY = blurReach[1];
+                p.subpixel = subpixelLayout;
+                lcdFilter->process(src, dst, (int)filtered[0].bytesPerLine(), n, p, layers);
+            }
+            else
+            {
+                if (!crtFilter) crtFilter = std::make_unique<SoftCrtFilter>(threads);
+                SoftCrtParams p;   // kCrtParams order
+                p.curvature = crtParam[0]; p.lumaBlur = crtParam[1]; p.chromaBlur = crtParam[2];
+                p.beamMin = crtParam[3]; p.beamMax = crtParam[4];
+                p.mask = crtParam[5]; p.maskPx = crtParam[6];
+                p.glow = crtParam[7]; p.vignette = crtParam[8]; p.boost = crtParam[9];
+                crtFilter->process(src, dst, (int)filtered[0].bytesPerLine(), n, p, layers);
+            }
         }
 
         for (int i = 0; i < numScreens; i++)
@@ -992,6 +1026,46 @@ void ScreenPanelGL::initOpenGL()
         screenShaderGridParamULoc[i] = glGetUniformLocation(screenShaderProgram, kGridParams[i].uniform);
     screenShaderTransformULoc = glGetUniformLocation(screenShaderProgram, "uTransform");
 
+    // CRT filter: prepass at DS resolution, then the main pass with the same vertex shader
+    OpenGL::CompileVertexFragmentProgram(crtPrepassProgram,
+                                         kCrtPrepassVS, kCrtPrepassFS,
+                                         "CrtPrepassShader",
+                                         {},
+                                         {{"oYiq", 0}, {"oGlow", 1}});
+    glUseProgram(crtPrepassProgram);
+    glUniform1i(glGetUniformLocation(crtPrepassProgram, "ScreenTex"), 0);
+    crtPrepassLayerULoc = glGetUniformLocation(crtPrepassProgram, "uLayer");
+
+    OpenGL::CompileVertexFragmentProgram(crtProgram,
+                                         kScreenVS, kCrtFS,
+                                         "CrtShader",
+                                         {{"vPosition", 0}, {"vTexcoord", 1}},
+                                         {{"oColor", 0}});
+    glUseProgram(crtProgram);
+    glUniform1i(glGetUniformLocation(crtProgram, "YiqTex"), 1);
+    glUniform1i(glGetUniformLocation(crtProgram, "GlowTex"), 2);
+    crtScreenSizeULoc = glGetUniformLocation(crtProgram, "uScreenSize");
+    crtTransformULoc = glGetUniformLocation(crtProgram, "uTransform");
+    for (int i = 0; i < kNumCrtParams; i++)
+        crtParamULoc[i] = glGetUniformLocation(crtProgram, kCrtParams[i].uniform);
+
+    // the prepass targets: one layer per screen. The signal is read texel by texel (nearest);
+    // the glow is read bilinearly between DS pixel centres
+    GLuint crtTex[2];
+    glGenTextures(2, crtTex);
+    crtYiqTexture = crtTex[0];
+    crtGlowTexture = crtTex[1];
+    for (int i = 0; i < 2; i++)
+    {
+        glBindTexture(GL_TEXTURE_2D_ARRAY, crtTex[i]);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, i ? GL_LINEAR : GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, i ? GL_LINEAR : GL_NEAREST);
+        glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA16F, 256, 192, 2, 0, GL_RGBA, GL_FLOAT, nullptr);
+    }
+    glGenFramebuffers(1, &crtFramebuffer);
+
     const float vertices[] =
     {
         0.f,   0.f,    0.f, 0.f, 0.f,
@@ -1094,6 +1168,11 @@ void ScreenPanelGL::deinitOpenGL()
 
     glDeleteProgram(screenShaderProgram);
 
+    glDeleteFramebuffers(1, &crtFramebuffer);
+    glDeleteTextures(1, &crtYiqTexture);
+    glDeleteTextures(1, &crtGlowTexture);
+    glDeleteProgram(crtPrepassProgram);
+    glDeleteProgram(crtProgram);
 
     for (const auto& [key, tex] : osdTextures)
     {
@@ -1157,6 +1236,32 @@ void ScreenPanelGL::osdDeleteItem(OSDItem* item)
     ScreenPanel::osdDeleteItem(item);
 }
 
+// CRT filter prepass: per shown screen, the YIQ signal and the glow at DS resolution, into a layer
+// of crtYiqTexture / crtGlowTexture. The screen texture is bound on unit 0 and a vertex array is
+// bound (the prepass draws one triangle without vertex data). Leaves the prepass framebuffer bound.
+void ScreenPanelGL::drawCrtPrepass(unsigned layers)
+{
+    glBindFramebuffer(GL_FRAMEBUFFER, crtFramebuffer);
+    glViewport(0, 0, 256, 192);
+    glUseProgram(crtPrepassProgram);
+    const GLenum bufs[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+    glDrawBuffers(2, bufs);
+    // the OpenGL renderer shares this context and leaves per-buffer write masks set (buffer 1 often
+    // masked off), which would keep the glow from being written: open both, then put them back
+    GLboolean mask[2][4];
+    for (int b = 0; b < 2; b++) glGetBooleani_v(GL_COLOR_WRITEMASK, b, mask[b]);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    for (int l = 0; l < 2; l++)
+    {
+        if (!(layers & (1u << l))) continue;
+        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, crtYiqTexture, 0, l);
+        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, crtGlowTexture, 0, l);
+        glUniform1f(crtPrepassLayerULoc, (float)l);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
+    for (int b = 0; b < 2; b++) glColorMaski(b, mask[b][0], mask[b][1], mask[b][2], mask[b][3]);
+}
+
 void ScreenPanelGL::drawScreen()
 {
     if (!glContext) return;
@@ -1183,15 +1288,6 @@ void ScreenPanelGL::drawScreen()
     if (emuThread->emuIsActive())
     {
         auto nds = emuInstance->getNDS();
-
-        glUseProgram(screenShaderProgram);
-        glUniform2f(screenShaderScreenSizeULoc, w / factor, h / factor);
-        glUniform1i(screenShaderGridULoc, pixelGrid ? 1 : 0);
-        for (int i = 0; i < kNumGridParams; i++)
-            glUniform1f(screenShaderGridParamULoc[i], gridParam[i]);
-        glUniform1i(screenShaderSubpixelULoc, subpixelLayout);
-        glUniform1i(screenShaderSubSampleULoc, subpixelSample ? 1 : 0);
-        glUniform2i(screenShaderBlurReachULoc, blurReach[0], blurReach[1]);
 
         void* topbuf; void* bottombuf;
         if (nds->GPU.GetFramebuffers(&topbuf, &bottombuf))
@@ -1224,10 +1320,58 @@ void ScreenPanelGL::drawScreen()
         glBindBuffer(GL_ARRAY_BUFFER, screenVertexBuffer);
         glBindVertexArray(screenVertexArray);
 
+        GLint transformLoc;
+        const int mode = screenFilter;   // once: the GUI thread may change it meanwhile
+        if (mode == screenFilter_CRT)
+        {
+            unsigned layers = 0;   // only the screens the layout shows
+            for (int i = 0; i < numScreens; i++) layers |= 1u << screenKind[i];
+            drawCrtPrepass(layers);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glViewport(0, 0, w, h);
+
+            glUseProgram(crtProgram);
+            glUniform2f(crtScreenSizeULoc, w / factor, h / factor);
+            for (int i = 0; i < kNumCrtParams; i++)
+                glUniform1f(crtParamULoc[i], crtParam[i]);
+            // the OpenGL renderer shares this context, and its final pass reads array textures
+            // on units 1 and 2 that it doesn't always rebind: put back what was there after drawing
+            for (int u = 0; u < 2; u++)
+            {
+                glActiveTexture(GL_TEXTURE1 + u);
+                glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &crtSavedBinding[u]);
+                glBindTexture(GL_TEXTURE_2D_ARRAY, u ? crtGlowTexture : crtYiqTexture);
+            }
+            glActiveTexture(GL_TEXTURE0);
+            transformLoc = crtTransformULoc;
+        }
+        else
+        {
+            // LCD filter, or Off (the shader then shows the plain picture)
+            glUseProgram(screenShaderProgram);
+            glUniform2f(screenShaderScreenSizeULoc, w / factor, h / factor);
+            glUniform1i(screenShaderGridULoc, mode == screenFilter_LCD ? 1 : 0);
+            for (int i = 0; i < kNumGridParams; i++)
+                glUniform1f(screenShaderGridParamULoc[i], gridParam[i]);
+            glUniform1i(screenShaderSubpixelULoc, subpixelLayout);
+            glUniform1i(screenShaderSubSampleULoc, subpixelSample ? 1 : 0);
+            glUniform2i(screenShaderBlurReachULoc, blurReach[0], blurReach[1]);
+            transformLoc = screenShaderTransformULoc;
+        }
+
         for (int i = 0; i < numScreens; i++)
         {
-            glUniformMatrix2x3fv(screenShaderTransformULoc, 1, GL_TRUE, screenMatrix[i]);
+            glUniformMatrix2x3fv(transformLoc, 1, GL_TRUE, screenMatrix[i]);
             glDrawArrays(GL_TRIANGLES, screenKind[i] == 0 ? 0 : 2 * 3, 2 * 3);
+        }
+        if (mode == screenFilter_CRT)
+        {
+            for (int u = 0; u < 2; u++)
+            {
+                glActiveTexture(GL_TEXTURE1 + u);
+                glBindTexture(GL_TEXTURE_2D_ARRAY, (GLuint)crtSavedBinding[u]);
+            }
+            glActiveTexture(GL_TEXTURE0);
         }
 
         screenSettingsLock.unlock();

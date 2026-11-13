@@ -50,7 +50,9 @@ DefaultList<int> DefaultInts =
 {
     {"Instance*.Keyboard", -1},
     {"Instance*.Window*.BlurReachX", 1},
-    {"Instance*.PixelGridThreads", 2},    // software pixel grid: 2 = one per screen
+    {"Instance*.PixelGridThreads", 0},    // software screen filters (LCD, CRT): 0 = automatic
+    {"Instance*.ScreenFilterMode", -1},  // Off / LCD / CRT; -1 = never chosen, follow PixelGrid
+    {"Instance*.ScreenFilterLast", 1},   // the filter Alt+F turns back on
     {"Instance*.Window*.SubpixelLayout", 3},   // DSi XL
     {"Instance*.Window*.BlurReachY", 1},
     {"Instance*.Joystick", -1},
@@ -105,7 +107,7 @@ DefaultList<bool> DefaultBools =
     {"3D.GL.HiresCoordinates", true},
     {"LimitFPS", true},
     {"Instance*.Window*.ShowOSD", true},
-    {"Instance*.PixelGrid", true},   // all windows; drawn by OpenGL or, as fallback, in software
+    {"Instance*.PixelGrid", true},   // before ScreenFilter: the LCD filter on or off
     {"Emu.DirectBoot", true},
     {"Instance*.DS.Battery.LevelOkay", true},
     {"Instance*.DSi.Battery.Charging", true},
@@ -141,6 +143,17 @@ DefaultList<double> DefaultDoubles =
     {"Instance*.Window*.BlurStrengthY", 0.04},
     {"Instance*.Window*.BlurHalo", 0.0},
     {"Instance*.Window*.SubpixelKeep", 0.9},
+    // CRT filter (kCrtParams in Screen.h)
+    {"Instance*.Window*.CrtCurvature", 0.25},
+    {"Instance*.Window*.CrtLumaBlur", 0.45},
+    {"Instance*.Window*.CrtChromaBlur", 1.2},
+    {"Instance*.Window*.CrtBeamMin", 0.21},
+    {"Instance*.Window*.CrtBeamMax", 0.40},
+    {"Instance*.Window*.CrtMask", 1.0},
+    {"Instance*.Window*.CrtMaskPx", 2.0},
+    {"Instance*.Window*.CrtGlow", 0.26},
+    {"Instance*.Window*.CrtVignette", 0.22},
+    {"Instance*.Window*.CrtBoost", 1.5},
 };
 
 LegacyEntry LegacyFile[] =

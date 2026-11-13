@@ -38,23 +38,11 @@
 #include "Screen.h"
 #include "Config.h"
 #include "MPInterface.h"
+#include "FilterSettingsWindow.h"
 
 
 class EmuInstance;
 
-// simple secondary window; tells its owner when the user closes it
-class HelloWindow : public QWidget
-{
-public:
-    explicit HelloWindow(QWidget* parent) : QWidget(parent, Qt::Window) {}
-    std::function<void()> onClosed;
-protected:
-    void closeEvent(QCloseEvent* event) override
-    {
-        if (onClosed) onClosed();
-        QWidget::closeEvent(event);
-    }
-};
 class EmuThread;
 
 const int kMaxRecentROMs = 10;
@@ -196,8 +184,9 @@ private slots:
     void onChangeIntegerScaling(bool checked);
     void onOpenNewWindow();
     void onChangeScreenFiltering(bool checked);
-    void onChangePixelGrid(bool checked);
-    void updatePixelGridMenu();
+    void onChangeScreenFilter(int mode);   // screenFilter_Off, _LCD or _CRT, for the whole instance
+    void onToggleScreenFilter();            // Alt+F: Off, or back to the last filter used
+    void updateScreenFilterMenu();
     void onChangeShowOSD(bool checked);
     void onChangeLimitFramerate(bool checked);
     void onChangeAudioSync(bool checked);
@@ -314,9 +303,10 @@ public:
     QAction* actInterfaceSettings;
     QAction* actScreenSize[4];
     QToolBar* toolbar = nullptr;
-    HelloWindow* helloWindow = nullptr;
-    QAction* actHelloWindow = nullptr;
-    void saveHelloWindowState();
+    // screen filter settings windows (null without a menu bar)
+    FilterWindow* lcdWindow = nullptr;
+    FilterWindow* crtWindow = nullptr;
+    void saveFilterWindowState(bool closing);
     QActionGroup* grpScreenRotation;
     QAction* actScreenRotation[screenRot_MAX];
     QActionGroup* grpScreenGap;
@@ -333,7 +323,13 @@ public:
     QAction** actScreenAspectBot;
     QAction* actNewWindow;
     QAction* actScreenFiltering;
-    QAction* actPixelGrid = nullptr;   // null without a menu bar (hasMenu false)
+    // View > Screen filter; null without a menu bar (hasMenu false)
+    QMenu* menuScreenFilter = nullptr;
+    QActionGroup* grpScreenFilter = nullptr;
+    QAction* actScreenFilter[screenFilter_MAX] = {};
+    QAction* actToggleScreenFilter = nullptr;
+    QAction* actLcdSettings = nullptr;
+    QAction* actCrtSettings = nullptr;
     QAction* actShowOSD;
     QAction* actLimitFramerate;
     QAction* actAudioSync;

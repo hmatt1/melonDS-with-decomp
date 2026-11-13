@@ -1,9 +1,9 @@
 /*
-    Software pixel grid filter: see SoftPixelFilter.h. Follows kScreenFS in main_shaders.h;
+    Software LCD filter: see SoftLcdFilter.h. Follows kScreenFS in main_shaders.h;
     a change to one should go to the other.
 */
 
-#include "SoftPixelFilter.h"
+#include "SoftLcdFilter.h"
 
 #include <algorithm>
 #include <cmath>
@@ -70,83 +70,22 @@ void stripeWeights(int i, int j, int n, float w[3])
 } // namespace
 
 
-// --- the pool ---------------------------------------------------------------------------------
-
-SoftFilterPool::SoftFilterPool(int threads)
-{
-    for (int i = 1; i < threads; i++)
-        workers.emplace_back([this] { loop(); });
-}
-
-SoftFilterPool::~SoftFilterPool()
-{
-    {
-        std::lock_guard<std::mutex> l(mtx);
-        quit = true;
-    }
-    wake.notify_all();
-    for (auto& t : workers) t.join();
-}
-
-void SoftFilterPool::run(int jobs, const std::function<void(int)>& job)
-{
-    std::unique_lock<std::mutex> l(mtx);
-    cur = &job;
-    jobsTotal = jobs;
-    nextJob = 0;
-    jobsLeft = jobs;
-    generation++;
-    wake.notify_all();
-    while (nextJob < jobsTotal)    // the caller takes jobs too
-    {
-        int j = nextJob++;
-        l.unlock();
-        job(j);
-        l.lock();
-        jobsLeft--;
-    }
-    done.wait(l, [this] { return jobsLeft == 0; });
-    cur = nullptr;
-}
-
-void SoftFilterPool::loop()
-{
-    unsigned seen = 0;
-    std::unique_lock<std::mutex> l(mtx);
-    for (;;)
-    {
-        wake.wait(l, [&] { return quit || (generation != seen && cur); });
-        if (quit) return;
-        seen = generation;
-        while (cur && nextJob < jobsTotal)
-        {
-            int j = nextJob++;
-            auto* job = cur;
-            l.unlock();
-            (*job)(j);
-            l.lock();
-            if (--jobsLeft == 0) done.notify_all();
-        }
-    }
-}
-
-
 // --- the filter -------------------------------------------------------------------------------
 
-SoftPixelFilter::SoftPixelFilter(int threads)
+SoftLcdFilter::SoftLcdFilter(int threads)
 {
     luts();
     setThreads(threads);
 }
 
-void SoftPixelFilter::setThreads(int threads)
+void SoftLcdFilter::setThreads(int threads)
 {
     threads = std::max(1, threads);
     if (!pool || pool->size() != threads)
         pool = std::make_unique<SoftFilterPool>(threads);
 }
 
-void SoftPixelFilter::makeTable(Table& t, int n, const SoftFilterParams& p, int layer)
+void SoftLcdFilter::makeTable(Table& t, int n, const SoftFilterParams& p, int layer)
 {
     t.n = n; t.p = p; t.layer = layer;
     t.cells.assign(n * n, Cell{});
@@ -217,26 +156,32 @@ void SoftPixelFilter::makeTable(Table& t, int n, const SoftFilterParams& p, int 
     }
 }
 
-void SoftPixelFilter::process(const uint32_t* const src[2], uint32_t* const dst[2], int dstStride, int n,
-                              const SoftFilterParams& p)
+void SoftLcdFilter::process(const uint32_t* const src[2], uint32_t* const dst[2], int dstStride, int n,
+                            const SoftFilterParams& p, unsigned layers)
 {
     n = std::clamp(n, 1, 16);
+    int list[2], nl = 0;
     for (int layer = 0; layer < 2; layer++)
-        if (table[layer].n != n || table[layer].layer != layer || !(table[layer].p == p))
-            makeTable(table[layer], n, p, layer);
+        if (layers & (1u << layer))
+        {
+            list[nl++] = layer;
+            if (table[layer].n != n || table[layer].layer != layer || !(table[layer].p == p))
+                makeTable(table[layer], n, p, layer);
+        }
+    if (!nl) return;
 
-    // 2 threads: one screen each. More: as many bands per screen as threads, so a thread that
-    // finishes early takes another band (bands only re-read the few rows the blur reaches)
-    int bands = pool->size() <= 2 ? 1 : pool->size();
-    pool->run(2 * bands, [&](int job) {
-        int layer = job / bands, b = job % bands;
+    // as many threads as screens: one screen each. More: as many bands per screen as threads, so
+    // a thread that finishes early takes another band (bands only re-read the few rows the blur reaches)
+    int bands = pool->size() <= nl ? 1 : pool->size();
+    pool->run(nl * bands, [&](int job) {
+        int layer = list[job / bands], b = job % bands;
         int y0 = kH * b / bands, y1 = kH * (b + 1) / bands;
         band(layer, y0, y1, src[layer], dst[layer], dstStride, table[layer]);
     });
 }
 
-void SoftPixelFilter::band(int layer, int y0, int y1, const uint32_t* src, uint32_t* dst, int dstStride,
-                           const Table& t)
+void SoftLcdFilter::band(int layer, int y0, int y1, const uint32_t* src, uint32_t* dst, int dstStride,
+                         const Table& t)
 {
     const Luts& L = luts();
     const SoftFilterParams& p = t.p;
