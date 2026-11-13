@@ -298,16 +298,16 @@ block()
 endblock()
 target_link_libraries(melonDS PRIVATE ads::qtadvanceddocking-qt6)
 # Tracy profiling, vendored client in vendor/tracy (see VENDORED.md and Trace.h). A list of
-# categories: all, qt, emu, render. Empty (the default): Tracy isn't built in.
-set(MELONDS_TRACE "" CACHE STRING "Tracy profiling categories: all, qt, emu, render (a list); empty is off")
+# categories: all, qt, emu, render, sdl_startup. Empty (the default): Tracy isn't built in.
+set(MELONDS_TRACE "" CACHE STRING "Tracy profiling categories: all, qt, emu, render, sdl_startup (a list); empty is off")
 if (MELONDS_TRACE)
     set(TRACE_CATEGORIES ${MELONDS_TRACE})
     if ("all" IN_LIST TRACE_CATEGORIES)
-        set(TRACE_CATEGORIES qt emu render)
+        set(TRACE_CATEGORIES qt emu render sdl_startup)
     endif()
     foreach(cat IN LISTS TRACE_CATEGORIES)
-        if (NOT cat MATCHES "^(qt|emu|render)$")
-            message(FATAL_ERROR "MELONDS_TRACE: unknown category '${cat}' (all, qt, emu, render)")
+        if (NOT cat MATCHES "^(qt|emu|render|sdl_startup)$")
+            message(FATAL_ERROR "MELONDS_TRACE: unknown category '${cat}' (all, qt, emu, render, sdl_startup)")
         endif()
         string(TOUPPER "${cat}" CAT)
         # core too: emu and render code lives there

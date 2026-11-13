@@ -94,6 +94,10 @@ public:
     void drawScreen();
 
     bool preloadROMs(QStringList file, QStringList gbafile, bool boot);
+    // preloadROMs in two halves: start boots a DS ROM on the emulation thread without waiting, so the
+    // caller can build other things meanwhile; finish waits and reports. A true start needs its finish
+    bool preloadROMsStart(QStringList file, QStringList gbafile, bool boot);
+    bool preloadROMsFinish();
     void onWorkbenchBooted();
     QStringList splitArchivePath(const QString& filename, bool useMemberSyntax);
 
@@ -211,6 +215,8 @@ private slots:
     void onScreenEmphasisToggled();
 
 private:
+    struct PendingPreload { bool Active = false; bool Boot = false; bool GBALoaded = false; QStringList File; };
+    PendingPreload preload;     // between preloadROMsStart and preloadROMsFinish
     virtual void closeEvent(QCloseEvent* event) override;
 
     QStringList currentROM;

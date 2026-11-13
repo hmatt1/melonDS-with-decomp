@@ -1404,7 +1404,14 @@ bool MainWindow::verifySetup()
 
 bool MainWindow::preloadROMs(QStringList file, QStringList gbafile, bool boot)
 {
+    if (!preloadROMsStart(file, gbafile, boot)) return false;
+    return preloadROMsFinish();
+}
+
+bool MainWindow::preloadROMsStart(QStringList file, QStringList gbafile, bool boot)
+{
     QString errorstr;
+    preload = {};
 
     if (file.isEmpty() && gbafile.isEmpty() && !boot)
         return false;
@@ -1426,12 +1433,31 @@ bool MainWindow::preloadROMs(QStringList file, QStringList gbafile, bool boot)
         gbaloaded = true;
     }
 
+    preload.Active = true;
+    preload.File = file;
+    preload.Boot = boot;
+    preload.GBALoaded = gbaloaded;
+    // booting a DS ROM runs on the emulation thread while the caller goes on; preloadROMsFinish waits
+    if (!file.isEmpty() && boot)
+        emuThread->bootROMStart(file);
+    return true;
+}
+
+bool MainWindow::preloadROMsFinish()
+{
+    if (!preload.Active) return false;
+    const QStringList file = preload.File;
+    const bool boot = preload.Boot;
+    const bool gbaloaded = preload.GBALoaded;
+    preload = {};
+    QString errorstr;
+
     bool ndsloaded = false;
     if (!file.isEmpty())
     {
         if (boot)
         {
-            if (!emuThread->bootROM(file, errorstr))
+            if (!emuThread->bootROMFinish(errorstr))
             {
                 QMessageBox::critical(this, "melonDS", errorstr);
                 return false;

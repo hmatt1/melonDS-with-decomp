@@ -318,6 +318,10 @@ void EmuThread::run()
             }
             else
             {
+                {
+                    static bool firstStart = true;      // a landmark on the startup timeline
+                    if (firstStart) { firstStart = false; TRACE_QT_MESSAGE("first emulated frame starts"); }
+                }
                 nlines = emuInstance->nds->RunFrame();
             }
 
@@ -348,7 +352,7 @@ void EmuThread::run()
 
             {
                 static bool firstFrame = true;      // a landmark on the startup timeline
-                if (firstFrame) { firstFrame = false; TRACE_QT_MESSAGE("first emulated frame"); }
+                if (firstFrame) { firstFrame = false; TRACE_QT_MESSAGE("first emulated frame done"); }
             }
             winUpdateCount++;
             if (winUpdateCount >= winUpdateFreq && !useOpenGL)
@@ -628,13 +632,17 @@ void EmuThread::handleMessages()
         {
             TRACE_EMU("msg_BootROM");
             { TRACE_EMU("workbench OnGameClosing"); emuInstance->wbHost->OnGameClosing(); }
-            msgResult = 0;
-            if (!emuInstance->loadROM(msg.param.value<QStringList>(), true, msgError))
+            msgResult = bootResult = 0;
+            bootError.clear();
+            if (!emuInstance->loadROM(msg.param.value<QStringList>(), true, bootError))
+            {
+                msgError = bootError;
                 break;
+            }
 
             assert(emuInstance->nds != nullptr);
             { TRACE_EMU("NDS::Start"); emuInstance->nds->Start(); }
-            msgResult = 1;
+            msgResult = bootResult = 1;
             break;
         }
 
@@ -887,12 +895,22 @@ bool EmuThread::emuIsActive()
 
 int EmuThread::bootROM(const QStringList& filename, QString& errorstr)
 {
+    bootROMStart(filename);
+    return bootROMFinish(errorstr);
+}
+
+void EmuThread::bootROMStart(const QStringList& filename)
+{
     sendMessage({.type = msg_BootROM, .param = filename});
+}
+
+int EmuThread::bootROMFinish(QString& errorstr)
+{
     waitMessage();
-    if (!msgResult)
+    if (!bootResult)
     {
-        errorstr = msgError;
-        return msgResult;
+        errorstr = bootError;
+        return bootResult;
     }
 
     sendMessage(msg_EmuRun);

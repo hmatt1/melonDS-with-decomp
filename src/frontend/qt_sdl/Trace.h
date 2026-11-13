@@ -20,7 +20,7 @@
 #define TRACE_H
 
 // Tracy profiling, by category, chosen at compile time with the CMake list MELONDS_TRACE
-// (all, qt, emu, render). A category that is off compiles to nothing; with none on, Tracy
+// (all, qt, emu, render, sdl_startup). A category that is off compiles to nothing; with none on, Tracy
 // isn't built in at all. The client is vendored in vendor/tracy (see VENDORED.md).
 //
 //   TRACE_QT("name")            a zone: this scope, timed, shown as one bar in the viewer
@@ -30,9 +30,9 @@
 //   TRACE_QT_STEPS()            ends the last step when this scope exits (functions with early returns);
 //                               one function with steps at a time per thread: steps don't nest
 //   TRACE_QT_MESSAGE("text")    a marker on the timeline
-// and the same for EMU and RENDER.
+// and the same for EMU, RENDER and SDL_STARTUP (SDL set up and shut down by main()).
 
-#if defined(MELONDS_TRACE_QT) || defined(MELONDS_TRACE_EMU) || defined(MELONDS_TRACE_RENDER)
+#if defined(MELONDS_TRACE_QT) || defined(MELONDS_TRACE_EMU) || defined(MELONDS_TRACE_RENDER) || defined(MELONDS_TRACE_SDL_STARTUP)
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyC.h"
 
@@ -107,6 +107,22 @@ struct StepScope { ~StepScope() { StepEnd(); } };
 #define TRACE_RENDER_STEP_END() TRACE_OFF_()
 #define TRACE_RENDER_STEPS() TRACE_OFF_()
 #define TRACE_RENDER_MESSAGE(text) TRACE_OFF_()
+#endif
+
+#ifdef MELONDS_TRACE_SDL_STARTUP
+#define TRACE_SDL_STARTUP(name) TRACE_ZONE_(name)
+#define TRACE_SDL_STARTUP_NAMED(text) TRACE_NAMED_(text)
+#define TRACE_SDL_STARTUP_STEP(name) TRACE_STEP_(name)
+#define TRACE_SDL_STARTUP_STEP_END() TRACE_STEP_END_()
+#define TRACE_SDL_STARTUP_STEPS() TRACE_STEPS_()
+#define TRACE_SDL_STARTUP_MESSAGE(text) TRACE_MESSAGE_(text)
+#else
+#define TRACE_SDL_STARTUP(name) TRACE_OFF_()
+#define TRACE_SDL_STARTUP_NAMED(text) TRACE_OFF_()
+#define TRACE_SDL_STARTUP_STEP(name) TRACE_OFF_()
+#define TRACE_SDL_STARTUP_STEP_END() TRACE_OFF_()
+#define TRACE_SDL_STARTUP_STEPS() TRACE_OFF_()
+#define TRACE_SDL_STARTUP_MESSAGE(text) TRACE_OFF_()
 #endif
 
 #endif // TRACE_H

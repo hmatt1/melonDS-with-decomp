@@ -378,19 +378,20 @@ int main(int argc, char** argv)
 
     SDL_SetHint(SDL_HINT_APP_NAME, "melonDS");
 
-    if (SDL_Init(SDL_INIT_HAPTIC) < 0)
+    TRACE_SDL_STARTUP_MESSAGE("SDL init begins");
+    if ([] { TRACE_SDL_STARTUP("SDL_Init(HAPTIC)"); return SDL_Init(SDL_INIT_HAPTIC); }() < 0)
     {
         printf("SDL couldn't init rumble\n");
     }
-    if (SDL_Init(SDL_INIT_JOYSTICK) < 0)
+    if ([] { TRACE_SDL_STARTUP("SDL_Init(JOYSTICK)"); return SDL_Init(SDL_INIT_JOYSTICK); }() < 0)
     {
         printf("SDL couldn't init joystick\n");
     }
-    if (SDL_Init(SDL_INIT_SENSOR) < 0)
+    if ([] { TRACE_SDL_STARTUP("SDL_Init(SENSOR)"); return SDL_Init(SDL_INIT_SENSOR); }() < 0)
     {
         printf("SDL couldn't init motion sensors\n");
     }
-    if (SDL_Init(SDL_INIT_AUDIO) < 0)
+    if ([] { TRACE_SDL_STARTUP("SDL_Init(AUDIO)"); return SDL_Init(SDL_INIT_AUDIO); }() < 0)
     {
         const char* err = SDL_GetError();
         QString errorStr = "Failed to initialize SDL. This could indicate an issue with your audio driver.\n\nThe error was: ";
@@ -400,10 +401,10 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    SDL_JoystickEventState(SDL_ENABLE);
+    { TRACE_SDL_STARTUP("SDL_JoystickEventState"); SDL_JoystickEventState(SDL_ENABLE); }
 
-    SDL_InitSubSystem(SDL_INIT_VIDEO);
-    SDL_EnableScreenSaver(); SDL_DisableScreenSaver();
+    { TRACE_SDL_STARTUP("SDL_InitSubSystem(VIDEO)"); SDL_InitSubSystem(SDL_INIT_VIDEO); }
+    { TRACE_SDL_STARTUP("SDL screensaver calls"); SDL_EnableScreenSaver(); SDL_DisableScreenSaver(); }
 
     TRACE_QT_STEP("startup: config load");
     if (!Config::Load())
@@ -462,10 +463,9 @@ int main(int argc, char** argv)
             else
                 wb->RecordOnBoot(!options->noWriteHistory, !options->noDataOrigin);
         }
-        if (options->workbench) wb->ShowWindow();
     }
 
-    TRACE_QT_STEP("startup: ROM preload");
+    TRACE_QT_STEP("startup: ROM preload start");
     {
         MainWindow* win = emuInstances[0]->getMainWindow();
         bool memberSyntaxUsed = false;
@@ -488,7 +488,15 @@ int main(int argc, char** argv)
 
         if (memberSyntaxUsed) printf("Warning: use the a.zip|b.nds format at your own risk!\n");
 
-        win->preloadROMs(dsfile, gbafile, options->boot);
+        // the ROM boots on the emulation thread while the workbench window is built here, then we wait
+        // for it: the workbench settings it reads (record at boot) are set above
+        const bool preloading = win->preloadROMsStart(dsfile, gbafile, options->boot);
+
+        TRACE_QT_STEP("startup: workbench window");
+        if (options->workbench) emuInstances[0]->getWorkbench()->ShowWindow();
+
+        TRACE_QT_STEP("startup: ROM preload finish");
+        if (preloading) win->preloadROMsFinish();
 
         if (options->fullscreen)
             win->toggleFullscreen();
@@ -510,7 +518,7 @@ int main(int argc, char** argv)
 
     Config::Save();
 
-    SDL_Quit();
+    { TRACE_SDL_STARTUP("SDL_Quit"); SDL_Quit(); }
     TRACE_QT_STEP_END();
     return ret;
 }
