@@ -994,23 +994,67 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent, bool embedded
                 for (const auto& [k, v] : kv) o[k] = v;
                 return o;
             };
+            // The signal part of each is a real hardware choice (console, cable, TV decoder); the
+            // tube part (curvature, scanlines, mask, glow) is the look of that kind of set
+            using namespace Ntsc;
+            const std::pair<const char*, double> rf[] = {{"CrtNoise", 0.15}, {"CrtGhost", 0.08}, {"CrtGhostDelay", 1.2}};
+            auto withRf = [&](std::initializer_list<std::pair<const char*, double>> kv)
+            {
+                QJsonObject o = preset(kv);
+                for (const auto& [k, v] : rf) o[k] = v;
+                return o;
+            };
+            const std::pair<QString, QJsonObject> sep{QString(), QJsonObject()};
             crt.builtins = {
-                {"Mega Drive 2 / Genesis - composite", preset({{"CrtSignal", Ntsc::Console_MDH40}, {"CrtCable", Ntsc::Cable_Composite}})},
-                {"Mega Drive 2 / Genesis - RF", preset({{"CrtSignal", Ntsc::Console_MDH40}, {"CrtCable", Ntsc::Cable_RF},
-                                                        {"CrtNoise", 0.15}, {"CrtGhost", 0.08}, {"CrtGhostDelay", 1.2}})},
-                {"SNES - S-Video", preset({{"CrtSignal", Ntsc::Console_SNES}, {"CrtCable", Ntsc::Cable_SVideo}})},
-                {"SNES - composite", preset({{"CrtSignal", Ntsc::Console_SNES}, {"CrtCable", Ntsc::Cable_Composite}})},
-                {"SNES - composite, US TV", preset({{"CrtSignal", Ntsc::Console_SNES}, {"CrtCable", Ntsc::Cable_Composite},
-                                                    {"CrtDecoder", Ntsc::Decoder_SonyUS}})},
-                {"Mega Drive 2 (PAL) - composite", preset({{"CrtSignal", Ntsc::Console_MDH40Pal}, {"CrtCable", Ntsc::Cable_Composite},
-                                                           {"CrtDecoder", Ntsc::Decoder_PalD}})},
-                {"Mega Drive 2 (PAL) - RF", preset({{"CrtSignal", Ntsc::Console_MDH40Pal}, {"CrtCable", Ntsc::Cable_RF},
-                                                    {"CrtDecoder", Ntsc::Decoder_PalD}, {"CrtNoise", 0.15}, {"CrtGhost", 0.08}, {"CrtGhostDelay", 1.2}})},
-                {"SNES (PAL) - composite", preset({{"CrtSignal", Ntsc::Console_SNESPal}, {"CrtCable", Ntsc::Cable_Composite},
-                                                   {"CrtDecoder", Ntsc::Decoder_PalD}})},
-                {"Sony PVM - RGB", preset({{"CrtSignal", Ntsc::Console_SNES}, {"CrtCable", Ntsc::Cable_RGB},
+                // Mega Drive 2 / Genesis, NTSC: Sony's CXA1645 encoder
+                {"Mega Drive 2 / Genesis - composite", preset({{"CrtSignal", Console_MDH40}, {"CrtCable", Cable_Composite}})},
+                {"Mega Drive 2 / Genesis - composite, US TV", preset({{"CrtSignal", Console_MDH40}, {"CrtCable", Cable_Composite},
+                                                                      {"CrtDecoder", Decoder_SonyUS}})},
+                {"Mega Drive 2 / Genesis - composite, 256 wide", preset({{"CrtSignal", Console_MDH32}, {"CrtCable", Cable_Composite}})},
+                {"Mega Drive 2 / Genesis - S-Video (modded)", preset({{"CrtSignal", Console_MDH40}, {"CrtCable", Cable_SVideo}})},
+                {"Mega Drive 2 / Genesis - RF", withRf({{"CrtSignal", Console_MDH40}, {"CrtCable", Cable_RF}})},
+                {"Mega Drive 2 (Japan) - composite, Japanese TV", preset({{"CrtSignal", Console_MDH40}, {"CrtCable", Cable_Composite},
+                                                                          {"CrtDecoder", Decoder_SonyJP}})},
+                sep,
+                // Mega Drive 2, PAL
+                {"Mega Drive 2 (PAL) - composite", preset({{"CrtSignal", Console_MDH40Pal}, {"CrtCable", Cable_Composite},
+                                                           {"CrtDecoder", Decoder_PalD}})},
+                {"Mega Drive 2 (PAL) - composite, 1980s TV", preset({{"CrtSignal", Console_MDH40Pal}, {"CrtCable", Cable_Composite},
+                                                                     {"CrtDecoder", Decoder_PalDGlass}})},
+                {"Mega Drive 2 (PAL) - RF", withRf({{"CrtSignal", Console_MDH40Pal}, {"CrtCable", Cable_RF}, {"CrtDecoder", Decoder_PalD}})},
+                {"Mega Drive 2 (PAL) - RGB SCART", preset({{"CrtSignal", Console_MDH40Pal}, {"CrtCable", Cable_RGB}})},
+                sep,
+                // SNES / Super Famicom, NTSC
+                {"SNES - S-Video", preset({{"CrtSignal", Console_SNES}, {"CrtCable", Cable_SVideo}})},
+                {"SNES - composite", preset({{"CrtSignal", Console_SNES}, {"CrtCable", Cable_Composite}})},
+                {"SNES - composite, US TV", preset({{"CrtSignal", Console_SNES}, {"CrtCable", Cable_Composite},
+                                                    {"CrtDecoder", Decoder_SonyUS}})},
+                {"SNES - RF", withRf({{"CrtSignal", Console_SNES}, {"CrtCable", Cable_RF}})},
+                {"Super Famicom - composite, Japanese TV", preset({{"CrtSignal", Console_SNES}, {"CrtCable", Cable_Composite},
+                                                                   {"CrtDecoder", Decoder_SonyJP}})},
+                sep,
+                // SNES, PAL
+                {"SNES (PAL) - composite", preset({{"CrtSignal", Console_SNESPal}, {"CrtCable", Cable_Composite},
+                                                   {"CrtDecoder", Decoder_PalD}})},
+                {"SNES (PAL) - composite, PAL-S TV", preset({{"CrtSignal", Console_SNESPal}, {"CrtCable", Cable_Composite},
+                                                             {"CrtDecoder", Decoder_PalS}})},
+                {"SNES (PAL) - RGB SCART", preset({{"CrtSignal", Console_SNESPal}, {"CrtCable", Cable_RGB}})},
+                sep,
+                // kinds of set, fed RGB (or, the portable, a weak aerial signal)
+                {"Sony PVM - RGB", preset({{"CrtSignal", Console_SNES}, {"CrtCable", Cable_RGB},
                                            {"CrtCurvature", 0.0}, {"CrtBeamMin", 0.16}, {"CrtBeamMax", 0.28},
                                            {"CrtMask", 0.7}, {"CrtGlow", 0.05}, {"CrtVignette", 0.05}, {"CrtBoost", 1.35}})},
+                {"Sony BVM - RGB", preset({{"CrtSignal", Console_SNES}, {"CrtCable", Cable_RGB},
+                                           {"CrtCurvature", 0.0}, {"CrtBeamMin", 0.13}, {"CrtBeamMax", 0.22},
+                                           {"CrtMask", 0.45}, {"CrtGlow", 0.02}, {"CrtVignette", 0.02}, {"CrtBoost", 1.5}})},
+                {"Arcade monitor - RGB", preset({{"CrtSignal", Console_SNES}, {"CrtCable", Cable_RGB},
+                                                 {"CrtCurvature", 0.4}, {"CrtBeamMin", 0.17}, {"CrtBeamMax", 0.45},
+                                                 {"CrtMask", 0.85}, {"CrtGlow", 0.18}, {"CrtVignette", 0.3}, {"CrtBoost", 1.15}})},
+                {"Portable TV - RF, weak signal", preset({{"CrtSignal", Console_MDH40}, {"CrtCable", Cable_RF},
+                                                          {"CrtNoise", 0.4}, {"CrtGhost", 0.1}, {"CrtGhostDelay", 1.6},
+                                                          {"CrtColour", 1.15}, {"CrtSharpness", 0.35},
+                                                          {"CrtCurvature", 0.65}, {"CrtBeamMin", 0.24}, {"CrtBeamMax", 0.5},
+                                                          {"CrtMaskPx", 2}, {"CrtGlow", 0.2}, {"CrtVignette", 0.45}, {"CrtBoost", 1.1}})},
             };
             crtWindow = buildFilterWindow(this, windowCfg, crt);
             updateSignalRows();

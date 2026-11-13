@@ -75,7 +75,8 @@ struct FilterWindowSpec
     std::function<FilterExtras(QWidget* win, QGridLayout* grid, int paramRow, int& row)> addExtras;
     // adds controls at the top of a section's box, in rows from `row` on (which it moves past)
     std::function<void(const char* section, QGroupBox* box, QGridLayout* grid, int& row)> sectionTop;
-    // read-only presets listed after Default: name, settings (a missing key means its default)
+    // read-only presets listed after Default: name, settings (a missing key means its default).
+    // An entry with an empty name is a separator between groups
     std::vector<std::pair<QString, QJsonObject>> builtins;
 };
 

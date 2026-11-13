@@ -243,17 +243,19 @@ default, which gives the simple blur set by Picture blur and Colour bleed.
 * **TV controls:** Colour, Tint and Sharpness, as on the set.
 
 Built-in presets sit under Default in the preset list. They can't be overwritten; save your own
-variants under new names.
+variants under new names. The signal part of each (console, cable, TV decoder) is a real hardware
+combination; the tube part (curvature, scanlines, mask, glow) is the look of that kind of set.
 
-* Mega Drive 2 / Genesis - composite
-* Mega Drive 2 / Genesis - RF
-* SNES - S-Video
-* SNES - composite
-* SNES - composite, US TV
-* Mega Drive 2 (PAL) - composite
-* Mega Drive 2 (PAL) - RF
-* SNES (PAL) - composite
-* Sony PVM - RGB
+* **Mega Drive 2 / Genesis:** composite; composite on a US TV; composite at 256 wide (H32 games);
+  S-Video (the encoder has separate Y and C outputs, which mods bring out); RF; and the Japanese
+  console on a Japanese TV.
+* **Mega Drive 2 (PAL):** composite; composite on a 1980s TV (glass delay line); RF; RGB SCART.
+* **SNES / Super Famicom:** S-Video; composite; composite on a US TV; RF; and the Super Famicom on
+  a Japanese TV.
+* **SNES (PAL):** composite; composite on a PAL-S TV (no delay line); RGB SCART.
+* **Kinds of set:** Sony PVM (RGB, flat); Sony BVM (RGB, flat, finer scanlines); arcade monitor
+  (RGB, curved, heavier scanlines and glow); portable TV (RF with a weak signal: snow, a ghost,
+  strong curvature and a coarse mask).
 
 What the simulation is built on:
 

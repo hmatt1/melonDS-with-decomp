@@ -141,6 +141,7 @@ FilterWindow* buildFilterWindow(QWidget* parent, Config::Table& windowCfg, const
 
     auto* presetRow = new QHBoxLayout();
     auto* presetPick = new QComboBox(win);
+    presetPick->setMaxVisibleItems(40);   // the whole list of built-ins at once, not a 10-row scroller
     auto* presetName = new QLineEdit(win);
     auto* presetSave = new QPushButton("Save", win);
     auto* presetDelete = new QPushButton("Delete", win);
@@ -186,7 +187,9 @@ FilterWindow* buildFilterWindow(QWidget* parent, Config::Table& windowCfg, const
         if (!builtins.empty())
         {
             presetPick->insertSeparator(presetPick->count());
-            for (const auto& bi : builtins) presetPick->addItem(bi.first, 1);
+            for (const auto& bi : builtins)   // an entry with no name separates groups
+                if (bi.first.isEmpty()) presetPick->insertSeparator(presetPick->count());
+                else presetPick->addItem(bi.first, 1);
         }
         const QStringList saved = loadPresets().keys();
         if (!saved.isEmpty())
