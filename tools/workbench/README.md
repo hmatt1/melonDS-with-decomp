@@ -97,7 +97,7 @@ menu bar's commands, with the same names and keys.
 | `tools/workbench/wbgen.py` | Generator: `WBRecords.h` (core), `WBApi.h/.cpp` (frontend), `python/dswb/_generated.py`. The CMake build runs it |
 | `src/frontend/qt_sdl/workbench/` | Host glue (`WBHost`), API server, knowledge store, the workbench window, panels, dialogs, unit tests |
 | `src/frontend/qt_sdl/workbench/kb/*.sql` | Knowledge store migrations, applied in order |
-| `tools/workbench/python/dswb/` | Python client (typed, generated from the schema), session reader, CLI |
+| `tools/workbench/python/dswb/` | Python client (typed, generated from the schema), session reader, CLI, and the dsd tools: `dsd.py` (reads a dsd configuration), `dsd_import.py`, `dsd_sync.py`, `dsd_check.py`, `vtables.py` |
 | `tools/workbench/testrom/` | Test ROM with known code, data, Thumb regions and data flows, on the ARM9 and its own ARM7 core (`arm7/`) |
 | `tools/workbench/tests/` | Integration tests and benchmarks |
 
@@ -114,6 +114,9 @@ With the workbench off, none of these hooks run.
 ```
 melonDS [options] game.nds
   -w, --workbench       open the workbench window on startup
+  -wo, --workbench-only open the workbench with the game in its Game screen panel and the main
+                        window hidden, for this run; closing the workbench quits melonDS
+  --default-layout      open the workbench with the default layout, not the one used last
   --api                 start the API on 127.0.0.1
   --api-port <port>     read endpoint port (control = port+1, default 47800/47801)
   --api-memory-write    allow memory.write through the API
@@ -163,6 +166,21 @@ When recording is on:
   savestates that bring overlay code never read from the card.
 
 The Overlays panel shows these loads as `load (ran)`.
+
+**Calls.** A jump that leaves `LR` equal to the return address is a call, whatever the
+instruction, so indirect calls are recorded with their real target. Each call edge keeps:
+
+* **The overlay of each end.** Code that two overlays load at one address keeps one edge per
+  overlay. `calls.get` takes `overlay` and returns `site_overlay` and `callee_overlay`.
+* **Whether the call came back** (`returned`: yes, no, or empty when not known). Thumb code uses
+  `bl` as a long jump as well, and a `bl` sets `LR` either way, so only a return tells a call
+  from a jump. Only a return instruction counts (`bx Rm`, `pop {pc}`, `ldm sp!, {pc}`,
+  `ldr pc, [sp], #4`, `mov pc, lr`): a branch or a switch's jump table that lands on the address
+  after a `bl` does not.
+* **Its kind.** A plain `b` to a known function entry is a tail call, unless it goes back into
+  code the running function already passed through, or to an address only ever reached by `bl`
+  jumps that never came back. An interrupt is an `interrupt` edge with no call site, and `swi`
+  an `exception` edge from the `swi`; neither is a call into the BIOS.
 
 **Write history capacity.** A game writes millions of bytes a second, so history keeps what's
 useful and drops the oldest entries when full.
@@ -243,10 +261,13 @@ end, melonDS writes a `.dswbs` file to `<knowledge store dir>/sessions/`.
   recording events, data origin sources and labels. They also record which function was running
   when each instruction first ran, so `calls.get` can name the function around code reached
   only through branches in old sessions too.
+* **Call edges** carry the overlay of each end and whether the call came back (session schema 2).
+  Schema 1 files still load; their edges have neither.
 * **Format:** zlib-compressed, starting with `DSWBSZ1\0`; uncompressed files are still read.
   Records compress about 60×: 80 s of TrackMania with all switches on is about 2 MB on disk.
 * **Import:** the session's function-level evidence goes into the knowledge store
-  (`session`, `runtime_evidence`, `asset_link`).
+  (`session`, `runtime_evidence`, `asset_link`). A function in an overlay gets its own overlay's
+  counts and calls, whichever overlay is loaded when the session ends.
 * **"All time" scope:** panels and API calls with `scope: "all"` merge every saved session
   of the same ROM (matched by SHA-1) with the current one. Write history isn't merged: frames,
   values and loaded overlays differ between runs, so it is searched one session at a time.
@@ -539,11 +560,145 @@ Settings are in **File → Workbench settings**:
 {"tool": "ghidra",
  "functions":  [{"addr": "0x02000800", "size": 64, "name": "Foo", "mode": "arm", "cpu": "arm9", "overlay": -1}],
  "labels":     [{"addr": "0x020e6e5c", "name": "gRaceClock"}],
- "xrefs":      [{"from": "0x02000810", "to": "0x020e6e5c", "kind": "data_ref"}],
+ "xrefs":      [{"from": "0x02000810", "to": "0x020e6e5c", "kind": "data_ref", "from_overlay": -1, "to_overlay": -1}],
  "decompiled": [{"addr": "0x02000800", "text": "int Foo(void) { ... }"}]}
 ```
 
 The Decompiler panel shows the imported text with the knowledge store's names substituted.
+
+* **Overlays.** `overlay` on a function or label, and `from_overlay` / `to_overlay` on a reference,
+  name the overlay an address is in when several overlays load at that address. Without them
+  an address in such a range goes to the first overlay there.
+* **Names are overwritten.** A function in the file replaces the store's name, size and mode
+  for that function, including a name given by hand. An empty name clears it. A function with
+  no `name` key keeps the store's name (a new one gets none, and an automatic `sub_` name goes).
+* **Covered ranges.** `"covers": [{"cpu": "arm9", "overlay": -1, "start": "0x02000000", "end": "0x020ffde0"}]`
+  says the file is the whole truth for that range (outside every overlay with overlay -1, or of
+  one overlay). An import with covered ranges writes as its tool (the author named by `"tool"`,
+  `dsd`), whoever runs it, so the next one can tell its own earlier rows apart. In a covered
+  range it deletes what it no longer lists: functions the workbench detected on its own,
+  functions and labels its earlier import made, and every imported reference that starts
+  there, before adding the file's. A function or label a person or agent made or changed is
+  never deleted. The window and `kb.import.static_analysis` report how many functions and labels
+  were removed (`removed`, `removed_labels`). The changes are on the tool's undo history, not the
+  person's: to go back, import the earlier file again.
+* **Unnamed functions** are shown as `func_02001234`, or `func_ov003_020ffe00` in an overlay, as
+  dsd names them. Those names can be typed into the address box and are understood in
+  decompiler text.
+* **Importing twice changes nothing.** An entry that is already in the store with the same
+  values is left alone and adds nothing to the change log.
+* **One step.** The functions, labels and references go in as one transaction and one reload.
+  The import's changes are one undo group, but undo keeps only the last 500 changes of an
+  author, so a large import cannot be undone whole.
+* **Failures are reported.** The window shows how many entries were not imported and why the
+  first was not. `kb.import.static_analysis` returns the same as `failed` and `error`.
+
+### dsd configuration and vtables
+
+Two scripts read a [dsd](https://github.com/AetiasHax/ds-decomp) configuration folder
+(`symbols.txt`, `relocs.txt`, `delinks.txt`; ARM9 only). Run them with `tools/workbench/python`
+on `PYTHONPATH`.
+
+```
+python -m dswb.dsd_import path/to/dsd-config -o dsd.json [--apply [--report review.json]]
+python -m dswb.dsd_sync path/to/dsd-config [--dry-run]
+python -m dswb.dsd_check --dsd path/to/dsd-config --sessions path/to/sessions [-o check.json]
+python -m dswb.vtables --dsd path/to/dsd-config --extract path/to/extract [--sessions folder] -o report.json [--labels labels.json]
+```
+
+**`dswb.dsd_import`** writes the import file above from dsd's functions, named data and
+references, and with `--apply` imports it into the running workbench.
+
+* dsd owns the ARM9 code's names, sizes and modes. A function dsd names gets dsd's name, size
+  and mode. A function dsd has not named (`func_02001234`, `func_ov003_020ffe00`) gets dsd's size
+  and mode and keeps the store's name. Data dsd has not named is left out.
+* Each dsd module is a covered range, so a re-import after editing `symbols.txt` keeps the store
+  in step: a function moved, merged or deleted in dsd goes from the store too. ARM7 code is
+  never touched.
+* Before importing, `--apply` reviews the running store and prints (with `--report`, also as
+  JSON): functions of a person or agent whose name, size or mode the import changes; names that
+  exist only in the workbench, kept (`dswb.dsd_sync` writes them into `symbols.txt`); functions of
+  a person or agent that dsd does not list, kept as conflicts; and each function the import will
+  remove.
+
+**`dswb.dsd_sync`** writes the names given in the workbench into dsd-config, so they reach the
+build and git. Run it with the workbench open on the game (`--api`); `--dry-run` only shows what it
+would do.
+
+* **What it writes:** the names a person or an agent gave to functions, labels and data in the
+  store. Generated names (`sub_`, `func_`, `vt_`...) and the dsd import's own rows are not names.
+* **Where:** only over a dsd default name (`func_02001234`, `data_ov003_02121c68`, `bss_...`), or
+  over a name it wrote before, so a name can be changed again from the workbench. A name dsd has
+  from elsewhere (a matcher, a script, by hand) stays; a different workbench name for it is
+  listed as a conflict, and the next import puts dsd's name back in the workbench. A name must be
+  a valid symbol and unused in every module; an address with no dsd symbol of that kind is
+  listed, for a person to add.
+* **The names file:** `workbench_names.tsv` in the folder that holds dsd-config records every
+  name written (module, address, kind, name). When dsd-config is made again from scratch, the
+  sync, or a project script reading the file, puts them back.
+* **The build check:** when the project has a `build.ninja`, it runs `ninja` and `ninja check`.
+  If either fails, every file is put back and nothing is imported.
+* **Then** it imports dsd-config into the workbench (as `dsd_import --apply`).
+* Review the change with `git diff` and commit dsd-config and the names file. It does not run
+  by itself on every rename: dsd-config is read by the build and written by other tools too, so
+  writing it is a step a person takes, with the build checked.
+* TrackMania DS, on a copy of the project: three names (a main function, an overlay 3 function,
+  a data symbol) written in about 5 s with the build check, `ninja check` still OK; a rename of
+  `OS_Halt` and a name dsd already uses were refused; a second run wrote nothing; after
+  dsd-config was made again, the project's `windows/workbench_names.py --write` put them back.
+
+**`dswb.dsd_check`** lists where the recordings disagree with dsd's function list, for a person
+to look at before `symbols.txt` changes:
+
+* **came back:** a call into the middle of a dsd function that returned to its call site. A
+  function probably starts there.
+* **jumped between:** a `bl` that never came back, from one dsd function into the middle of
+  another. Thumb code uses `bl` for long jumps, so this is a jump, and the two pieces are
+  probably one function. A `bl` jump that stays inside one function is normal and only counted.
+* **tail between:** the same with a branch the recorder took for a tail call (weaker).
+* **unknown:** calls into the middle from recordings made before calls were marked as
+  returning.
+* **called outside / ran outside:** call targets, and code that ran, in no dsd function.
+
+Whether a call came back is recorded on each call edge (`returned` in `calls.get`: yes, no, or
+empty when not known). Only a return instruction counts (`bx`, `pop {pc}`, `ldm sp!, {pc}`,
+`ldr pc, [sp], #4`, `mov pc, lr`): a branch or a switch's jump table that lands on the address
+after a `bl` does not.
+
+On TrackMania DS, one race: 3,121 call targets start a dsd function and 16 jumps stay inside
+one. The one finding: `func_0203bfaa` jumps with `bl` into `luaV_execute+0x4a`. The code agrees:
+dsd splits Lua's interpreter loop into four pieces (`luaV_execute`, `func_0203bc58`,
+`func_0203bfaa`, `func_0203c33e`). It is one function from `0203b7d8` to `0203c3e0` (0xc08
+bytes): `push {r4-r7, lr}; sub sp, #92` at the start, `add sp, #92; pop {r4-r7, pc}` at the end,
+the three later pieces have no prologue and are never called. With that change in a copy of
+`symbols.txt`, a re-import removed the three pieces and the check found nothing.
+* Left out and listed: references dsd could not place in one overlay (`overlays(2,3)`), and a
+  second label at an address.
+* TrackMania DS: 7,393 functions (1,756 named), 183 labels and 41,065 references import in
+  about a second. Into the store as it was on 2026-11-20, the review listed two names of
+  `matcher-agent-1` that dsd replaces (`OS_WaitIrq` at `02009d14` is `OS_LoadContext`;
+  `OS_WaitForInterruptHalt` is `OS_Halt`) and one of its functions dsd does not have
+  (`02009b8c`), and 31 detected functions were removed.
+
+**`dswb.vtables`** finds C++ vtables and ties them to what saved sessions saw. The report is JSON.
+
+* **Tables.** A run of words in `.data` or `.rodata` that dsd marks as pointers to function
+  starts. A vtable has two zero words in front of it; a candidate has that header and two or
+  more slots. Each table lists its slots, the functions whose literal pool holds its address
+  (constructors and destructors), and the tables that share slots with it.
+* **Call sites.** Each `blx`/`bx` to a register among the sessions' call edges, with its
+  targets. A site is tied to a table slot in two ways. *Decoded:* the instructions before the
+  call load the register from `[reg, #offset]`, and a table with the header holds the target at
+  that slot. *Readers:* a slot holding the target was last read by code up to 24 bytes before
+  the call.
+* **Stores and reads.** The code addresses that wrote a table's address into memory (from write
+  history), and each slot's read count and reader addresses.
+* **Overlays.** A call edge names its overlay (sessions of schema 2). For an older session, an
+  edge in code two overlays share goes to the overlay that ran that address in that session,
+  when only one did.
+* `--labels` writes `vt_<address>` labels for the candidates dsd has not named, as an import file.
+* TrackMania DS, 19 sessions: 390 candidates in the main module, 315 indirect call sites, 267
+  with a target in a table; 257 tied by decoding, 203 by readers, 265 either way.
 
 ## API
 
@@ -643,7 +798,10 @@ does not fit its field, is refused. (API 1.1; 1.0 read `"02000000"` as decimal.)
 ### Changing the schema
 
 1. Edit `src/workbench/schema/workbench.schema.json`. Bump `schema_version` when a record
-   layout changes, and `api_version` when the API changes incompatibly.
+   layout changes, and `api_version` when the API changes incompatibly. Older session files
+   must still load: add fields at the end of a record, and read its sections with the record
+   size the section itself gives (its size over its count), as `CallEdge` is read. Schema 2
+   added the overlay of each end to `CallEdge`; a schema 1 edge reads as having none.
 2. Build. CMake reruns `wbgen.py`, which regenerates the C++ headers and
    `python/dswb/_generated.py`.
 3. Implement the method in `ApiServer.cpp` and, for queries, in `WBQueries.cpp`. Give it a
@@ -660,6 +818,10 @@ does not fit its field, is refused. (API 1.1; 1.0 read `"02000000"` as decimal.)
 | `python tools/workbench/tests/test_assets.py` | Graphics files on the test ROM: listed, described (parts, RAM copies, VRAM and palette RAM), drawn the same from the ROM and from RAM with the expected pixels for tiles, a map with flips, a cell and every texture format, palette pairing, a damaged file |
 | `python tools/workbench/tests/test_assets_game.py --rom game.nds [--out dir]` | A real game's graphics files: every one is described and drawn without an error, and how many were understood whole (TrackMania DS: 2055 files, all whole, 587 textures). `--out` writes the images to look at |
 | `python tools/workbench/tests/ui_graphics.py` | The Graphics panel shows a file, and clicking a tile selects its bytes in RAM. Saves `build/ui_screens/graphics.png` |
+| `python tools/workbench/tests/test_dsd_check.py` | `dswb.dsd_check` without melonDS: session files built by the test, with a call target of each kind it sorts (a call into the middle that came back, a `bl` jump between functions and inside one, tail calls, an older recording) and code that ran outside every function |
+| `python tools/workbench/tests/test_dsd_sync.py` | `dswb.dsd_sync` without melonDS: names written over dsd's default names (function, data, bss, an overlay) with the rest of each line and its line ends kept, conflicts and invalid or used names refused, the names file, renaming a name it wrote, putting names back after dsd-config is made again, and a failing build check putting every file back |
+| `python tools/workbench/tests/test_dsd_import.py` | `dswb.dsd` and `dswb.dsd_import` without melonDS: a small dsd configuration with ITCM and two overlays at one address becomes the import file, with what was left out |
+| `python tools/workbench/tests/test_vtables.py` | `dswb.vtables` without melonDS: two related vtables and a callback table are told apart, each instruction form of an indirect call is decoded, and call sites are tied to tables by decoding and by readers |
 | `python tools/workbench/tests/test_client.py` | The Python client without melonDS: waiting for events, and timing out with `TimeoutError` |
 | `python tools/workbench/tests/test_recording.py` | Test ROM: exact counts, modes, call edges, write history, provenance through card, BIOS LZ77 and DMA, taint into struct fields including a table lookup, sessions, all-time scope, API endpoint separation, the test ROM's own Octane VFS (detection, origin, locate, knowledge store links, a file unpacked through a lookup table labelled by content), its NARC, packed NARC and SDAT (names, labels of files read, unpacked by the BIOS, nested two levels down and inside a NARC packed whole, locate, knowledge store links), a plain LZ77 file unpacked in software, and on the ARM7 a tail call and an archived file copied as is and through a lookup table |
 | `python tools/workbench/tests/ui_person_flow.py` | Phase 3: a person names a function, its data and a register, comments, bookmarks, defines data, undoes, compares, imports and locates an archived file using only keyboard shortcuts in the window |
@@ -668,7 +830,7 @@ does not fit its field, is refused. (API 1.1; 1.0 read `"02000000"` as decimal.)
 | `python tools/workbench/tests/test_prereq.py` | Prerequisites: `--data-origin` records from boot with write history off; `--no-record` leaves all three off, and turning data origin on (Ctrl+Shift+D) starts recording |
 | `python tools/workbench/tests/ui_screens.py` | Screenshots for review in `build/ui_screens/index.html`: each workspace, each panel with nothing recorded, and the coverage map, mode gutter and data origin with data |
 | `python tools/workbench/tests/ui_point.py` | `ui.show` and `ui.capture`: the read endpoint refuses them, a bad call does not open the window, the cursor and selection come back as the window has them, a closed panel is refused, and the PNG is a real picture of the window and of one panel. Also called from `test_recording.py` |
-| `python tools/workbench/tests/agent_scenario.py --rom game.nds` | Phase 2/4: boots TrackMania DS through the API, plays to a race with recording on at full speed, finds the race clock and the code that writes it |
+| `python tools/workbench/tests/agent_scenario.py --rom game.nds` | Phase 2/4: boots TrackMania DS through the API, plays to a race with recording on at full speed, finds the race clock and the code that writes it, and checks that call edges in and out of overlay code name their overlay |
 | `… agent_scenario.py --struct --rom game.nds` | Phase 8: tracks only `Scripts/config/vehicles.luac` from boot, without following table lookups (its unpacked chunks are labelled by content). In the race, it finds the loader from data origin alone (`origin.ranges`): outside copies of archived files, the densest block of the file's data words that was written once while loading rather than every frame. That is `020a9074`, which `load_vehicle_physics_parameters` reaches. The test checks that the struct it wrote carries the file's label (93% of words) and names the file's card reads and loader. It also checks that words equal to other archived files don't carry the label (0% false positives) |
 | `… agent_scenario.py --assets --rom game.nds` | Phase 7: resolves the largest 3D/VRAM DMA sources to files in `vfs.zip` with their loader and unpacker, locates a car model (ROM offset, RAM, loader function) and checks the knowledge store links |
 | `python tools/workbench/tests/bench_speed.py` | Uncapped frame rate with each switch |

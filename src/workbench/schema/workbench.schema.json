@@ -1,6 +1,6 @@
 {
   "$comment": "DS Decomp Workbench schema. Single source of truth for recording record layouts, session file layout and the control/query API. C++ (src/workbench + frontend API) and Python (tools/workbench/python/dswb) are generated from this file by tools/workbench/wbgen.py. Do not edit generated files.",
-  "schema_version": 1,
+  "schema_version": 2,
   "api_version": "1.1",
 
   "enums": {
@@ -80,18 +80,21 @@
       ]
     },
     "CallEdge": {
-      "size": 28,
+      "size": 32,
+      "doc": "One observed call. Version 1 sessions have 28-byte edges, without the two overlay fields (read as 0).",
       "fields": [
         ["cpu", "u8", ""],
         ["kind", "u8", "CallKind"],
         ["thumb", "u8", "callee entered in Thumb mode"],
-        ["pad", "u8", ""],
+        ["returns", "u8", "bit 0: the callee returned to the call site at least once. bit 1: it was left at least once without returning (a jump written as bl, or a longjmp). 0: not seen, or recorded before this was kept"],
         ["call_site", "u32", "address of the calling instruction"],
         ["callee", "u32", "entry address of the callee"],
         ["caller_func", "u32", "entry of the function containing call_site, from the shadow stack (0 if unknown)"],
         ["count", "u32", ""],
         ["first_frame", "u32", ""],
-        ["last_frame", "u32", ""]
+        ["last_frame", "u32", ""],
+        ["site_overlay", "u16", "overlay that owned call_site when the call ran: 0 = none (or not recorded), else overlay id + 1 (ARM7 overlays: + 0x8000)"],
+        ["callee_overlay", "u16", "the same for callee"]
       ]
     },
     "LabelMergeEntry": {
@@ -128,7 +131,7 @@
         ["sp", "u32", "stack pointer at call"],
         ["kind", "u8", "CallKind"],
         ["thumb", "u8", ""],
-        ["pad", "u16", ""]
+        ["edge_returns", "u16", "the call edge's returns bits when the frame was pushed, so a return looks the edge up only once; 0x80: no edge to mark (a tail call took the frame over)"]
       ]
     },
     "ProvenanceEvent": {
@@ -404,9 +407,13 @@
       },
       "CoverageResult": { "fields": [ ["ranges", "CoverageRange[]", ""], ["total_bytes", "u64", ""], ["truncated", "bool", ""],
                                       ["next_addr", "u32", "when truncated: query again from here"] ] },
-      "CallsParams": { "fields": [ ["addr", "addr", "function entry or any address inside it"], ["cpu", "string", "", "arm9"], ["limit", "u32", "", 100] ] },
+      "CallsParams": { "fields": [ ["addr", "addr", "function entry or any address inside it"], ["cpu", "string", "", "arm9"], ["limit", "u32", "", 100],
+                                   ["overlay", "i32", "overlay the function is in, for code several overlays share; -1 = the overlay loaded there now. Edges recorded without an overlay are always listed", -1] ] },
       "CallEdgeInfo": {
-        "fields": [ ["call_site", "u32", ""], ["callee", "u32", ""], ["caller_func", "u32", ""], ["count", "u32", ""], ["kind", "string", ""], ["first_frame", "u32", ""], ["last_frame", "u32", ""] ]
+        "fields": [ ["call_site", "u32", ""], ["callee", "u32", ""], ["caller_func", "u32", ""], ["count", "u32", ""], ["kind", "string", ""], ["first_frame", "u32", ""], ["last_frame", "u32", ""],
+                    ["site_overlay", "i32", "overlay id that owned call_site when the call ran; -1 = none, or recorded before overlays were kept", -1],
+                    ["callee_overlay", "i32", "the same for callee", -1],
+                    ["returned", "string", "yes: the call returned to its site at least once. no: it was left without returning every time it was seen, so it is a jump written as bl (or a longjmp), not a call. Empty: not known (an older recording, or the callee went on with a tail call)"] ]
       },
       "CallsResult": { "fields": [ ["function", "u32", "resolved function entry"], ["callers", "CallEdgeInfo[]", ""], ["callees", "CallEdgeInfo[]", ""] ] },
       "CallStackParams": { "fields": [ ["cpu", "string", "", "arm9"] ] },
@@ -750,7 +757,10 @@
         ]
       },
       "KbImportParams": { "fields": [ ["path", "string", "static analysis export (JSON: tool, functions, labels, xrefs, decompiled)"] ] },
-      "KbImportResult": { "fields": [ ["ok", "bool", ""], ["count", "u32", "entries imported"] ] },
+      "KbImportResult": { "fields": [ ["ok", "bool", ""], ["count", "u32", "entries imported (an entry already in the store with the same values counts, and is left untouched)"],
+                                      ["failed", "u32", "entries that could not be imported"],
+                                      ["removed", "u32", "functions deleted because they start in a range the file covers (covers) and are not in its list: ones the workbench detected on its own, and ones an earlier import from the same tool made"],
+                                      ["removed_labels", "u32", "labels an earlier import from the same tool made in a covered range that the file no longer lists"], ["error", "string", "how many failed and why the first did; empty when none"] ] },
       "KbDecodeParams": { "fields": [ ["start", "addr", ""], ["end", "addr", "exclusive"], ["mode", "string", "arm, thumb, data, or clear to remove overrides in the range"],
                                       ["cpu", "string", "", "arm9"], ["overlay", "i32", "overlay id for overlay code; -1 = the overlay loaded now", -1] ] },
       "KbBookmarkParams": { "fields": [ ["addr", "addr", ""], ["name", "string", "", ""], ["cpu", "string", "", "arm9"] ] },

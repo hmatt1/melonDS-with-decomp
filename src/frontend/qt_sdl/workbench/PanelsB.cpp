@@ -1214,7 +1214,7 @@ static QString RenderDraft(WBHost* H, WorkbenchWindow* W, int cpu, const WBKB::F
     u32 start = f.Addr;
     u32 size = std::max<u32>(f.Size, f.Thumb() ? 2u : 4u);
     bool thumb = f.Thumb();
-    QString name = f.Name.isEmpty() ? QString("sub_%1").arg(start, 8, 16, QChar('0')) : f.Name;
+    QString name = W->KB().FunctionName(f);
     QString body;
     H->RunSync([&]()
     {
@@ -1416,7 +1416,7 @@ bool SourcePanel::EnsureSourceFile(bool offerCreate)
         W->ShowError("Source file", "This function has no source file, and no source root is set. Set the source root above, then try again.");
         return false;
     }
-    QString name = f->Name.isEmpty() ? QString("sub_%1").arg(f->Addr, 8, 16, QChar('0')) : f->Name;
+    QString name = W->KB().FunctionName(*f);
     name.replace(QRegularExpression("[^A-Za-z0-9_]"), "_");
     QString rel = f->SourceFile.isEmpty() ? QString("src/%1.c").arg(name) : f->SourceFile;
     QString path = QFileInfo(rel).isAbsolute() ? rel : QDir(root).filePath(rel);
@@ -1584,7 +1584,7 @@ void DecompilerPanel::UseAsSource()
         W->ShowPanel("dock_source");
         return;
     }
-    QString name = f->Name.isEmpty() ? QString("sub_%1").arg(f->Addr, 8, 16, QChar('0')) : f->Name;
+    QString name = W->KB().FunctionName(*f);
     QString safe = name;
     safe.replace(QRegularExpression("[^A-Za-z0-9_]"), "_");
     QString rel = f->SourceFile.isEmpty() ? QString("src/%1.c").arg(safe) : f->SourceFile;

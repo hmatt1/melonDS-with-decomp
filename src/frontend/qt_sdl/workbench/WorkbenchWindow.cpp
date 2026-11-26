@@ -650,6 +650,13 @@ bool WorkbenchWindow::PointAt(const UiPointRequest& req, UiPointState& out, QStr
                     top->raise();
                     top->activateWindow();
                 }
+        // the window's first show restores the saved layout on the next turn (and may bring Getting
+        // started forward in the same tab area): bring the panel forward again after that
+        if (Workspaces.empty())
+        {
+            QString panel = req.Panel;
+            QTimer::singleShot(0, this, [this, panel]() { ShowPanel(panel); });
+        }
     }
 
     QString note = req.Note.trimmed();
@@ -678,9 +685,11 @@ void WorkbenchWindow::CaptureUi(const QString& dock, int maxWidth, UiCaptureFn c
 
     QWidget* target = this;
     WBPanel* panel = nullptr;
+    QPointer<ads::CDockWidget> dw;
     if (!dock.isEmpty())
     {
         ads::CDockWidget* d = DockMgr->findDockWidget(dock);
+        dw = d;
         if (!d || d->isClosed()) { cb(false, {}, dock, false, "panel is closed; ui.show it first"); return; }
         d->raise(); // its tab comes forward; the application is not activated
         QWidget* top = d->window();
@@ -695,10 +704,13 @@ void WorkbenchWindow::CaptureUi(const QString& dock, int maxWidth, UiCaptureFn c
     job->setParent(this);
     auto spins = std::make_shared<int>(0);
     auto kicked = std::make_shared<bool>(false);
-    job->Step = [this, job, dock, maxWidth, cb, target, panel, spins, kicked]()
+    job->Step = [this, job, dock, maxWidth, cb, target, panel, spins, kicked, dw]()
     {
         int n = ++(*spins);
         bool stale = n * 30 >= 2000;
+        // something brought another tab forward meanwhile (the layout a first show restores): this
+        // panel's tab comes forward again, or the picture would be of a hidden widget
+        if (panel && !panel->IsShown() && dw && !dw->isClosed() && n % 5 == 1) dw->raise();
         if (panel && panel->IsShown() && !*kicked)
         {
             *kicked = true;
@@ -1205,7 +1217,7 @@ void WorkbenchWindow::UpdateStatus()
     QString funcName;
     if (KB().IsOpen())
         if (const WBKB::Function* f = KB().FunctionAt(CurCpu, CurAddr, OverlayContext(CurAddr)))
-            funcName = f->Name.isEmpty() ? QString("sub_%1").arg(f->Addr, 8, 16, QChar('0')) : f->Name;
+            funcName = KB().FunctionName(*f);
     LblPC->setText(QString("%1 PC %2%3").arg(CurCpu ? "ARM7" : "ARM9").arg(s.PC[CurCpu], 8, 16, QChar('0'))
                    .arg(funcName.isEmpty() ? QString() : "  " + funcName));
     LblPC->setToolTip(QString("Every panel shows the %1. Click to switch to the %2 (Navigate > Switch CPU, %3).")
@@ -1955,7 +1967,11 @@ void WorkbenchWindow::ImportStaticAnalysis()
     QString p = QFileDialog::getOpenFileName(this, "Static analysis export", QString(), "JSON (*.json)");
     if (p.isEmpty()) return;
     QString err;
-    int n = ImportAnalysisJson(KB(), p, err);
+    int removed = 0, removedLabels = 0;
+    int n = ImportAnalysisJson(KB(), p, err, nullptr, &removed, &removedLabels);
+    QString what = QString("Imported %1 entries").arg(n);
+    if (removed || removedLabels) what += QString(", removed %1 functions and %2 labels the import no longer lists").arg(removed).arg(removedLabels);
     if (n < 0) ShowError("Import", err);
-    else Notice(QString("Imported %1 entries").arg(n), 5000);
+    else if (!err.isEmpty()) ShowError("Import", what + ". " + err);
+    else Notice(what, 5000);
 }

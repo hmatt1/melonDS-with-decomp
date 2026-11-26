@@ -16,6 +16,8 @@ A project knowledge store ties the three together. It holds every confirmed fact
 
 Three changes separate this design from the prototypes. melonDS becomes the primary interface, with disassembly, memory, registers, annotations and source diffing built in, so the external Python viewer and its 64GB shared-memory bridge go away. Work happens in real time: boot the game, play, pause and inspect, with recording on or off. And the knowledge store becomes the source of truth, with Binary Ninja or Ghidra output treated as one importable input among several.
 
+One exception, decided 2026-11-20: when a project has a dsd configuration (`dsd-config`), function names, sizes and modes come from it, because the build reads it and git tracks its changes. An import from dsd overwrites the knowledge store's names. The knowledge store remains the source of truth for annotations, types, classes and runtime evidence.
+
 Everything described in this document is in scope. The phased plan sets build order only, and nothing is deferred to a later release. The only target platform is Windows.
 
 ### Success criteria

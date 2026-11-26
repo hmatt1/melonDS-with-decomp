@@ -16,6 +16,7 @@
     with melonDS. If not, see http://www.gnu.org/licenses/.
 */
 
+#include <memory>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
@@ -661,8 +662,11 @@ BreakpointDialog::BreakpointDialog(WorkbenchWindow* w, u32 addr) : QDialog(w)
 
 // ---------------------------------------------------------------- static analysis import
 
-int ImportAnalysisJson(WBKB::KnowledgeStore& kb, const QString& path, QString& error)
+int ImportAnalysisJson(WBKB::KnowledgeStore& kb, const QString& path, QString& error, int* failedOut, int* removedOut, int* removedLabelsOut)
 {
+    if (failedOut) *failedOut = 0;
+    if (removedOut) *removedOut = 0;
+    if (removedLabelsOut) *removedLabelsOut = 0;
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) { error = "cannot open " + path; return -1; }
     QJsonParseError perr;
@@ -671,30 +675,96 @@ int ImportAnalysisJson(WBKB::KnowledgeStore& kb, const QString& path, QString& e
     QJsonObject root = doc.object();
     QString tool = root.value("tool").toString("import");
     auto addr = [](const QJsonValue& v) -> u32 { u32 a = 0; WBApi::ParseAddr(v, a); return a; };
-    int n = 0;
-    for (const QJsonValue& v : root.value("functions").toArray())
+    int n = 0, failed = 0, removed = 0, removedLabels = 0;
+    QString first;
+    auto fail = [&](const QString& what, u32 a, const QString& err)
+    {
+        if (failed++ == 0) first = QString("%1 at 0x%2: %3").arg(what).arg(a, 8, 16, QChar('0')).arg(err);
+    };
+    // An import that covers ranges writes as its tool ("dsd"), whoever runs it: the next import from
+    // that tool can then tell its own earlier rows (and remove those it no longer lists) from what a
+    // person or an agent made or changed
+    QJsonArray covers = root.value("covers").toArray();
+    qint64 importAuthor = 0;
+    std::unique_ptr<WBKB::KnowledgeStore::AuthorScope> asTool;
+    if (!covers.isEmpty())
+    {
+        importAuthor = kb.AgentAuthor(tool);
+        asTool = std::make_unique<WBKB::KnowledgeStore::AuthorScope>(kb, importAuthor, QString());
+    }
+    struct Cover { int Cpu, Overlay; u32 Start, End; };
+    std::vector<Cover> cov;
+    for (const QJsonValue& v : covers)
     {
         QJsonObject o = v.toObject();
-        u32 a = addr(o.value("addr"));
-        QString mode = o.value("mode").toString((a & 1) ? "thumb" : "arm");
-        int cpu = o.value("cpu").toString("arm9") == "arm7" ? 1 : 0;
-        QString err;
-        if (kb.UpsertFunction(cpu, a & ~1u, (u32)o.value("size").toDouble(), mode, o.value("name").toString(), o.value("overlay").toInt(-1), err)) n++;
+        cov.push_back({o.value("cpu").toString("arm9") == "arm7" ? 1 : 0, o.value("overlay").toInt(-1), addr(o.value("start")), addr(o.value("end"))});
     }
-    for (const QJsonValue& v : root.value("labels").toArray())
     {
-        QJsonObject o = v.toObject();
-        QString err;
-        int cpu = o.value("cpu").toString("arm9") == "arm7" ? 1 : 0;
-        if (kb.SetLabel(cpu, addr(o.value("addr")), o.value("name").toString(), o.value("overlay").toInt(-1), err)) n++;
+        // one transaction and one reload for the functions, labels and references
+        WBKB::KnowledgeStore::Batch batch(kb);
+        std::set<qint64> kept;
+        for (const QJsonValue& v : root.value("functions").toArray())
+        {
+            QJsonObject o = v.toObject();
+            u32 a = addr(o.value("addr"));
+            QString mode = o.value("mode").toString((a & 1) ? "thumb" : "arm");
+            int cpu = o.value("cpu").toString("arm9") == "arm7" ? 1 : 0;
+            QString err;
+            // no name given: the store's name stays (a new function gets none)
+            bool keepName = !o.contains("name") || o.value("name").isNull();
+            qint64 id = 0;
+            if (kb.UpsertFunction(cpu, a & ~1u, (u32)o.value("size").toDouble(), mode, o.value("name").toString(), o.value("overlay").toInt(-1), err,
+                                  &id, keepName))
+            {
+                n++;
+                kept.insert(id);
+            }
+            else fail("function", a, err);
+        }
+        // in a covered range the file is the whole truth: automatic functions it lacks go, and so do
+        // functions, labels and references an earlier import from the same tool made
+        for (const Cover& c : cov)
+        {
+            QString err;
+            int r = kb.PruneAutoFunctions(c.Cpu, c.Overlay, c.Start, c.End, kept, err, importAuthor);
+            if (r >= 0) removed += r;
+            else fail("covered range", c.Start, err);
+        }
+        std::set<qint64> keptLabels;
+        for (const QJsonValue& v : root.value("labels").toArray())
+        {
+            QJsonObject o = v.toObject();
+            QString err;
+            int cpu = o.value("cpu").toString("arm9") == "arm7" ? 1 : 0;
+            u32 a = addr(o.value("addr"));
+            qint64 id = 0;
+            if (kb.SetLabel(cpu, a, o.value("name").toString(), o.value("overlay").toInt(-1), err, &id))
+            {
+                n++;
+                keptLabels.insert(id);
+            }
+            else fail("label", a, err);
+        }
+        for (const Cover& c : cov)
+        {
+            QString err;
+            int r = kb.PruneLabels(c.Cpu, c.Overlay, c.Start, c.End, importAuthor, keptLabels, err);
+            if (r >= 0) removedLabels += r;
+            else fail("covered range", c.Start, err);
+            if (kb.PruneStaticXrefs(c.Cpu, c.Overlay, c.Start, c.End, err) < 0) fail("covered range", c.Start, err);
+        }
+        for (const QJsonValue& v : root.value("xrefs").toArray())
+        {
+            QJsonObject o = v.toObject();
+            int cpu = o.value("cpu").toString("arm9") == "arm7" ? 1 : 0;
+            QString err;
+            u32 a = addr(o.value("from"));
+            if (kb.AddXref(cpu, a, addr(o.value("to")), o.value("kind").toString("data_ref"), "static", err,
+                           o.value("from_overlay").toInt(-1), o.value("to_overlay").toInt(-1))) n++;
+            else fail("reference", a, err);
+        }
     }
-    for (const QJsonValue& v : root.value("xrefs").toArray())
-    {
-        QJsonObject o = v.toObject();
-        int cpu = o.value("cpu").toString("arm9") == "arm7" ? 1 : 0;
-        QString err;
-        if (kb.AddXref(cpu, addr(o.value("from")), addr(o.value("to")), o.value("kind").toString("data_ref"), "static", err)) n++;
-    }
+    // decompiled text hangs on functions, which the batch above may have just added
     for (const QJsonValue& v : root.value("decompiled").toArray())
     {
         QJsonObject o = v.toObject();
@@ -703,7 +773,12 @@ int ImportAnalysisJson(WBKB::KnowledgeStore& kb, const QString& path, QString& e
         const WBKB::Function* fn = kb.FunctionStarting(cpu, a, o.value("overlay").toInt(-1));
         QString err;
         if (fn && kb.SetDecompiled(fn->Id, tool, o.value("text").toString(), err)) n++;
+        else fail("decompiled text", a, fn ? err : QString("no function starts here"));
     }
     kb.Reload();
+    if (failed) error = QString("%1 entries were not imported; the first: %2").arg(failed).arg(first);
+    if (failedOut) *failedOut = failed;
+    if (removedOut) *removedOut = removed;
+    if (removedLabelsOut) *removedLabelsOut = removedLabels;
     return n;
 }

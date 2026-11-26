@@ -7,7 +7,7 @@ import struct
 from dataclasses import dataclass, field, fields, is_dataclass
 from typing import Any, Dict, List, Optional
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 API_VERSION = "1.1"
 
 class Region(enum.IntEnum):
@@ -192,18 +192,21 @@ assert struct.calcsize(WriteHistoryEntry.FORMAT) == 32
 
 @dataclass
 class CallEdge:
+    "One observed call. Version 1 sessions have 28-byte edges, without the two overlay fields (read as 0)."
     cpu: int
     kind: int
     thumb: int
-    pad: int
+    returns: int
     call_site: int
     callee: int
     caller_func: int
     count: int
     first_frame: int
     last_frame: int
-    FORMAT = "<BBBBIIIIII"
-    SIZE = 28
+    site_overlay: int
+    callee_overlay: int
+    FORMAT = "<BBBBIIIIIIHH"
+    SIZE = 32
 
     @classmethod
     def unpack_from(cls, buf, offset: int = 0) -> "CallEdge":
@@ -215,9 +218,9 @@ class CallEdge:
             yield cls(*t)
 
     def pack(self) -> bytes:
-        return struct.pack(self.FORMAT, self.cpu, self.kind, self.thumb, self.pad, self.call_site, self.callee, self.caller_func, self.count, self.first_frame, self.last_frame)
+        return struct.pack(self.FORMAT, self.cpu, self.kind, self.thumb, self.returns, self.call_site, self.callee, self.caller_func, self.count, self.first_frame, self.last_frame, self.site_overlay, self.callee_overlay)
 
-assert struct.calcsize(CallEdge.FORMAT) == 28
+assert struct.calcsize(CallEdge.FORMAT) == 32
 
 @dataclass
 class LabelMergeEntry:
@@ -280,7 +283,7 @@ class ShadowFrame:
     sp: int
     kind: int
     thumb: int
-    pad: int
+    edge_returns: int
     FORMAT = "<IIIIBBH"
     SIZE = 20
 
@@ -294,7 +297,7 @@ class ShadowFrame:
             yield cls(*t)
 
     def pack(self) -> bytes:
-        return struct.pack(self.FORMAT, self.callee, self.call_site, self.return_addr, self.sp, self.kind, self.thumb, self.pad)
+        return struct.pack(self.FORMAT, self.callee, self.call_site, self.return_addr, self.sp, self.kind, self.thumb, self.edge_returns)
 
 assert struct.calcsize(ShadowFrame.FORMAT) == 20
 
@@ -1187,6 +1190,7 @@ class CallsParams:
     addr: int = 0  # function entry or any address inside it
     cpu: str = 'arm9'
     limit: int = 100
+    overlay: int = -1  # overlay the function is in, for code several overlays share; -1 = the overlay loaded there now. Edges recorded without an overlay are always listed
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "CallsParams":
@@ -1194,6 +1198,7 @@ class CallsParams:
         if "addr" in d: kw["addr"] = d["addr"]
         if "cpu" in d: kw["cpu"] = d["cpu"]
         if "limit" in d: kw["limit"] = d["limit"]
+        if "overlay" in d: kw["overlay"] = d["overlay"]
         return cls(**kw)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -1201,6 +1206,7 @@ class CallsParams:
         out["addr"] = self.addr
         out["cpu"] = self.cpu
         out["limit"] = self.limit
+        out["overlay"] = self.overlay
         return out
 
 
@@ -1213,6 +1219,9 @@ class CallEdgeInfo:
     kind: str = ""
     first_frame: int = 0
     last_frame: int = 0
+    site_overlay: int = -1  # overlay id that owned call_site when the call ran; -1 = none, or recorded before overlays were kept
+    callee_overlay: int = -1  # the same for callee
+    returned: str = ""  # yes: the call returned to its site at least once. no: it was left without returning every time it was seen, so it is a jump written as bl (or a longjmp), not a call. Empty: not known (an older recording, or the callee went on with a tail call)
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "CallEdgeInfo":
@@ -1224,6 +1233,9 @@ class CallEdgeInfo:
         if "kind" in d: kw["kind"] = d["kind"]
         if "first_frame" in d: kw["first_frame"] = d["first_frame"]
         if "last_frame" in d: kw["last_frame"] = d["last_frame"]
+        if "site_overlay" in d: kw["site_overlay"] = d["site_overlay"]
+        if "callee_overlay" in d: kw["callee_overlay"] = d["callee_overlay"]
+        if "returned" in d: kw["returned"] = d["returned"]
         return cls(**kw)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -1235,6 +1247,9 @@ class CallEdgeInfo:
         out["kind"] = self.kind
         out["first_frame"] = self.first_frame
         out["last_frame"] = self.last_frame
+        out["site_overlay"] = self.site_overlay
+        out["callee_overlay"] = self.callee_overlay
+        out["returned"] = self.returned
         return out
 
 
@@ -3368,19 +3383,31 @@ class KbImportParams:
 @dataclass
 class KbImportResult:
     ok: bool = False
-    count: int = 0  # entries imported
+    count: int = 0  # entries imported (an entry already in the store with the same values counts, and is left untouched)
+    failed: int = 0  # entries that could not be imported
+    removed: int = 0  # functions deleted because they start in a range the file covers (covers) and are not in its list: ones the workbench detected on its own, and ones an earlier import from the same tool made
+    removed_labels: int = 0  # labels an earlier import from the same tool made in a covered range that the file no longer lists
+    error: str = ""  # how many failed and why the first did; empty when none
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "KbImportResult":
         kw = {}
         if "ok" in d: kw["ok"] = d["ok"]
         if "count" in d: kw["count"] = d["count"]
+        if "failed" in d: kw["failed"] = d["failed"]
+        if "removed" in d: kw["removed"] = d["removed"]
+        if "removed_labels" in d: kw["removed_labels"] = d["removed_labels"]
+        if "error" in d: kw["error"] = d["error"]
         return cls(**kw)
 
     def to_dict(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {}
         out["ok"] = self.ok
         out["count"] = self.count
+        out["failed"] = self.failed
+        out["removed"] = self.removed
+        out["removed_labels"] = self.removed_labels
+        out["error"] = self.error
         return out
 
 
@@ -5123,12 +5150,13 @@ class GeneratedMethods:
         if limit is not None: p.limit = limit
         return AnalysisGetResult.from_dict(self._call("analysis.get", p.to_dict()))
 
-    def calls_get(self, addr: int, cpu: Optional[str] = 'arm9', limit: Optional[int] = 100) -> CallsResult:
+    def calls_get(self, addr: int, cpu: Optional[str] = 'arm9', limit: Optional[int] = 100, overlay: Optional[int] = -1) -> CallsResult:
         "Observed callers and callees of a function. (endpoint: read)"
         p = CallsParams()
         if addr is not None: p.addr = addr
         if cpu is not None: p.cpu = cpu
         if limit is not None: p.limit = limit
+        if overlay is not None: p.overlay = overlay
         return CallsResult.from_dict(self._call("calls.get", p.to_dict()))
 
     def callstack_get(self, cpu: Optional[str] = 'arm9') -> CallStackResult:

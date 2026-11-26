@@ -824,6 +824,172 @@ static void TestKnowledgeStore()
     CHECK(!kb3.Open(path, r2, "tester", err));
 }
 
+// what a static analysis import relies on: references name the overlay of each end, a repeated
+// import writes nothing, and a batch is one reload
+static void TestKbImport()
+{
+    QTemporaryDir dir;
+    QString path = dir.filePath("kb.db");
+    std::vector<u8> rom = MakeRom();
+    // a second overlay (id 1, file 0) at the address of overlay 0
+    auto w32 = [&](u32 off, u32 v) { memcpy(&rom[off], &v, 4); };
+    w32(0x2220 + 0, 1); w32(0x2220 + 4, 0x02100000); w32(0x2220 + 8, 0x100); w32(0x2220 + 12, 0x20); w32(0x2220 + 24, 0);
+    w32(0x54, 64);
+    NitroROM r;
+    r.Load(rom.data(), (u32)rom.size(), (u32)rom.size());
+    WBKB::KnowledgeStore kb;
+    QString err;
+    CHECK(kb.Open(path, r, "tester", err));
+    CHECK(kb.ModuleFor(0, 0x02100010, 0) && kb.ModuleFor(0, 0x02100010, 0)->Name == "ov9_0000");
+    CHECK(kb.ModuleFor(0, 0x02100010, 1) && kb.ModuleFor(0, 0x02100010, 1)->Name == "ov9_0001");
+
+    auto logRows = [&]()
+    {
+        sqlite3* db;
+        sqlite3_open(path.toUtf8().constData(), &db);
+        sqlite3_stmt* s;
+        sqlite3_prepare_v2(db, "SELECT count(*) FROM change_log", -1, &s, nullptr);
+        sqlite3_step(s);
+        int n = sqlite3_column_int(s, 0);
+        sqlite3_finalize(s);
+        sqlite3_close(db);
+        return n;
+    };
+
+    // a reference out of overlay 1 is stored on overlay 1, not on the first overlay at that address
+    CHECK(kb.AddXref(0, 0x02100010, 0x02000400, "call", "static", err, 1, -1));
+    std::vector<WBKB::Xref> to = kb.XrefsTo(0, 0x02000400);
+    CHECK(to.size() == 1 && to[0].From == 0x02100010 && to[0].FromOverlay == 1);
+    CHECK(kb.AddXref(0, 0x02100010, 0x02000400, "call", "static", err, 0, -1));
+    CHECK(kb.XrefsTo(0, 0x02000400).size() == 2);
+    // and one into overlay 1 is found from overlay 1 only
+    CHECK(kb.AddXref(0, 0x02000500, 0x02100020, "data_ref", "static", err, -1, 1));
+    CHECK(kb.XrefsTo(0, 0x02100020, 1).size() == 1 && kb.XrefsTo(0, 0x02100020, 1)[0].FromOverlay == -1);
+    CHECK(kb.XrefsTo(0, 0x02100020, 0).empty());
+    // the same reference again adds no row, with a module at both ends or with none at one (IO)
+    CHECK(kb.AddXref(0, 0x02100010, 0x02000400, "call", "static", err, 1, -1));
+    CHECK(kb.XrefsTo(0, 0x02000400).size() == 2);
+    CHECK(kb.AddXref(0, 0x02000500, 0x04000208, "data_ref", "static", err));
+    CHECK(kb.AddXref(0, 0x02000500, 0x04000208, "data_ref", "static", err));
+    CHECK(kb.XrefsTo(0, 0x04000208).size() == 1);
+
+    // a function or label that already has these values is left alone: nothing is logged
+    qint64 fid = 0, fid2 = 0;
+    CHECK(kb.UpsertFunction(0, 0x02100000, 0x20, "thumb", "Race_Init", 1, err, &fid));
+    CHECK(kb.UpsertFunction(0, 0x02100000, 0x40, "arm", "Menu_Init", 0, err, &fid2) && fid2 != fid);
+    CHECK(kb.SetLabel(0, 0x02000600, "gTable", -1, err));
+    int rows = logRows();
+    qint64 again = 0;
+    CHECK(kb.UpsertFunction(0, 0x02100000, 0x20, "thumb", "Race_Init", 1, err, &again) && again == fid);
+    CHECK(kb.SetLabel(0, 0x02000600, "gTable", -1, err));
+    CHECK(logRows() == rows);
+    CHECK(kb.UpsertFunction(0, 0x02100000, 0x24, "thumb", "Race_Init", 1, err));
+    CHECK(kb.SetLabel(0, 0x02000600, "gTable2", -1, err));
+    CHECK(logRows() == rows + 2);
+    // an unnamed function stays unnamed without a write
+    CHECK(kb.UpsertFunction(0, 0x02000700, 8, "arm", "", -1, err));
+    rows = logRows();
+    CHECK(kb.UpsertFunction(0, 0x02000700, 8, "arm", "", -1, err));
+    CHECK(logRows() == rows);
+
+    // a batch: the caches reload once, when it closes
+    int reloads = 0;
+    QObject::connect(&kb, &WBKB::KnowledgeStore::changed, [&]() { reloads++; });
+    {
+        WBKB::KnowledgeStore::Batch batch(kb);
+        CHECK(kb.UpsertFunction(0, 0x02000400, 0x40, "arm", "A", -1, err));
+        CHECK(kb.UpsertFunction(0, 0x02000440, 0x40, "arm", "B", -1, err));
+        CHECK(kb.SetLabel(0, 0x02000610, "gOther", -1, err));
+        CHECK(reloads == 0 && !kb.FunctionStarting(0, 0x02000400));
+    }
+    CHECK(reloads == 1);
+    CHECK(kb.FunctionStarting(0, 0x02000400) && kb.FunctionStarting(0, 0x02000440) && kb.LabelAt(0, 0x02000610));
+    // a batch that changed nothing does not reload
+    {
+        WBKB::KnowledgeStore::Batch batch(kb);
+        CHECK(kb.UpsertFunction(0, 0x02000400, 0x40, "arm", "A", -1, err));
+    }
+    CHECK(reloads == 1);
+
+    // keepName: the size and mode change, the store's name stays; a new function gets no name
+    CHECK(kb.UpsertFunction(0, 0x02000400, 0x48, "arm", "ignored", -1, err, nullptr, true));
+    CHECK(kb.FunctionStarting(0, 0x02000400)->Name == "A" && kb.FunctionStarting(0, 0x02000400)->Size == 0x48);
+    CHECK(kb.UpsertFunction(0, 0x02100040, 8, "arm", "ignored", 1, err, nullptr, true));
+    CHECK(kb.FunctionStarting(0, 0x02100040, 1) && kb.FunctionStarting(0, 0x02100040, 1)->Name.isEmpty());
+
+    // a function with no name is called by its address, and in an overlay by the overlay too, as dsd does
+    CHECK_EQ_STR(kb.NameAt(0, 0x02100040, 1).toStdString(), "func_ov001_02100040");
+    CHECK_EQ_STR(kb.FunctionName(*kb.FunctionStarting(0, 0x02000700)).toStdString(), "func_02000700");
+    CHECK_EQ_STR(kb.NameAt(0, 0x02100044, 1, true).toStdString(), "func_ov001_02100040+0x4");
+    u32 la = 0; int lc = -1, lov = -2;
+    CHECK(kb.LookupName("func_ov001_02100040", la, lc, &lov) && la == 0x02100040 && lov == 1);
+    CHECK(kb.LookupName("func_02000700", la, lc, &lov) && la == 0x02000700 && lov == -1);
+    // and decompiler text naming the overlay gets that overlay's name, whichever is loaded
+    auto loaded0 = [](u32) { return 0; };
+    CHECK_EQ_STR(kb.NameDecompiled("func_ov001_02100000(); func_02100000();", 0, loaded0).toStdString(), "Race_Init(); Menu_Init();");
+
+    // an import that covers a range: automatic functions it does not list go, in one undo step
+    std::vector<WBKB::KnowledgeStore::AutoFunction> autos(3);
+    autos[0].Addr = 0x02000480; autos[0].Size = 8;
+    autos[1].Addr = 0x02000490; autos[1].Size = 8;
+    autos[2].Addr = 0x02100080; autos[2].Size = 8; autos[2].Overlay = 1;
+    CHECK(kb.DefineAutoFunctions(autos, err) == 3);
+    CHECK(kb.FunctionStarting(0, 0x02000480)->AuthorKind == "system" && kb.FunctionStarting(0, 0x02100080, 1));
+    reloads = 0;
+    {
+        WBKB::KnowledgeStore::Batch batch(kb);
+        std::set<qint64> keep;
+        qint64 id = 0;
+        // the file lists 02000490 (with no name: its automatic sub_ placeholder goes, and it is the
+        // importer's now) and A
+        CHECK(kb.UpsertFunction(0, 0x02000490, 8, "arm", "", -1, err, &id, true));
+        keep.insert(id);
+        CHECK(kb.UpsertFunction(0, 0x02000400, 0x48, "arm", "A", -1, err, &id));
+        keep.insert(id);
+        CHECK(kb.PruneAutoFunctions(0, -1, 0x02000000, 0x02000800, keep, err) == 1);
+        CHECK(kb.PruneAutoFunctions(0, 1, 0x02100000, 0x02100100, keep, err) == 1);
+        CHECK(kb.PruneAutoFunctions(0, 0, 0x02100000, 0x02100100, keep, err) == 0);
+    }
+    CHECK(reloads == 1);
+    CHECK(!kb.FunctionStarting(0, 0x02000480) && !kb.FunctionStarting(0, 0x02100080, 1));
+    CHECK(kb.FunctionStarting(0, 0x02000490) && kb.FunctionStarting(0, 0x02000490)->Name.isEmpty()
+          && kb.FunctionStarting(0, 0x02000490)->AuthorKind != "system");
+    CHECK(kb.FunctionStarting(0, 0x02000400) && kb.FunctionStarting(0, 0x02000700) && kb.FunctionStarting(0, 0x02100040, 1));
+    CHECK(kb.Undo(err));
+    CHECK(kb.FunctionStarting(0, 0x02000480) && kb.FunctionStarting(0, 0x02100080, 1));
+
+    // a re-import from the same tool: what its earlier import made and it no longer lists goes, in its
+    // covered range only; a person's function and label stay, and so do references outside the range
+    qint64 tool = kb.AgentAuthor("dsd");
+    qint64 gone = 0, staying = 0, gl = 0, sl = 0;
+    {
+        WBKB::KnowledgeStore::AuthorScope as(kb, tool, QString());
+        WBKB::KnowledgeStore::Batch batch(kb);
+        CHECK(kb.UpsertFunction(0, 0x02000500, 0x10, "arm", "Old_Split", -1, err, &gone));
+        CHECK(kb.UpsertFunction(0, 0x02000510, 0x10, "arm", "Kept", -1, err, &staying));
+        CHECK(kb.SetLabel(0, 0x02000620, "gOldLabel", -1, err, &gl));
+        CHECK(kb.SetLabel(0, 0x02000630, "gKeptLabel", -1, err, &sl));
+        CHECK(kb.AddXref(0, 0x02000504, 0x02000510, "call", "static", err));
+        CHECK(kb.AddXref(0, 0x02200000, 0x02000510, "call", "static", err));     // from outside the range
+    }
+    CHECK(gone > 0 && staying > 0 && gl > 0 && sl > 0 && kb.FunctionStarting(0, 0x02000500)->Author == "dsd");
+    CHECK(kb.SetLabel(0, 0x02000640, "gPersonLabel", -1, err));                  // the person's
+    {
+        WBKB::KnowledgeStore::AuthorScope as(kb, tool, QString());
+        WBKB::KnowledgeStore::Batch batch(kb);
+        std::set<qint64> keepF {staying}, keepL {sl};
+        CHECK(kb.PruneAutoFunctions(0, -1, 0x02000500, 0x02000700, keepF, err, tool) == 1);
+        CHECK(kb.PruneLabels(0, -1, 0x02000500, 0x02000700, tool, keepL, err) == 1);
+        // this one, and the two from 02000500 added above (to overlay 1 and to IO): all start in the range
+        CHECK(kb.PruneStaticXrefs(0, -1, 0x02000500, 0x02000700, err) == 3);
+    }
+    CHECK(!kb.FunctionStarting(0, 0x02000500) && kb.FunctionStarting(0, 0x02000510));
+    CHECK(!kb.LabelAt(0, 0x02000620) && kb.LabelAt(0, 0x02000630) && kb.LabelAt(0, 0x02000640));
+    CHECK(kb.FunctionStarting(0, 0x02000490) && kb.FunctionStarting(0, 0x02000400));   // not the tool's: untouched
+    std::vector<WBKB::Xref> left = kb.XrefsTo(0, 0x02000510);
+    CHECK(left.size() == 1 && left[0].From == 0x02200000);
+}
+
 // migration 0007: library code has one subsystem tag, in the functions and in the change log
 static void TestKbLibrarySubsystem()
 {
@@ -2370,6 +2536,80 @@ static void TestDebugger()
     CHECK(!wb.Dbg.SetBreakpointCondition(99999, "", err));
 }
 
+// Call edges keep the overlay of each end, so two overlays loaded at one address stay apart. A
+// version 1 session (28-byte edges, no overlays) still loads
+static void TestSessionEdgeOverlays()
+{
+    auto file = [](std::vector<u8>& buf, u32 version, u32 count, const void* data, u64 size)
+    {
+        buf.assign(sizeof(SessionHeader), 0);
+        SessionHeader h {};
+        memcpy(h.magic, "DSWBSESS", 8);
+        h.version = version;
+        h.header_size = sizeof(SessionHeader);
+        h.section_count = 1;
+        memcpy(buf.data(), &h, sizeof(h));
+        SessionSectionHeader sh {};
+        sh.id = (u32)SessionSection::CallEdges;
+        sh.count = count;
+        sh.size = size;
+        buf.insert(buf.end(), (u8*)&sh, (u8*)&sh + sizeof(sh));
+        buf.insert(buf.end(), (const u8*)data, (const u8*)data + size);
+    };
+    CHECK(sizeof(CallEdge) == 32 && SchemaVersion >= 2);
+    CallEdge e[2] {};
+    e[0].call_site = 0x02100010; e[0].callee = 0x02100100; e[0].count = 2;
+    e[0].site_overlay = 3; e[0].callee_overlay = 3;         // overlay 2
+    e[1] = e[0];
+    e[1].count = 5;
+    e[1].site_overlay = 4; e[1].callee_overlay = 4;         // overlay 3, the same addresses
+    std::vector<u8> a;
+    file(a, SchemaVersion, 2, e, sizeof(e));
+    MergedSessions m;
+    CHECK(MergeSession(a.data(), a.size(), m));
+    CHECK(m.Edges[0].size() == 2);
+    auto ov2 = m.Edges[0].find(CallEdgeKey {0x02100010, 0x02100100, 3, 3});
+    auto ov3 = m.Edges[0].find(CallEdgeKey {0x02100010, 0x02100100, 4, 4});
+    CHECK(ov2 != m.Edges[0].end() && ov2->second.count == 2 && ov2->second.site_overlay == 3);
+    CHECK(ov3 != m.Edges[0].end() && ov3->second.count == 5 && ov3->second.callee_overlay == 4);
+    CHECK(m.Edges[0].find(CallEdgeKey {0x02100010, 0x02100100}) == m.Edges[0].end());
+    CHECK(MergeSession(a.data(), a.size(), m));
+    CHECK(m.Edges[0].size() == 2 && ov2->second.count == 4 && ov3->second.count == 10);
+    // whether a call came back adds up across sessions: one that only left, one that returned
+    CHECK(ov2->second.returns == 0);
+    for (u8 r : {(u8)EdgeLeft, (u8)EdgeReturned})
+    {
+        e[0].returns = r;
+        std::vector<u8> one;
+        file(one, SchemaVersion, 1, &e[0], sizeof(CallEdge));
+        CHECK(MergeSession(one.data(), one.size(), m));
+    }
+    CHECK(ov2->second.returns == (EdgeLeft | EdgeReturned) && ov3->second.returns == 0);
+
+    // version 1: two 28-byte records; the second is found at its own stride and has no overlay
+    u8 old[56];
+    CallEdge o {};
+    o.call_site = 0x02000100; o.callee = 0x02000200; o.count = 7; o.last_frame = 0x11223344;
+    memcpy(old, &o, 28);
+    o.cpu = 1; o.call_site = 0x02380100; o.callee = 0x02380200; o.count = 9;
+    memcpy(old + 28, &o, 28);
+    std::vector<u8> b;
+    file(b, 1, 2, old, sizeof(old));
+    MergedSessions m1;
+    CHECK(MergeSession(b.data(), b.size(), m1));
+    auto first = m1.Edges[0].find(CallEdgeKey {0x02000100, 0x02000200});
+    auto second = m1.Edges[1].find(CallEdgeKey {0x02380100, 0x02380200});
+    CHECK(m1.Edges[0].size() == 1 && first != m1.Edges[0].end() && first->second.count == 7 && first->second.last_frame == 0x11223344);
+    CHECK(first != m1.Edges[0].end() && first->second.site_overlay == 0 && first->second.callee_overlay == 0);
+    CHECK(m1.Edges[1].size() == 1 && second != m1.Edges[1].end() && second->second.count == 9);
+    // a section whose size does not hold its records is skipped, not read past its end
+    std::vector<u8> c;
+    file(c, 1, 4, old, sizeof(old));
+    MergedSessions m2;
+    MergeSession(c.data(), c.size(), m2);
+    CHECK(m2.Edges[0].empty() && m2.Edges[1].empty());
+}
+
 // Two saved sessions: counts add, a later write replaces the writer, a session that only reads does not,
 // and code that is also read becomes code-and-data. A page for a region that does not exist is skipped.
 static void TestSessionMerge()
@@ -2771,7 +3011,7 @@ static void TestCompare()
         CHECK(h.contains("typedef s32 Speed;"));
         CHECK(h.contains("extern Car gPlayerCar;"));
         CHECK(h.contains("s32 Car_Helper(Car* c, s32 n);") && h.count("s32 Car_Helper(") == 1);
-        CHECK(h.contains("/* sub_02000600: no signature in the knowledge store */"));
+        CHECK(h.contains("/* func_02000600: no signature in the knowledge store */"));
         CHECK(h.contains("Speed Car_Speed(struct Car* car);"));
         CHECK(h.indexOf("typedef s32 Speed;") < h.indexOf("Speed Car_Speed("));
         // a C file with both functions: each is declared once, among the file's own
@@ -3236,6 +3476,7 @@ int main(int argc, char** argv)
     run("TestAutoFunctions", TestAutoFunctions);
     run("TestSpanDecide", TestSpanDecide);
     run("TestKbUndoReferenced", TestKbUndoReferenced);
+    run("TestKbImport", TestKbImport);
     run("TestKbLibrarySubsystem", TestKbLibrarySubsystem);
     run("TestKbList", TestKbList);
     run("TestArchive", TestArchive);
@@ -3252,6 +3493,7 @@ int main(int argc, char** argv)
     run("TestDataUnitWidths", TestDataUnitWidths);
     run("TestDebugger", TestDebugger);
     run("TestSessionMerge", TestSessionMerge);
+    run("TestSessionEdgeOverlays", TestSessionEdgeOverlays);
     run("TestOriginLabels", TestOriginLabels);
     run("TestCompare", TestCompare);
     run("TestGfx", TestGfx);

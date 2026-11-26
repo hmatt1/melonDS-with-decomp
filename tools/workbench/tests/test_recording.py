@@ -72,7 +72,8 @@ FIELDS = ["self", "version", "arm_func", "arm_func_end", "thumb_func", "thumb_fu
           "narc_title_buf", "narc_title_size", "narc_model_buf", "narc_model_size", "nested_buf", "nested_size",
           "deep_buf", "deep_size", "carc_buf", "carc_size", "sseq_buf", "sseq_size",
           "gfx_nclr_buf", "gfx_nclr_size", "gfx_ncgr_buf", "gfx_ncgr_size", "gfx_nscr_buf", "gfx_nscr_size",
-          "gfx_ncer_buf", "gfx_ncer_size", "gfx_btx_buf", "gfx_btx_size"]
+          "gfx_ncer_buf", "gfx_ncer_size", "gfx_btx_buf", "gfx_btx_size",
+          "blbranch", "blbranch_loop", "blbranch_sub", "blbranch_end"]
 BOX_FIELDS = ["src", "size", "copy_dst", "lut_dst", "tail_target", "tail_target_end", "tail_caller", "tail_caller_end",
               "done", "frames"]
 
@@ -261,6 +262,19 @@ def main():
         calls = c.calls_get(m["tail_target"])
         check(any(m["cond_caller"] <= e.call_site < m["cond_caller_end"] and e.kind == "tail_call" for e in calls.callers),
               "a conditional branch into a known entry is a tail call too")
+        # a bl is a call only if the callee comes back (testfuncs.s, wb_blbranch)
+        leaf = [e for e in c.calls_get(m["thumb_leaf"]).callers if m["thumb_func"] <= e.call_site < m["thumb_func_end"]]
+        check(leaf and leaf[0].returned == "yes", "an ordinary call is marked as returning: %s" % [e.returned for e in leaf])
+        into = [e for e in c.calls_get(m["blbranch_loop"]).callers if m["blbranch"] <= e.call_site < m["blbranch_end"]]
+        jumps = [e for e in into if e.kind == "call"]
+        check(jumps and all(e.returned == "no" for e in jumps) and jumps[0].count > 60,
+              "a bl used as a jump back into its loop is marked as never returning: %s" % [(hex(e.call_site), e.returned, e.count) for e in jumps])
+        check(not [e for e in into if e.kind == "tail_call"],
+              "a b back into code the function already ran is not a tail call, though the target was reached with bl: %s"
+              % [(hex(e.call_site), e.kind) for e in into])
+        sub = [e for e in c.calls_get(m["blbranch_sub"]).callers if m["blbranch"] <= e.call_site < m["blbranch_end"]]
+        check(sub and all(e.returned == "yes" for e in sub),
+              "a real call into the middle of the function is marked as returning: %s" % [(hex(e.call_site), e.returned) for e in sub])
         # a function reached only by a tail call: unknown until the knowledge store defines it
         before = [e for e in c.calls_get(m["kb_target"]).callers if e.kind == "tail_call"]
         kb_agent = Client.connect(info, agent="tail-test")
@@ -714,6 +728,49 @@ def main():
                                        "text": "int FUN_%08x(void) { return DAT_%08x[0]; }" % (m["arm_func"], m["data_table"])}]}, f)
         ir = ag.kb_import_static_analysis(imp)
         check(ir.ok and ir.count == 2, "an agent imports a static analysis export (%d entries)" % ir.count)
+        # functions and references, as dswb.dsd_import writes them; importing the same file again writes nothing
+        imp2 = os.path.join(os.path.dirname(src), "analysis2.json")
+        with open(imp2, "w") as f:
+            json.dump({"tool": "dsd",
+                       "functions": [{"addr": "0x023e0000", "size": 32, "name": "Imp_A", "mode": "arm", "cpu": "arm9", "overlay": -1},
+                                     {"addr": "0x023e0100", "size": 8, "name": "", "mode": "thumb", "cpu": "arm9", "overlay": -1},
+                                     {"addr": "0x023e0202", "size": 8, "name": "Imp_Bad", "mode": "arm"}],
+                       "labels": [{"addr": "0x023e0400", "name": "gImp"}],
+                       "xrefs": [{"from": "0x023e0004", "to": "0x023e0100", "kind": "call", "from_overlay": -1, "to_overlay": -1},
+                                 {"from": "0x023e0008", "to": "0x04000208", "kind": "data_ref"}]}, f)
+        ir = ag.kb_import_static_analysis(imp2)
+        check(ir.ok and ir.count == 5 and ir.failed == 1 and "0x023e0202" in ir.error,
+              "an import reports the entry it could not take (%d imported, %d failed: %s)" % (ir.count, ir.failed, ir.error))
+        fa = c.kb_list("functions", filter="Imp_A").functions
+        check(len(fa) == 1 and fa[0].addr == 0x023e0000 and fa[0].size == 32 and fa[0].mode == "arm", "the imported function has its size and mode")
+        xr = [x for x in c.xrefs_get(0x023e0100).refs if x.source == "static"]
+        check(len(xr) == 1 and xr[0].kind == "call" and xr[0].from_addr == 0x023e0004 and xr[0].function == 0x023e0000
+              and xr[0].function_name == "Imp_A", "xrefs.get lists the imported reference, in its function")
+        last = c.kb_changes_list(limit=1).changes[0].id
+        ir = ag.kb_import_static_analysis(imp2)
+        check(ir.count == 5 and c.kb_changes_list(after_id=last).changes == [], "importing the same file again changes nothing")
+        check(len([x for x in c.xrefs_get(0x04000208).refs if x.source == "static"]) == 1,
+              "a reference to an address outside every module is stored once")
+        # an entry with no name keeps the store's; a covered range removes only automatic functions
+        imp3 = os.path.join(os.path.dirname(src), "analysis3.json")
+        with open(imp3, "w") as f:
+            json.dump({"tool": "dsd", "functions": [{"addr": "0x023e0000", "size": 40, "mode": "arm"}],
+                       "covers": [{"cpu": "arm9", "overlay": -1, "start": "0x023e0000", "end": "0x023e1000"}]}, f)
+        ir = ag.kb_import_static_analysis(imp3)
+        fa = c.kb_list("functions", addr=0x023e0000).functions
+        check(ir.failed == 0 and fa and fa[0].name == "Imp_A" and fa[0].size == 40,
+              "an entry with no name changes the size and keeps the name: %s" % [(x.name, x.size) for x in fa])
+        check(ir.removed == 0 and c.kb_list("functions", addr=0x023e0100).functions,
+              "a covered range keeps an agent's function the file does not list (%d removed)" % ir.removed)
+        fa = c.kb_list("functions", addr=0x023e0000).functions
+        check(fa and fa[0].author == "dsd", "an import with covered ranges writes as its tool: %s" % [x.author for x in fa])
+        # the next import from the tool no longer lists 023e0000: the function its earlier import changed goes
+        imp4 = os.path.join(os.path.dirname(src), "analysis4.json")
+        with open(imp4, "w") as f:
+            json.dump({"tool": "dsd", "functions": [], "covers": [{"cpu": "arm9", "overlay": -1, "start": "0x023e0000", "end": "0x023e1000"}]}, f)
+        ir = ag.kb_import_static_analysis(imp4)
+        check(ir.removed == 1 and not c.kb_list("functions", addr=0x023e0000).functions and c.kb_list("functions", addr=0x023e0100).functions,
+              "a re-import removes what the tool's earlier import made and it no longer lists, and keeps the agent's (%d removed)" % ir.removed)
         check(ag.kb_function_delete(m["thumb_func"]).ok and ag.kb_undo().ok, "an agent deletes a function, and undo restores it")
         try:
             ag.kb_function_delete(0x02000000 + 0x3FFFF0)
@@ -971,6 +1028,16 @@ def main():
             check(head == sessionmod.ZMAGIC, "session file is compressed (%d KB)" % (os.path.getsize(r.session_file) // 1024))
             s = sessionmod.load(r.session_file)
             check(len(list(s.pages())) > 0 and len(s.call_edges()) > 0, "session file has byte records and call edges")
+            # an interrupt or a swi enters the BIOS through a vector that is a branch: that is not a call
+            edges = s.call_edges()
+            bios = lambda e: e.callee >= 0xFFFF0000 if e.cpu == 0 else e.callee < 0x4000
+            wrong = [e for e in edges if bios(e) and e.kind in (0, 3)]
+            check(not wrong, "no interrupt or swi is recorded as a call into the BIOS: %s"
+                  % [(e.cpu, hex(e.call_site), hex(e.callee)) for e in wrong[:4]])
+            irq = [e for e in edges if e.kind == 2]
+            swi = [e for e in edges if e.kind == 1]
+            check(irq and all(e.call_site == 0 for e in irq), "interrupt edges have no call site (%d edges)" % len(irq))
+            check(swi and all(e.call_site != 0 for e in swi), "swi edges keep the swi instruction as their site (%d edges)" % len(swi))
             check(len(s.write_history()) > 0 and len(s.provenance()) > 0, "session file has write history and provenance")
             fr = {(e.cpu, e.pc): e.func for e in s.first_run()}
             check(fr.get((0, m["arm_func"])) == m["arm_func"] and fr.get((0, m["arm_func"] + 4)) == m["arm_func"],
@@ -1116,7 +1183,7 @@ def main():
         check(took < 3.0, "recording.configure removing 2000 sources answers in %.1f s" % took)
 
         print("pointing the window")
-        check_ui(c, check, m["arm_func"], m["data_table"])
+        check_ui(c, check, m["arm_func"], m["data_table"], refs_addr=m["data_table"], func=m["arm_func"])
         c.close()
     finally:
         if not a.keep:

@@ -46,7 +46,9 @@ class EmuInstance;
 class WorkbenchWindow;
 class ApiServer;
 
-struct FuncSnap { qint64 Id; melonDS::u32 Addr, Size; bool Thumb; int Cpu; };
+// Overlay: the overlay id of the function's module, -1 for static code (several overlays can have a
+// function at one address)
+struct FuncSnap { qint64 Id; melonDS::u32 Addr, Size; bool Thumb; int Cpu; int Overlay = -1; };
 
 struct CollectedSession
 {

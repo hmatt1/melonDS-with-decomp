@@ -26,6 +26,8 @@ extern char wb_tail_target_end[], wb_tail_caller_end[];
 extern u32 wb_kb_caller(void);
 extern u32 wb_cond_caller(void);
 extern char wb_kb_target[], wb_kb_target_end[], wb_kb_caller_end[], wb_cond_caller_end[];
+extern u32 wb_blbranch(void);
+extern char wb_blbranch_loop[], wb_blbranch_sub[], wb_blbranch_end[];
 extern u32 wb_data_table[4];
 extern char wb_arm_func_end[], wb_thumb_func_end[], wb_thumb_leaf[], wb_thumb_leaf_end[], wb_data_table_end[];
 
@@ -94,6 +96,7 @@ typedef struct
     u32 gfx_nscr_buf, gfx_nscr_size;        // gfx/t.nscr; its map also in VRAM bank A
     u32 gfx_ncer_buf, gfx_ncer_size;        // gfx/t.ncer
     u32 gfx_btx_buf, gfx_btx_size;          // gfx/t.nsbtx; copied whole into VRAM bank B
+    u32 blbranch, blbranch_loop, blbranch_sub, blbranch_end;   // bl as a jump and as a call (testfuncs.s)
 } Manifest;
 
 // shared with arm7/source/main.c (keep in step)
@@ -403,6 +406,10 @@ int main(void)
     m->kb_caller_end = (u32)wb_kb_caller_end;
     m->cond_caller = (u32)wb_cond_caller;
     m->cond_caller_end = (u32)wb_cond_caller_end;
+    m->blbranch = (u32)wb_blbranch & ~1u;
+    m->blbranch_loop = (u32)wb_blbranch_loop & ~1u;
+    m->blbranch_sub = (u32)wb_blbranch_sub & ~1u;
+    m->blbranch_end = (u32)wb_blbranch_end;
 
     if (!nitroFSInit(NULL)) m->status |= 1;
     m->payload_size = ReadFile("nitro:/payload.bin", payload, sizeof(payload));
@@ -474,6 +481,7 @@ int main(void)
         a += wb_tail_caller();              // then a tail call into it
         a += wb_kb_caller();                // a tail call into a function only the knowledge store knows
         a += wb_cond_caller();              // a conditional tail call
+        a += wb_blbranch();                 // bl as a jump, and as a call into the middle of a function
         dmaCopyWords(3, wb_data_table, wb_dma_dst, sizeof(wb_dma_dst));
         wb_car.frames = frame;
         wb_car.addr_like = ((volatile u32*)unpacked)[5] + frame;

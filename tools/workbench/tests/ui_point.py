@@ -42,7 +42,23 @@ def png_info(b64):
     return raw, w, h
 
 
-def check_ui(c, check, addr, sel_addr, closed_panel=None, out=None):
+def check_followers(c, check, refs_addr, func):
+    """Cross-references and Call graph follow the cursor only while shown. ui.show moves the cursor
+    and then opens the panel, so the panel must catch up when it comes forward, and ui.capture must
+    wait for its query. `refs_addr` has references, `func` has recorded calls."""
+    nothing = 0x023F0000        # nothing refers to or calls this
+    for panel, addr, other in (("xrefs", refs_addr, "callgraph"), ("callgraph", func, "xrefs")):
+        c.ui_show(addr=nothing, sel_addr=nothing, panel=panel)
+        empty = c.ui_capture(panel=panel).png
+        c.ui_show(panel=other)                  # the two share a tab area: this one goes behind
+        time.sleep(0.3)
+        c.ui_show(addr=addr, sel_addr=addr, panel=panel)
+        shown = c.ui_capture(panel=panel).png
+        check(shown != empty, "%s: opened with the cursor moved to %08x while it was hidden, it shows that address, not %08x"
+              % (panel, addr, nothing))
+
+
+def check_ui(c, check, addr, sel_addr, closed_panel=None, out=None, refs_addr=None, func=None):
     """The window must not be open yet. `closed_panel` is a panel the workspace leaves closed."""
     refused = False
     try:
@@ -106,6 +122,9 @@ def check_ui(c, check, addr, sel_addr, closed_panel=None, out=None):
     small = c.ui_capture(max_width=320)
     check(small.width <= 320 and small.width >= 200 and (w <= 320 or small.width == 320) and small.height < h,
           "max_width 320 scales the window from %d x %d to %d x %d" % (w, h, small.width, small.height))
+
+    if refs_addr is not None and func is not None:
+        check_followers(c, check, refs_addr, func)
 
     arm7 = c.ui_show(cpu="arm7")
     check(arm7.cpu == "arm7" and arm7.addr != cursor and not arm7.follow_pc and arm7.panel == "",

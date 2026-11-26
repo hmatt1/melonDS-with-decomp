@@ -25,6 +25,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "python"))
 from dswb import Client
+from dswb import session as sessionmod  # noqa: E402
 from dswb._generated import AddrRange, OriginSourceSpec  # noqa: E402
 
 FAILS = []
@@ -479,6 +480,31 @@ def main():
         regions = sorted({c.metadata_get(r.start, size=4, group="byte").entries[0].region.split("+")[0] for r in cov.ranges})
         check(cov.ranges and all(r.startswith("ov9_") for r in regions),
               "overlay code run after the savestate is recorded under its overlay: %s" % regions)
+
+        print("call edges name their overlay")
+        # overlays 2 and 3 load at one address: an edge there says which overlay ran it
+        c.execution_control("run_frames", count=120)
+        r = c.recording_configure(enabled=False)
+        edges = [e for e in sessionmod.load(r.session_file).call_edges() if e.cpu == 0 and e.kind == 0]
+        inov = [e for e in edges if span_lo <= e.call_site < span_hi]
+        named = [e for e in inov if e.site_overlay]
+        check(inov and len(named) == len(inov), "every call from overlay code names its overlay (%d of %d edges, overlays %s)"
+              % (len(named), len(inov), sorted({e.site_overlay - 1 for e in named})))
+        into = [e for e in edges if span_lo <= e.callee < span_hi]
+        check(into and all(e.callee_overlay for e in into), "every call into overlay code names the callee's overlay (%d of %d edges): %s"
+              % (sum(1 for e in into if e.callee_overlay), len(into),
+                 [(hex(e.call_site), hex(e.callee), e.count, e.first_frame) for e in into if not e.callee_overlay][:4]))
+        check(all(not e.site_overlay and not e.callee_overlay for e in edges if e.call_site < span_lo and e.callee < span_lo),
+              "calls inside the static module name no overlay")
+        if named:
+            e0 = max(named, key=lambda e: e.count)
+            ov = e0.site_overlay - 1
+            cg = c.calls_get(e0.call_site, overlay=ov)
+            check(any(x.call_site == e0.call_site and x.site_overlay == ov for x in cg.callees),
+                  "calls.get lists the call with its overlay (%08x in overlay %d)" % (e0.call_site, ov))
+            other = 2 if ov == 3 else 3
+            cg = c.calls_get(e0.call_site, overlay=other)
+            check(not any(x.site_overlay == ov for x in cg.callees), "calls.get for the other overlay at that address leaves it out")
         c.close()
     finally:
         proc.terminate()

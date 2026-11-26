@@ -97,6 +97,45 @@ wb_cond_caller:
     .global wb_cond_caller_end
 wb_cond_caller_end:
 
+@ ---------------------------------------------------------------- bl that is not a call
+@ Thumb code uses bl as a long jump too (it reaches further than b). The recorder sees a bl set the
+@ return address either way; only whether the callee comes back tells a call from a jump.
+    .align 5
+    .thumb
+    .global wb_blbranch
+    .thumb_func
+    .type wb_blbranch, %function
+wb_blbranch:
+    push    {r4, lr}
+    mov     r4, #0
+    .global wb_blbranch_loop
+    .thumb_func
+wb_blbranch_loop:
+    add     r4, #1
+    cmp     r4, #2
+    bne     3f
+    ldr     r0, =wb_blbranch_after  @ second pass: a computed jump, as a switch's jump table makes,
+    mov     pc, r0                  @ to the instruction after the bl: its return address. That is
+                                    @ not the bl's call coming back
+3:  cmp     r4, #3
+    bge     2f
+    bl      wb_blbranch_loop        @ first pass: a jump written as bl, never returns here
+    .global wb_blbranch_after
+wb_blbranch_after:
+    b       wb_blbranch_loop        @ a branch back into this function: not a tail call
+2:  bl      wb_blbranch_sub         @ a real call into the middle of this function: it returns
+    pop     {r4, pc}
+    .global wb_blbranch_sub
+    .thumb_func
+wb_blbranch_sub:
+    add     r0, r4, #1
+    bx      lr
+    .align 2
+    .pool
+    .global wb_blbranch_end
+wb_blbranch_end:
+    .arm
+
 @ ---------------------------------------------------------------- data
     .section .data.wbtest, "aw", %progbits
     .align 5

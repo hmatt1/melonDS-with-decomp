@@ -299,21 +299,28 @@ bool MergeSession(const u8* data, size_t len, MergedSessions& into)
             }
             break;
         case SessionSection::CallEdges:
-            for (u32 i = 0; i < s.Header.count && (i + 1) * sizeof(CallEdge) <= s.Header.size; i++)
+        {
+            // the record has grown at its end (version 1: 28 bytes, no overlays): the section's own
+            // record size is its size over its count, and fields a file lacks stay 0
+            size_t stride = s.Header.count ? (size_t)(s.Header.size / s.Header.count) : sizeof(CallEdge);
+            size_t take = std::min(stride, sizeof(CallEdge));
+            for (u32 i = 0; stride >= 28 && i < s.Header.count; i++)
             {
-                CallEdge e;
-                memcpy(&e, s.Data + i * sizeof(CallEdge), sizeof(e));
+                CallEdge e {};
+                memcpy(&e, s.Data + i * stride, take);
                 auto& m = into.Edges[e.cpu & 1];
-                CallEdgeKey k {e.call_site, e.callee};
+                CallEdgeKey k {e.call_site, e.callee, e.site_overlay, e.callee_overlay};
                 auto it = m.find(k);
                 if (it == m.end()) m.emplace(k, e);
                 else
                 {
                     it->second.count += e.count;
+                    it->second.returns |= e.returns;
                     if (!it->second.caller_func) it->second.caller_func = e.caller_func;
                 }
             }
             break;
+        }
         case SessionSection::FirstRun:
             for (u32 i = 0; i < s.Header.count && (i + 1) * sizeof(FirstRunEntry) <= s.Header.size; i++)
             {

@@ -257,8 +257,30 @@ bool KnowledgeStore::CheckExternalChanges()
 
 void KnowledgeStore::Reload()
 {
+    if (BatchDepth > 0) { BatchDirty = true; return; }
     LoadCaches();
     emit changed();
+}
+
+KnowledgeStore::Batch::Batch(KnowledgeStore& k) : K(k)
+{
+    if (K.BatchDepth++ == 0 && K.Db)
+    {
+        QString e;
+        K.Exec("BEGIN", e);
+        K.BatchDirty = false;
+    }
+    K.BeginGroup();
+}
+
+KnowledgeStore::Batch::~Batch()
+{
+    K.EndGroup();
+    if (--K.BatchDepth > 0 || !K.Db) return;
+    QString e;
+    if (!K.Exec("COMMIT", e)) K.Exec("ROLLBACK", e);
+    if (K.BatchDirty) K.Reload();
+    K.BatchDirty = false;
 }
 
 namespace { bool BasicType(const QString& n, u32& size); }
@@ -634,10 +656,23 @@ const Type* KnowledgeStore::TypeByName(const QString& name) const
     return it == TypeMap.end() ? nullptr : &it->second;
 }
 
+QString KnowledgeStore::PlaceholderName(u32 addr, int overlay)
+{
+    if (overlay >= 0) return QString("func_ov%1_%2").arg(overlay, 3, 10, QChar('0')).arg(addr, 8, 16, QChar('0'));
+    return QString("func_%1").arg(addr, 8, 16, QChar('0'));
+}
+
+QString KnowledgeStore::FunctionName(const Function& f) const
+{
+    if (!f.Name.isEmpty()) return f.Name;
+    const Module* m = ModuleById(f.ModuleId);
+    return PlaceholderName(f.Addr, (m && m->Kind == "overlay") ? m->OverlayId : -1);
+}
+
 QString KnowledgeStore::NameAt(int cpu, u32 addr, int overlay, bool withOffset) const
 {
     if (const Function* f = FunctionStarting(cpu, addr & ~1u, overlay))
-        return f->Name.isEmpty() ? QString("func_%1").arg(f->Addr, 8, 16, QChar('0')) : f->Name;
+        return FunctionName(*f);
     if (const Label* l = LabelAt(cpu, addr, overlay)) return l->Name;
     if (const DataObject* d = DataObjectAt(cpu, addr, overlay))
     {
@@ -660,23 +695,29 @@ QString KnowledgeStore::NameAt(int cpu, u32 addr, int overlay, bool withOffset) 
     if (withOffset)
         if (const Function* f = FunctionAt(cpu, addr, overlay))
         {
-            QString n = f->Name.isEmpty() ? QString("func_%1").arg(f->Addr, 8, 16, QChar('0')) : f->Name;
-            return n + QString("+0x%1").arg(addr - f->Addr, 0, 16);
+            return FunctionName(*f) + QString("+0x%1").arg(addr - f->Addr, 0, 16);
         }
     return QString();
 }
 
-bool KnowledgeStore::LookupName(const QString& name, u32& addr, int& cpu) const
+bool KnowledgeStore::LookupName(const QString& name, u32& addr, int& cpu, int* overlay) const
 {
+    if (overlay) *overlay = -1;
     for (const Function& f : FunctionList)
         if (f.Name == name) { addr = f.Addr; const Module* m = ModuleById(f.ModuleId); cpu = m ? m->CpuNum() : 0; return true; }
     for (const Label& l : LabelList)
         if (l.Name == name) { addr = l.Addr; const Module* m = ModuleById(l.ModuleId); cpu = m ? m->CpuNum() : 0; return true; }
     for (const DataObject& d : DataList)
         if (d.Name == name) { addr = d.Addr; const Module* m = ModuleById(d.ModuleId); cpu = m ? m->CpuNum() : 0; return true; }
-    static const QRegularExpression rx("^(?:func|sub|FUN|data|DAT|lbl)_([0-9A-Fa-f]{7,8})$");
+    static const QRegularExpression rx("^(?:func|sub|FUN|data|DAT|lbl)_(?:ov(\\d{1,3})_)?([0-9A-Fa-f]{7,8})$");
     auto mt = rx.match(name);
-    if (mt.hasMatch()) { addr = mt.captured(1).toUInt(nullptr, 16); cpu = 0; return true; }
+    if (mt.hasMatch())
+    {
+        addr = mt.captured(2).toUInt(nullptr, 16);
+        cpu = 0;
+        if (overlay && !mt.captured(1).isEmpty()) *overlay = mt.captured(1).toInt();
+        return true;
+    }
     return false;
 }
 
@@ -746,6 +787,7 @@ std::vector<Xref> KnowledgeStore::XrefsTo(int cpu, u32 addr, int overlay)
         Xref x;
         const Module* m = ModuleById((int)s.Int(0));
         x.From = (m ? m->Load : 0) + (u32)s.Int(1);
+        x.FromOverlay = (m && m->Kind == "overlay") ? m->OverlayId : -1;
         x.To = addr;
         x.Kind = s.Str(2);
         x.Source = s.Str(3);
@@ -766,15 +808,16 @@ QString KnowledgeStore::DecompilerText(qint64 functionId, QString* tool)
 
 QString KnowledgeStore::NameDecompiled(const QString& text, int cpu, const std::function<int(u32)>& overlayAt) const
 {
-    static const QRegularExpression rx("\\b(?:FUN|sub|func|DAT|data|LAB|PTR_DAT|PTR_FUN)_([0-9a-fA-F]{7,8})\\b|\\b0x(0[12][0-9a-fA-F]{6})\\b");
+    // func_ov003_020ffe00 names its overlay; other names take the one overlayAt gives
+    static const QRegularExpression rx("\\b(?:FUN|sub|func|DAT|data|LAB|PTR_DAT|PTR_FUN)_(?:ov(\\d{1,3})_)?([0-9a-fA-F]{7,8})\\b|\\b0x(0[12][0-9a-fA-F]{6})\\b");
     QString out;
     int last = 0;
     auto it = rx.globalMatch(text);
     while (it.hasNext())
     {
         auto m = it.next();
-        u32 a = (m.captured(1).isEmpty() ? m.captured(2) : m.captured(1)).toUInt(nullptr, 16);
-        QString n = NameAt(cpu, a, overlayAt(a), true);
+        u32 a = (m.captured(2).isEmpty() ? m.captured(3) : m.captured(2)).toUInt(nullptr, 16);
+        QString n = NameAt(cpu, a, m.captured(1).isEmpty() ? overlayAt(a) : m.captured(1).toInt(), true);
         out += text.mid(last, m.capturedStart() - last);
         out += n.isEmpty() ? m.captured(0) : n;
         last = m.capturedEnd();
@@ -1094,8 +1137,10 @@ int KnowledgeStore::ReviseAutoSizes(const std::vector<std::pair<qint64, u32>>& s
     return n;
 }
 
-bool KnowledgeStore::UpsertFunction(int cpu, u32 addr, u32 size, const QString& mode, const QString& name, int overlay, QString& error, qint64* idOut)
+bool KnowledgeStore::UpsertFunction(int cpu, u32 addr, u32 size, const QString& mode, const QString& nameIn, int overlay, QString& error, qint64* idOut,
+                                    bool keepName)
 {
+    QString name = keepName ? QString() : nameIn;
     if (!Db) { error = "no knowledge store open"; return false; }
     int mid; u32 off;
     if (!ModuleOffset(cpu, addr & ~1u, overlay, mid, off)) { error = "address is outside every module"; return false; }
@@ -1104,10 +1149,23 @@ bool KnowledgeStore::UpsertFunction(int cpu, u32 addr, u32 size, const QString& 
     if (m == "arm" && (addr & 3)) { error = "ARM functions must be 4-byte aligned"; return false; }
 
     qint64 existing = 0;
+    bool same = false;
     {
-        Stmt s(Db, "SELECT id FROM function WHERE module_id = ? AND offset = ?");
+        Stmt s(Db, "SELECT id, size, mode, ifnull(name, ''), author_id FROM function WHERE module_id = ? AND offset = ?");
         s.Bind(1, (qint64)mid).Bind(2, (qint64)off);
-        if (s.Step()) existing = s.Int(0);
+        if (s.Step())
+        {
+            existing = s.Int(0);
+            // an automatic function's sub_ name is a placeholder, not a name to keep
+            bool automatic = s.Int(4) == SystemAuthor() && s.Str(3).startsWith("sub_", Qt::CaseInsensitive);
+            if (keepName) name = automatic ? QString() : s.Str(3);
+            same = (u32)s.Int(1) == size && s.Str(2) == m && s.Str(3) == name;
+        }
+    }
+    if (same)
+    {
+        if (idOut) *idOut = existing;
+        return true;
     }
     if (existing)
     {
@@ -1189,7 +1247,8 @@ bool KnowledgeStore::DeleteFunction(qint64 id, QString& error)
     // cleared. All of it is one change, so undo brings everything back
     BeginGroup();
     QString e;
-    Exec("BEGIN", e);
+    // a savepoint, not BEGIN: it nests inside a batch's transaction
+    Exec("SAVEPOINT delete_function", e);
     bool ok = DetachRows("runtime_evidence", "function_id", id, true, error) &&
               DetachRows("build_result", "function_id", id, true, error) &&
               DetachRows("decompiler_output", "function_id", id, true, error) &&
@@ -1198,10 +1257,70 @@ bool KnowledgeStore::DeleteFunction(qint64 id, QString& error)
               DetachRows("asset_link", "loader_function_id", id, false, error) &&
               DeleteRow("function", id, error);
     if (ok) LogChange("function", id, "delete", before, {});
-    Exec(ok ? "COMMIT" : "ROLLBACK", e);
+    if (!ok) Exec("ROLLBACK TO delete_function", e);
+    Exec("RELEASE delete_function", e);
     EndGroup();
     Reload();
     return ok;
+}
+
+// the modules a covered range is in: one overlay, or everything that is not an overlay (overlay -1:
+// the static module, autoloads, and RAM no module of the ROM covers). Its one parameter is the overlay id
+static const char* CoveredModules(int overlay)
+{
+    return overlay >= 0 ? "m.kind = 'overlay' AND m.overlay_id = ?" : "m.kind IN ('static', 'autoload', 'region') AND ? < 0";
+}
+
+int KnowledgeStore::PruneAutoFunctions(int cpu, int overlay, u32 start, u32 end, const std::set<qint64>& keep, QString& error, qint64 importAuthor)
+{
+    if (!Db) { error = "no knowledge store open"; return -1; }
+    qint64 sys = SystemAuthor();
+    if (sys <= 0) { error = "cannot find the system author"; return -1; }
+    std::vector<qint64> doomed;
+    {
+        QByteArray q = QString("SELECT f.id FROM function f JOIN module m ON m.id = f.module_id WHERE f.author_id IN (?, ?) AND m.cpu = ? "
+                               "AND %1 AND m.load_address + f.offset >= ? AND m.load_address + f.offset < ?").arg(CoveredModules(overlay)).toUtf8();
+        Stmt s(Db, q.constData());
+        s.Bind(1, sys).Bind(2, importAuthor).Bind(3, QString(cpu ? "arm7" : "arm9")).Bind(4, (qint64)overlay).Bind(5, (qint64)start).Bind(6, (qint64)end);
+        while (s.Step())
+            if (!keep.count(s.Int(0))) doomed.push_back(s.Int(0));
+    }
+    int n = 0;
+    for (qint64 id : doomed)
+    {
+        if (!DeleteFunction(id, error)) return -1;
+        n++;
+    }
+    return n;
+}
+
+int KnowledgeStore::PruneLabels(int cpu, int overlay, u32 start, u32 end, qint64 author, const std::set<qint64>& keep, QString& error)
+{
+    if (!Db) { error = "no knowledge store open"; return -1; }
+    std::vector<qint64> doomed;
+    {
+        QByteArray q = QString("SELECT l.id FROM label l JOIN module m ON m.id = l.module_id WHERE l.author_id = ? AND m.cpu = ? "
+                               "AND %1 AND m.load_address + l.offset >= ? AND m.load_address + l.offset < ?").arg(CoveredModules(overlay)).toUtf8();
+        Stmt s(Db, q.constData());
+        s.Bind(1, author).Bind(2, QString(cpu ? "arm7" : "arm9")).Bind(3, (qint64)overlay).Bind(4, (qint64)start).Bind(5, (qint64)end);
+        while (s.Step())
+            if (!keep.count(s.Int(0))) doomed.push_back(s.Int(0));
+    }
+    for (qint64 id : doomed)
+        if (!DeleteLabel(id, error)) return -1;
+    return (int)doomed.size();
+}
+
+int KnowledgeStore::PruneStaticXrefs(int cpu, int overlay, u32 start, u32 end, QString& error)
+{
+    if (!Db) { error = "no knowledge store open"; return -1; }
+    QByteArray q = QString("DELETE FROM xref WHERE source = 'static' AND id IN (SELECT x.id FROM xref x JOIN module m ON m.id = x.from_module "
+                           "WHERE m.cpu = ? AND %1 AND m.load_address + x.from_offset >= ? AND m.load_address + x.from_offset < ?)")
+                       .arg(CoveredModules(overlay)).toUtf8();
+    Stmt s(Db, q.constData());
+    s.Bind(1, QString(cpu ? "arm7" : "arm9")).Bind(2, (qint64)overlay).Bind(3, (qint64)start).Bind(4, (qint64)end);
+    if (!s.Run()) { error = s.Err(); return -1; }
+    return sqlite3_changes(Db);
 }
 
 bool KnowledgeStore::Rename(int cpu, u32 addr, const QString& name, int overlay, QString& error)
@@ -1229,16 +1348,23 @@ bool KnowledgeStore::Rename(int cpu, u32 addr, const QString& name, int overlay,
     return SetLabel(cpu, addr, name, overlay, error);
 }
 
-bool KnowledgeStore::SetLabel(int cpu, u32 addr, const QString& name, int overlay, QString& error)
+bool KnowledgeStore::SetLabel(int cpu, u32 addr, const QString& name, int overlay, QString& error, qint64* idOut)
 {
+    if (idOut) *idOut = 0;
     if (!Db) { error = "no knowledge store open"; return false; }
     int mid; u32 off;
     if (!ModuleOffset(cpu, addr, overlay, mid, off)) { error = "address is outside every module"; return false; }
     qint64 existing = 0;
+    QString current;
     {
-        Stmt s(Db, "SELECT id FROM label WHERE module_id = ? AND offset = ?");
+        Stmt s(Db, "SELECT id, name FROM label WHERE module_id = ? AND offset = ?");
         s.Bind(1, (qint64)mid).Bind(2, (qint64)off);
-        if (s.Step()) existing = s.Int(0);
+        if (s.Step()) { existing = s.Int(0); current = s.Str(1); }
+    }
+    if (existing && !name.isEmpty() && current == name)
+    {
+        if (idOut) *idOut = existing;
+        return true;
     }
     if (name.isEmpty())
     {
@@ -1252,6 +1378,7 @@ bool KnowledgeStore::SetLabel(int cpu, u32 addr, const QString& name, int overla
         s.Bind(1, name).Bind(2, ActiveAuthor).Bind(3, existing);
         if (!s.Run()) { error = s.Err(); return false; }
         LogChange("label", existing, "update", before, RowJson("label", existing));
+        if (idOut) *idOut = existing;
     }
     else
     {
@@ -1260,6 +1387,7 @@ bool KnowledgeStore::SetLabel(int cpu, u32 addr, const QString& name, int overla
         if (!s.Run()) { error = s.Err(); return false; }
         qint64 id = LastInsertId();
         LogChange("label", id, "insert", {}, RowJson("label", id));
+        if (idOut) *idOut = id;
     }
     Reload();
     return true;
@@ -1552,13 +1680,23 @@ bool KnowledgeStore::RecordBuildResult(const BuildResult& r, QString& error)
     return true;
 }
 
-bool KnowledgeStore::AddXref(int cpu, u32 from, u32 to, const QString& kind, const QString& source, QString& error)
+bool KnowledgeStore::AddXref(int cpu, u32 from, u32 to, const QString& kind, const QString& source, QString& error, int fromOverlay, int toOverlay)
 {
     if (!Db) { error = "no knowledge store open"; return false; }
     int fm = -1, tm = -1;
     u32 fo = from, to2 = to;
-    bool hasFrom = ModuleOffset(cpu, from, -1, fm, fo);
-    bool hasTo = ModuleOffset(cpu, to, -1, tm, to2);
+    bool hasFrom = ModuleOffset(cpu, from, fromOverlay, fm, fo);
+    bool hasTo = ModuleOffset(cpu, to, toOverlay, tm, to2);
+    if (!hasFrom || !hasTo)
+    {
+        // UNIQUE does not cover a NULL module, so look for the row first
+        Stmt q(Db, "SELECT 1 FROM xref WHERE from_module IS ? AND from_offset = ? AND to_module IS ? AND to_offset = ? AND kind = ? AND source = ?");
+        if (hasFrom) q.Bind(1, (qint64)fm); else q.BindNull(1);
+        q.Bind(2, (qint64)(hasFrom ? fo : from));
+        if (hasTo) q.Bind(3, (qint64)tm); else q.BindNull(3);
+        q.Bind(4, (qint64)(hasTo ? to2 : to)).Bind(5, kind).Bind(6, source);
+        if (q.Step()) return true;
+    }
     Stmt s(Db, "INSERT OR IGNORE INTO xref(from_module, from_offset, to_module, to_offset, kind, source) VALUES (?, ?, ?, ?, ?, ?)");
     if (hasFrom) s.Bind(1, (qint64)fm); else s.BindNull(1);
     s.Bind(2, (qint64)(hasFrom ? fo : from));

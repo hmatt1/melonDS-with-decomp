@@ -216,3 +216,106 @@ out on purpose: a connected client must not be able to raise its own access.
   *Done when:* a NARC-heavy game's containers list with names, card reads of a `.narc` and the
   unpacked files of a `.carc` are labelled as the files inside, and `container.locate` finds a
   loaded graphics file in RAM.
+
+## dsd import and vtables
+
+From `docs/2026-11-20_workbench_vtable_recommendation.md` in the TrackMania DS decomp repository.
+
+- [x] **18. The knowledge store knows almost none of what the decomp project knows.** It had 2
+  named functions; `dsd-config` has 1,756, with every function's size and mode and 41,065
+  references. The importer also reloaded the whole store after every row, rewrote every row on
+  a second import, and put every reference into the first overlay at its address.
+  *Done when:* after an import every function in `symbols.txt` is in the store with dsd's name,
+  mode and size; a second import changes nothing; a reference from overlay 3 lands on `ov9_0003`.
+  *Result:* `python -m dswb.dsd_import` (README, "dsd configuration and vtables"). The import is
+  one transaction and one reload, leaves an unchanged entry alone, takes `from_overlay` and
+  `to_overlay` on references, and reports entries it could not import. On TrackMania DS: 7,393
+  functions, 183 labels and 41,065 references in 0.9 s; the second import took 0.3 s and added
+  no change-log rows. dsd owns names, sizes and modes, so an import overwrites a name given by
+  hand.
+- [x] **19. Interrupts and BIOS calls were recorded as ordinary calls.** Since 2026-10-13 the
+  veneer rule followed an immediate branch, and the BIOS exception vectors are branches, so each
+  interrupt added a call edge from the interrupted instruction to the BIOS handler.
+  *Done when:* a session has no call-kind edge into the BIOS.
+  *Result:* the forwarded edge keeps the frame's kind, and an interrupt's edge has no call site.
+  `test_recording.py` checks the test ROM's interrupts and `swi` calls. Sessions saved between
+  2026-10-13 and this fix keep the wrong edges.
+- [x] **20. Nothing finds the game's C++ classes.** Vtables can be found from dsd's references,
+  and saved sessions say which were used.
+  *Done when:* a tool lists every table with its slots, constructors, call sites and storing code.
+  *Result:* `python -m dswb.vtables`. On TrackMania DS's 19 sessions, main module: 390 candidate
+  tables, 315 indirect call sites, 267 with a target in a table. Decoding the slot from the
+  instructions before the call ties 257 of them, reader addresses tie 203, and 265 are tied one
+  way or the other. 39 tables were stored into objects by 71 code addresses. Recording the slot
+  address in the recorder (the recommendation's item 4) is therefore not built.
+- [x] **21. Call edges did not say which overlay they ran in.** Overlays 2 and 3 of TrackMania DS
+  load at one address, so their edges shared keys.
+  *Done when:* two overlays at one address keep their edges apart, and every edge in the shared
+  range names an overlay.
+  *Result:* `CallEdge` has the overlay of the call site and of the callee (session schema 2;
+  schema 1 files still load, with none). `calls.get` takes `overlay` and returns both on each
+  edge; the Call graph and Cross-references panels use them. On TrackMania DS every edge from
+  and into overlay code names its overlay (`agent_scenario.py`). The first call into an overlay
+  after a savestate was recorded before the overlay was recognised; the recorder now settles
+  the callee's overlay first. Sessions saved before this carry no overlay on their edges.
+- [x] **22. Runtime evidence is filed per function without its overlay.** `CollectSession` picked
+  the function by address, so evidence for code two overlays share could land on the other
+  overlay's function, and an overlay function's execution counts came from whichever overlay was
+  loaded when the session was saved.
+  *Done when:* evidence for a function in overlay 3 is stored on the overlay 3 function.
+  *Result:* the function snapshot knows each function's overlay; counts come from that overlay's
+  own records; calls are filed by the overlay their edge names, and data accesses by the overlay
+  loaded at the reader or writer. A TrackMania race session (overlays 2 and 3 both ran): at
+  `021159f8`, where both have a function, overlay 2's has 11 entries and 4,209 instructions and
+  overlay 3's 9 and 462; all 2,248 call entries are on the overlay that ran them.
+- [x] **23. Cross-references and Call graph could stay empty after `ui.show`.** Both follow the
+  cursor only while shown, and `ui.show` moves the cursor before opening the panel. `ui.capture`
+  did not wait for their queries, which take seconds on a long TrackMania session. And on the
+  window's first show, the restored layout brought Getting started forward over the panel asked for.
+  *Done when:* `ui.show` with an address and one of these panels, then `ui.capture` at once,
+  shows that address's rows.
+  *Result:* both panels catch up when they come forward and are busy while their queries run;
+  `ui.show` brings its panel forward again after the first layout; a capture brings its panel's
+  tab forward again if something buried it. `ui_point.check_followers` (run by
+  `test_recording.py`) fails on the old code; checked on TrackMania by hand.
+- [x] **24. A dsd import left wrong functions and lost names.** Functions the workbench had
+  detected on its own stayed on top of dsd's (31 in TrackMania DS, most starting 2 or 4 bytes
+  after the real entry); a dsd placeholder name cleared a name given in the workbench; and
+  unnamed functions in overlays 2 and 3 had the same name, `func_020ffe00`.
+  *Done when:* after an import no detected function overlaps a dsd one, a name only the
+  workbench has survives, and an unnamed overlay function is named with its overlay.
+  *Result:* the import file's `covers` ranges make its list the whole truth there (detected
+  functions it lacks are deleted, a person's or agent's are kept); an entry with no `name` keeps
+  the store's name; `dsd_import --apply` reviews the store first; unnamed functions are
+  `func_ov003_020ffe00` everywhere a name is shown, and that name is understood when typed or in
+  decompiler text. On a copy of the TrackMania DS store: 31 removed, the review listed both of
+  `matcher-agent-1`'s names dsd replaces and its one conflicting function, the 140 ARM7 functions
+  were untouched, and a second import changed nothing.
+- [x] **25. Names given in the workbench do not reach dsd.** `dsd_import --apply` listed them, but
+  adding them to `symbols.txt` was by hand.
+  *Done when:* a command writes them into `symbols.txt` as a change to review in git.
+  *Result:* `python -m dswb.dsd_sync` (README, "dsd configuration and vtables"): writes them over
+  dsd's default names, records them in `workbench_names.tsv` so a dsd-config made from scratch gets
+  them back, checks the build (and puts everything back when it fails), then imports. It runs when
+  a person asks, not on every rename. TrackMania DS, on a copy of the project: three names written,
+  the ROM still matches, two refused, a second run writes nothing.
+- [x] **26. A re-import left behind what dsd no longer lists.** A function moved, merged or deleted
+  in `symbols.txt`, and its labels and references, stayed in the store.
+  *Done when:* after such a change a re-import leaves the store as dsd has it.
+  *Result:* an import with covered ranges writes as its tool (`dsd`) and deletes, in its ranges,
+  the functions and labels its earlier import made that it no longer lists, and the imported
+  references; a person's or agent's rows are kept. On TrackMania DS, merging `luaV_execute`'s
+  four pieces in a copy of `symbols.txt`: the re-import removed the three, and a repeat changed
+  nothing.
+- [x] **27. Disagreements with dsd were hidden.** The import deleted the workbench's conflicting
+  functions with only a count, and the recorder could not tell a call from a `bl` used as a
+  jump, so calls into the middle of a function were noise.
+  *Done when:* the recordings' evidence against dsd's function list is reported, with jumps told
+  from calls.
+  *Result:* each call edge records whether the call came back (only a return instruction counts:
+  a jump table landing after a `bl` does not); a branch back into code the function already ran,
+  or to an entry only ever reached by `bl` jumps, is not a tail call; `dswb.dsd_check` sorts what
+  the recordings saw; the import's review lists each function it removes. On TrackMania DS the
+  check found that dsd splits `luaV_execute` into four pieces (README, "dsd configuration and
+  vtables"). Checked against the code: `inflate`'s and `func_02049d30`'s `bl` jumps are a loop
+  `continue` and an early `return`.

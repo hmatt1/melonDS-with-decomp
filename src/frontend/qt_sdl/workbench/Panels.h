@@ -288,11 +288,14 @@ public:
     CallGraphPanel(WorkbenchWindow* w);
     bool Need(WBNeed& need, QString& what) const override { need = WBNeed::Recording; what = "new calls (saved sessions still show)"; return true; }
     void OnNavigate(melonDS::u32 addr) override;
-    void Refresh() override {}
+    // catches up with the cursor when the panel comes forward (it ignores moves while hidden)
+    void Refresh() override;
+    void OnKnowledgeChanged() override;
 private:
     void Populate(QTreeWidgetItem* item, melonDS::u32 func, bool callers);
     QTreeWidget* Tree;
     melonDS::u32 Root = 0xFFFFFFFF;
+    int Pending = 0;        // queries in flight; Busy while any is
 };
 
 class XrefsPanel : public WBPanel
@@ -301,12 +304,16 @@ class XrefsPanel : public WBPanel
 public:
     XrefsPanel(WorkbenchWindow* w);
     void OnSelection(melonDS::u32 addr, melonDS::u32 size) override;
-    void Refresh() override {}
+    // catches up with the selection when the panel comes forward (it ignores changes while hidden)
+    void Refresh() override;
+    void OnKnowledgeChanged() override;
     void ShowFor(melonDS::u32 addr);
 private:
     QLabel* Title;
     QTableWidget* Table;
     melonDS::u32 Addr = 0;
+    bool Stale = true;      // the rows are not those of Addr as the store and recording have it now
+    melonDS::u32 Seq = 0;   // the latest query; an older one's answer is dropped
 };
 
 // the coverage map (WBCoverage.cpp)

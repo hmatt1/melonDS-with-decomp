@@ -52,6 +52,20 @@ class Session:
             ph = PageHeader.unpack_from(data, i * stride)
             yield ph.region, ph.page, data[i * stride + PageHeader.SIZE:(i + 1) * stride]
 
+    def readers(self) -> Iterator[Tuple[int, int, memoryview]]:
+        """Yield (region, page, readers): the last two code addresses that read each 32-bit word of the
+        page, as 2048 u32 (word i of the page: readers[2*i] is the newest, readers[2*i + 1] the one
+        before). 0 = none; bit 0 set = an ARM7 reader."""
+        s = self.section(SessionSection.Readers)
+        if not s:
+            return
+        hdr, data = s
+        size = PAGE_SIZE // 4 * 8
+        stride = PageHeader.SIZE + size
+        for i in range(hdr.count):
+            ph = PageHeader.unpack_from(data, i * stride)
+            yield ph.region, ph.page, data[i * stride + PageHeader.SIZE:(i + 1) * stride].cast("I")
+
     def byte_record(self, region: int, offset: int) -> Optional[ByteRecord]:
         for r, p, raw in self.pages():
             if r == region and p == offset >> 12:
@@ -77,7 +91,13 @@ class Session:
         if not s:
             return []
         hdr, data = s
-        return [cls.unpack_from(data, i * cls.SIZE) for i in range(hdr.count)]
+        # a record type grows at its end between schema versions: the section's own record size is
+        # its size over its count, and fields an older file lacks read as 0
+        stride = hdr.size // hdr.count if hdr.count else cls.SIZE
+        if stride == cls.SIZE:
+            return [cls.unpack_from(data, i * cls.SIZE) for i in range(hdr.count)]
+        pad = bytes(max(0, cls.SIZE - stride))
+        return [cls.unpack_from(bytes(data[i * stride:i * stride + min(stride, cls.SIZE)]) + pad) for i in range(hdr.count)]
 
     def write_history(self) -> List[WriteHistoryEntry]:
         return self._records(SessionSection.WriteHistory, WriteHistoryEntry)

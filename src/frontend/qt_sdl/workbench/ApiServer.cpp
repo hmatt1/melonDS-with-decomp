@@ -562,14 +562,16 @@ void ApiServer::Handle(Conn* c, const QJsonValue& id, const QString& method, con
         if (!WBQ::ParseCpu(p.cpu, cpu, err)) return bad(err);
         u32 entry = p.addr & ~1u, size = 0;
         bool known = false;
-        int ov = Host->OverlayLoadedAt(p.addr);
+        int ov = p.overlay >= 0 ? p.overlay : (cpu == 0 ? Host->OverlayLoadedAt(p.addr) : -1);
         if (const WBKB::Function* f = Host->KB().FunctionAt((int)cpu, p.addr & ~1u, ov)) { entry = f->Addr; size = f->Size; known = true; }
         u32 limit = std::max<u32>(p.limit, 1);
-        Host->Query<QJsonObject>([this, cpu, entry, size, limit, known]()
+        // with no overlay known for the address, every edge there is listed
+        int edgeov = ov >= 0 ? ov : WBQ::AnyOverlay;
+        Host->Query<QJsonObject>([this, cpu, entry, size, limit, known, edgeov]()
         {
             WBApi::CallsResult r;
             u32 e = known ? entry : WBQ::InferFunctionEntry(Host->Core(), Host->AllTime(), cpu, entry);
-            WBQ::Calls(Host->Core(), Host->AllTime(), cpu, e, size, limit, r);
+            WBQ::Calls(Host->Core(), Host->AllTime(), cpu, e, size, limit, r, edgeov);
             return r.toJson();
         }, this, [this, sock, id](QJsonObject r) { Reply(sock, id, r); });
         return;
@@ -1105,11 +1107,16 @@ void ApiServer::Handle(Conn* c, const QJsonValue& id, const QString& method, con
             if (!WBApi::KbImportParams::fromJson(params, p, err)) return bad(err);
             WBKB::KnowledgeStore::AuthorScope scope(kb, agent(), agentSession);
             QString e;
-            int n = ImportAnalysisJson(kb, p.path, e);
+            int failed = 0, removed = 0, removedLabels = 0;
+            int n = ImportAnalysisJson(kb, p.path, e, &failed, &removed, &removedLabels);
             if (n < 0) return bad(e);
             WBApi::KbImportResult r;
             r.ok = true;
             r.count = (u32)n;
+            r.failed = (u32)failed;
+            r.removed = (u32)removed;
+            r.removed_labels = (u32)removedLabels;
+            r.error = failed ? e : QString();
             Reply(sock, id, r.toJson());
             return;
         }
@@ -1422,13 +1429,13 @@ void ApiServer::Handle(Conn* c, const QJsonValue& id, const QString& method, con
         int ov = p.overlay >= 0 ? p.overlay : (cpu == 0 ? Host->OverlayLoadedAt(addr) : -1);
         // imported references first, then what the recording saw (the Cross-references panel's rows)
         std::vector<WBQ::XrefRow> rows;
-        for (const WBKB::Xref& x : kb.XrefsTo((int)cpu, addr, ov)) rows.push_back({x.Kind, x.From, x.Source, 0});
+        for (const WBKB::Xref& x : kb.XrefsTo((int)cpu, addr, ov)) rows.push_back({x.Kind, x.From, x.Source, 0, x.FromOverlay});
         const WBKB::Function* f = kb.FunctionStarting((int)cpu, addr, ov);
         u32 fsize = f ? f->Size : 0;
         u32 limit = std::min<u32>(p.limit, 100000);
-        Host->Query<std::vector<WBQ::XrefRow>>([this, cpu, addr, fsize, rows]() mutable
+        Host->Query<std::vector<WBQ::XrefRow>>([this, cpu, addr, fsize, rows, ov]() mutable
         {
-            WBQ::RuntimeXrefs(Host->Core(), Host->AllTime(), cpu, addr, fsize, rows);
+            WBQ::RuntimeXrefs(Host->Core(), Host->AllTime(), cpu, addr, fsize, rows, ov >= 0 ? ov : WBQ::AnyOverlay);
             return rows;
         }, this, [this, sock, id, cpu, addr, ov, limit](std::vector<WBQ::XrefRow> rows)
         {
@@ -1444,7 +1451,7 @@ void ApiServer::Handle(Conn* c, const QJsonValue& id, const QString& method, con
                 i.from_addr = x.From;
                 i.source = x.Source;
                 i.count = x.Count;
-                int fov = cpu == 0 ? Host->OverlayLoadedAt(x.From) : -1;
+                int fov = x.FromOverlay != -2 ? x.FromOverlay : (cpu == 0 ? Host->OverlayLoadedAt(x.From) : -1);
                 if (const WBKB::Function* fn = kb.FunctionAt((int)cpu, x.From, fov))
                 {
                     i.function = fn->Addr;

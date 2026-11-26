@@ -255,7 +255,7 @@ bool KbList(const KnowledgeStore& kb, const WBApi::KbListParams& p, WBApi::KbLis
     {
         Page(kb.Functions(), [&](const Function& x)
         {
-            QString name = x.Name.isEmpty() ? "func_" + Hex8(x.Addr) : x.Name;
+            QString name = kb.FunctionName(x);
             return f.IdOk(x.Id) && f.CpuOk(ModuleCpu(kb, x.ModuleId)) && f.ModuleOk(x.ModuleId) && f.AuthorOk(x.Author, x.AuthorKind)
                 && f.RangeOk(x.Addr, FunctionEnd(x)) && f.TextOk({name, Hex8(x.Addr)}) && (status.isEmpty() || x.Status == status);
         }, [&](const Function& x) { return KbFunction(kb, x); }, p, out.functions, out);

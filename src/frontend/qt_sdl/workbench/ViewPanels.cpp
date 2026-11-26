@@ -417,7 +417,7 @@ void DisasmPanel::Fetch()
                 lr.Size = 0;
                 if (f)
                 {
-                    QString nm = f->Name.isEmpty() ? QString("sub_%1").arg(f->Addr, 8, 16, QChar('0')) : f->Name;
+                    QString nm = kb.FunctionName(*f);
                     lr.LabelText = QString("%1    %2    size 0x%3").arg(nm, f->Mode).arg(f->Size, 0, 16);
                     if (!f->Signature.isEmpty()) lr.LabelText += "    " + f->Signature;
                     lr.InFunction = true;
@@ -434,7 +434,7 @@ void DisasmPanel::Fetch()
                 {
                     row.InFunction = true;
                     row.Thumb = cf->Thumb();
-                    row.FuncName = cf->Name.isEmpty() ? QString("sub_%1").arg(cf->Addr, 8, 16, QChar('0')) : cf->Name;
+                    row.FuncName = kb.FunctionName(*cf);
                 }
                 Rows.push_back(row);
             }
@@ -450,7 +450,7 @@ void DisasmPanel::Fetch()
                     if (row.Type == DisasmRow::LabelLine && row.Addr == topf->Addr) shown = true;
                 if (!shown)
                 {
-                    QString nm = topf->Name.isEmpty() ? QString("sub_%1").arg(topf->Addr, 8, 16, QChar('0')) : topf->Name;
+                    QString nm = kb.FunctionName(*topf);
                     Sticky = QString("%1    %2    size 0x%3").arg(nm, topf->Mode).arg(topf->Size, 0, 16);
                 }
             }

@@ -1562,13 +1562,16 @@ void WBHost::RefreshFuncSnapshot()
     for (const WBKB::Function& f : Kb.Functions())
     {
         const WBKB::Module* m = Kb.ModuleById(f.ModuleId);
-        funcs.push_back({f.Id, f.Addr, f.Size, f.Thumb(), m ? m->CpuNum() : 0});
+        funcs.push_back({f.Id, f.Addr, f.Size, f.Thumb(), m ? m->CpuNum() : 0, (m && m->Kind == "overlay") ? m->OverlayId : -1});
     }
     std::sort(funcs.begin(), funcs.end(), [](const FuncSnap& a, const FuncSnap& b) { return a.Addr < b.Addr; });
     for (size_t i = 0; i < funcs.size(); i++)
         if (!funcs[i].Size)
         {
-            u32 next = (i + 1 < funcs.size()) ? funcs[i + 1].Addr : funcs[i].Addr + 0x100;
+            // up to the next function of the same code (not one of another overlay at these addresses)
+            u32 next = funcs[i].Addr + 0x100;
+            for (size_t j = i + 1; j < funcs.size(); j++)
+                if (funcs[j].Cpu == funcs[i].Cpu && funcs[j].Overlay == funcs[i].Overlay) { next = funcs[j].Addr; break; }
             funcs[i].Size = std::min<u32>(next - funcs[i].Addr, 0x10000);
         }
     // the recorder recognises tail calls into these
@@ -1611,17 +1614,32 @@ bool WBHost::CollectSession(bool keepRecording, CollectedSession& out)
     out.Path = base + ".dswbs";
     for (int i = 2; QFile::exists(out.Path); i++) out.Path = QString("%1_%2.dswbs").arg(base).arg(i);
 
-    // per-function evidence
-    auto funcIndex = [&](int cpu, u32 pc) -> int
+    // per-function evidence. Code two overlays share has a function of each at one address: an edge
+    // names its overlay (CallEdge site_overlay / callee_overlay, 0 = none recorded); otherwise the
+    // overlay loaded at the address now is the best guess
+    const int Unknown = -2;
+    auto edgeOverlay = [](u16 v) { return v ? (int)((v - 1) & 0x7FFF) : Unknown; };
+    auto funcIndex = [&](int cpu, u32 pc, int overlay) -> int
     {
+        if (overlay == Unknown)
+        {
+            int o = (pc >> 24) == 0x02 ? rec.OverlayAt(pc & 0xFFFFFF) : -1;
+            overlay = o < 0 ? -1 : (o & 0x7FFF);
+        }
+        int loose = -1;
         auto it = std::upper_bound(funcs.begin(), funcs.end(), pc, [](u32 a, const FuncSnap& f) { return a < f.Addr; });
         while (it != funcs.begin())
         {
             --it;
-            if (pc >= it->Addr && pc < it->Addr + it->Size && it->Cpu == cpu) return (int)(it - funcs.begin());
+            if (pc >= it->Addr && pc < it->Addr + it->Size && it->Cpu == cpu)
+            {
+                if (it->Overlay == overlay) return (int)(it - funcs.begin());
+                // a static function (ITCM, or main RAM no overlay owns) when no overlay's function matches
+                if (it->Overlay < 0 && loose < 0) loose = (int)(it - funcs.begin());
+            }
             if (pc - it->Addr > 0x10000) break;
         }
-        return -1;
+        return overlay < 0 ? loose : -1;
     };
 
     struct Acc
@@ -1635,9 +1653,17 @@ bool WBHost::CollectSession(bool keepRecording, CollectedSession& out)
     for (size_t i = 0; i < funcs.size(); i++)
     {
         const FuncSnap& f = funcs[i];
+        u32 mask = WB.GetNDS() ? WB.GetNDS()->MainRAMMask : 0x3FFFFF;
         for (u32 a = f.Addr; a < f.Addr + f.Size; a++)
         {
-            const ByteRecord* r = rec.Get(WB.Translate(f.Cpu, a));
+            PhysAddr pa = WB.Translate(f.Cpu, a);
+            // an overlay function's own records, whichever overlay is loaded there now
+            if (f.Overlay >= 0 && f.Overlay < 256 && (a >> 24) == 0x02)
+            {
+                pa.Region = (u16)((f.Cpu ? (u16)Region::OverlayARM7Base : (u16)Region::OverlayARM9Base) + f.Overlay);
+                pa.Offset = a & mask;
+            }
+            const ByteRecord* r = rec.Get(pa);
             if (!r || !r->exec_count) continue;
             acc[i].Bytes++;
             if (r->flags & ByteFlag::InstrStart) acc[i].Instr += r->exec_count;
@@ -1648,14 +1674,15 @@ bool WBHost::CollectSession(bool keepRecording, CollectedSession& out)
         for (const auto& kv : rec.Edges(c))
         {
             const CallEdge& e = kv.second;
-            int callee = funcIndex(c, e.callee & ~1u);
-            int caller = funcIndex(c, e.call_site);
+            int callee = funcIndex(c, e.callee & ~1u, edgeOverlay(e.callee_overlay));
+            int caller = funcIndex(c, e.call_site, edgeOverlay(e.site_overlay));
             if (callee >= 0 && funcs[callee].Addr == (e.callee & ~1u))
             {
                 QJsonObject o;
                 o["addr"] = (double)(caller >= 0 ? funcs[caller].Addr : e.caller_func);
                 o["call_site"] = (double)e.call_site;
                 o["count"] = (double)e.count;
+                if (e.site_overlay) o["site_overlay"] = (int)e.site_overlay - 1;
                 if (acc[callee].Callers.size() < 256) acc[callee].Callers.append(o);
             }
             if (caller >= 0)
@@ -1664,6 +1691,7 @@ bool WBHost::CollectSession(bool keepRecording, CollectedSession& out)
                 o["addr"] = (double)e.callee;
                 o["call_site"] = (double)e.call_site;
                 o["count"] = (double)e.count;
+                if (e.callee_overlay) o["callee_overlay"] = (int)e.callee_overlay - 1;
                 if (acc[caller].Callees.size() < 256) acc[caller].Callees.append(o);
             }
         }
@@ -1690,7 +1718,7 @@ bool WBHost::CollectSession(bool keepRecording, CollectedSession& out)
                 const ByteRecord& r = p->Rec[i];
                 if (r.write_count && r.last_writer_cpu < 2)
                 {
-                    int fi = funcIndex(r.last_writer_cpu, r.last_writer_pc);
+                    int fi = funcIndex(r.last_writer_cpu, r.last_writer_pc, Unknown);
                     if (fi >= 0)
                     {
                         auto& d = acc[fi].Data;
@@ -1705,7 +1733,7 @@ bool WBHost::CollectSession(bool keepRecording, CollectedSession& out)
                     {
                         u32 rp = p->Readers[i >> 2][k];
                         if (!rp) continue;
-                        int fi = funcIndex(rp & 1, rp & ~1u);
+                        int fi = funcIndex(rp & 1, rp & ~1u, Unknown);
                         if (fi < 0) continue;
                         auto& d = acc[fi].Data;
                         u32 a = vpage + i;

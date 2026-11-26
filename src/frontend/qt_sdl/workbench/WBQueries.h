@@ -66,7 +66,11 @@ bool WritesIn(const melonDS::WB::HistoryView& h, const WBApi::WritesListParams& 
 struct FuncRange { u32 Start, End; int Cpu; };
 bool Coverage(Workbench& wb, const melonDS::WB::MergedSessions* all, const WBApi::CoverageParams& p, const std::vector<FuncRange>& known,
               WBApi::CoverageResult& out, QString& err);
-bool Calls(Workbench& wb, const melonDS::WB::MergedSessions* all, u32 cpu, u32 entry, u32 size, u32 limit, WBApi::CallsResult& out);
+// overlay: only edges of the function in this overlay (edges recorded with no overlay always count);
+// AnyOverlay: every edge at these addresses, whichever overlay ran them
+constexpr int AnyOverlay = -2;
+bool Calls(Workbench& wb, const melonDS::WB::MergedSessions* all, u32 cpu, u32 entry, u32 size, u32 limit, WBApi::CallsResult& out,
+           int overlay = AnyOverlay);
 WBApi::CallStackResult CallStack(Workbench& wb, u32 cpu);
 // entry of the function containing addr according to the recording: the nearest observed callee at or
 // below addr whose code runs without a gap up to addr (addr itself when nothing qualifies)
@@ -116,8 +120,11 @@ bool OverlayImage(const melonDS::WB::NitroROM& rom, const melonDS::WB::OverlayIn
 
 // what the recording saw referring to addr (the Cross-references panel): calls into it as a function
 // entry (fsize: the function's size, 0 if unknown), writes, reads, and executed literal-pool words holding it
-struct XrefRow { QString Kind; u32 From; QString Source; melonDS::u64 Count; };
-void RuntimeXrefs(Workbench& wb, const melonDS::WB::MergedSessions* all, u32 cpu, u32 addr, u32 fsize, std::vector<XrefRow>& rows);
+// FromOverlay: for an imported reference, the overlay From is stored in (-1 = none); -2 = not known,
+// name From by the overlay loaded now
+struct XrefRow { QString Kind; u32 From; QString Source; melonDS::u64 Count; int FromOverlay = -2; };
+void RuntimeXrefs(Workbench& wb, const melonDS::WB::MergedSessions* all, u32 cpu, u32 addr, u32 fsize, std::vector<XrefRow>& rows,
+                  int overlay = -2);
 
 // ---- search (the Search panel): ARM9 view of main RAM, or also shared WRAM, DTCM and ITCM (wide)
 struct SearchHit { u32 Addr; QString Preview; };

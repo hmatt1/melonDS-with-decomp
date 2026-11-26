@@ -756,7 +756,7 @@ void FunctionsPanel::Rebuild()
     for (const WBKB::Function& fn : kb.Functions())
     {
         if (which == FiltOutside) break;
-        QString name = fn.Name.isEmpty() ? QString("sub_%1").arg(fn.Addr, 8, 16, QChar('0')) : fn.Name;
+        QString name = kb.FunctionName(fn);
         bool def = fn.Name.isEmpty() || fn.Name.startsWith("sub_", Qt::CaseInsensitive);
         if (which == FiltUnnamed && !def) continue;
         if (which == FiltMatched && fn.Status != "matched") continue;
@@ -1014,19 +1014,34 @@ void CallGraphPanel::OnNavigate(u32 addr)
     Tree->resizeColumnToContents(0);
 }
 
+void CallGraphPanel::Refresh()
+{
+    if (IsShown()) OnNavigate(W->Cursor());
+}
+
+void CallGraphPanel::OnKnowledgeChanged()
+{
+    Root = 0xFFFFFFFF;      // names or function bounds may have changed: rebuild
+    Refresh();
+}
+
 void CallGraphPanel::Populate(QTreeWidgetItem* item, u32 func, bool callers)
 {
     int cpu = W->Cpu();
-    const WBKB::Function* f = W->KB().FunctionStarting(cpu, func, W->OverlayContext(func));
+    int ov = W->OverlayContext(func);
+    const WBKB::Function* f = W->KB().FunctionStarting(cpu, func, ov);
     u32 size = f ? f->Size : 0;
     QPointer<QTreeWidget> tree(Tree);
-    H->Query<WBApi::CallsResult>([this, cpu, func, size]()
+    Pending++;
+    Busy = true;
+    H->Query<WBApi::CallsResult>([this, cpu, func, size, ov]()
     {
         WBApi::CallsResult r;
-        WBQ::Calls(H->Core(), H->AllTime(), (u32)cpu, func, size, 200, r);
+        WBQ::Calls(H->Core(), H->AllTime(), (u32)cpu, func, size, 200, r, ov >= 0 ? ov : WBQ::AnyOverlay);
         return r;
     }, this, [this, item, callers, cpu, tree](WBApi::CallsResult r)
     {
+        if (--Pending <= 0) { Pending = 0; Busy = false; }
         if (!tree) return;
         // make sure the item still exists
         bool alive = false;
@@ -1038,12 +1053,14 @@ void CallGraphPanel::Populate(QTreeWidgetItem* item, u32 func, bool callers)
         for (const WBApi::CallEdgeInfo& e : list)
         {
             u32 target = callers ? e.caller_func : e.callee;
+            // the overlay the edge recorded for that end, else the one in view
+            int eov = callers ? e.site_overlay : e.callee_overlay;
             if (callers && !target)
             {
-                const WBKB::Function* cf = W->KB().FunctionAt(cpu, e.call_site, W->OverlayContext(e.call_site));
+                const WBKB::Function* cf = W->KB().FunctionAt(cpu, e.call_site, eov >= 0 ? eov : W->OverlayContext(e.call_site));
                 target = cf ? cf->Addr : e.call_site;
             }
-            QString n = W->KB().NameAt(cpu, target, W->OverlayContext(target));
+            QString n = W->KB().NameAt(cpu, target, eov >= 0 ? eov : W->OverlayContext(target));
             QString label = n.isEmpty() ? QString("sub_%1").arg(Hex8(target)) : n;
             if (e.kind == "tail_call") label += "  (tail call)";
             QTreeWidgetItem* c = new QTreeWidgetItem(item, {label, QString::number(e.count), Hex8(e.call_site)});
@@ -1082,22 +1099,40 @@ void XrefsPanel::OnSelection(u32 addr, u32)
     if (IsShown()) ShowFor(addr);
 }
 
+void XrefsPanel::Refresh()
+{
+    // the periodic tick lands here too: query again only for a new address or new knowledge
+    if (IsShown() && (Stale || Addr != W->SelStart())) ShowFor(W->SelStart());
+}
+
+void XrefsPanel::OnKnowledgeChanged()
+{
+    Stale = true;
+    Refresh();
+}
+
 void XrefsPanel::ShowFor(u32 addr)
 {
     Addr = addr;
+    Stale = false;
+    u32 seq = ++Seq;
+    Busy = true;
     int cpu = W->Cpu();
     Title->setText("References to " + W->AddrText(addr));
     std::vector<WBQ::XrefRow> rows;
     for (const WBKB::Xref& x : W->KB().XrefsTo(cpu, addr, W->OverlayContext(addr)))
-        rows.push_back({x.Kind, x.From, x.Source, 0});
+        rows.push_back({x.Kind, x.From, x.Source, 0, x.FromOverlay});
     const WBKB::Function* f = W->KB().FunctionStarting(cpu, addr, W->OverlayContext(addr));
     u32 fsize = f ? f->Size : 0;
-    H->Query<std::vector<WBQ::XrefRow>>([this, addr, cpu, fsize, rows]() mutable
+    int ov = W->OverlayContext(addr);
+    H->Query<std::vector<WBQ::XrefRow>>([this, addr, cpu, fsize, rows, ov]() mutable
     {
-        WBQ::RuntimeXrefs(H->Core(), H->AllTime(), (u32)cpu, addr, fsize, rows);
+        WBQ::RuntimeXrefs(H->Core(), H->AllTime(), (u32)cpu, addr, fsize, rows, ov >= 0 ? ov : WBQ::AnyOverlay);
         return rows;
-    }, this, [this, cpu](std::vector<WBQ::XrefRow> rows)
+    }, this, [this, cpu, seq](std::vector<WBQ::XrefRow> rows)
     {
+        if (seq != Seq) return;     // a newer address is being fetched
+        Busy = false;
         Table->setRowCount(0);
         for (const WBQ::XrefRow& x : rows)
         {
@@ -1107,8 +1142,9 @@ void XrefsPanel::ShowFor(u32 addr)
             QTableWidgetItem* f = Cell(Hex8(x.From));
             f->setData(Qt::UserRole, (uint)x.From);
             Table->setItem(r, 1, f);
-            const WBKB::Function* fn = W->KB().FunctionAt(cpu, x.From, W->OverlayContext(x.From));
-            Table->setItem(r, 2, Cell(fn ? W->KB().NameAt(cpu, fn->Addr, W->OverlayContext(fn->Addr)) : QString()));
+            int fov = x.FromOverlay != -2 ? x.FromOverlay : W->OverlayContext(x.From);
+            const WBKB::Function* fn = W->KB().FunctionAt(cpu, x.From, fov);
+            Table->setItem(r, 2, Cell(fn ? W->KB().NameAt(cpu, fn->Addr, fov) : QString()));
             Table->setItem(r, 3, Cell(x.Source));
             Table->setItem(r, 4, Cell(x.Count ? QString::number(x.Count) : QString()));
         }

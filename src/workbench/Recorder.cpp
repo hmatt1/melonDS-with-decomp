@@ -51,6 +51,7 @@ void Recorder::Reset()
     {
         CallEdges[i].clear();
         KnownEntries[i].clear();
+        LeftOnly[i].clear();
         EntryMode[i].clear();
         Stack[i].clear();
         ExpectedPC[i] = 0xFFFFFFFF;
@@ -550,14 +551,59 @@ void Recorder::PushFrame(u32 cpu, const ShadowFrame& f)
     st.push_back(f);
 }
 
-void Recorder::AddEdge(u32 cpu, u32 callsite, u32 callee, u32 callerfunc, CallKind kind, bool thumb)
+CallEdgeKey Recorder::EdgeKey(u32 callsite, u32 callee) const
+{
+    // the overlay that owns each end now (main RAM only; 0 = none)
+    auto owner = [this](u32 a) -> u16 { return (a >> 24) == 0x02 ? Owner[(a & 0xFFFFFF) >> 2] : 0; };
+    return CallEdgeKey {callsite, callee, owner(callsite), owner(callee)};
+}
+
+void Recorder::MarkReturns(u32 cpu, size_t returned, bool realReturn)
+{
+    auto& st = Stack[cpu];
+    for (size_t j = returned; j < st.size(); j++)
+    {
+        const ShadowFrame& f = st[j];
+        u16 bit = (j == returned && realReturn) ? EdgeReturned : EdgeLeft;
+        if (f.kind != (u8)CallKind::Call || (f.edge_returns & (bit | EdgeNoEdge))) continue;
+        auto it = CallEdges[cpu].find(EdgeKey(f.call_site, f.callee));
+        if (it == CallEdges[cpu].end()) continue;
+        it->second.returns |= (u8)bit;
+        if (it->second.returns & EdgeReturned) LeftOnly[cpu].erase(f.callee & ~1u);
+        else LeftOnly[cpu].insert(f.callee & ~1u);
+    }
+}
+
+// An instruction that returns from a call: bx Rm (bx lr, or pop {r3}; bx r3 when interworking),
+// pop/ldm from sp with pc, ldr pc, [sp], #4, mov pc, lr. Anything else that reaches a frame's return
+// address only lands there: a branch, or a switch dispatching through its jump table (add pc, ...,
+// mov pc, rN, ldr pc, [pc, ...]) to a case that starts right after a bl
+static bool IsReturn(u32 instr, bool thumb)
+{
+    if (thumb)
+    {
+        u16 t = (u16)instr;
+        return (t & 0xFF87) == 0x4700           // bx Rm
+            || (t & 0xFF00) == 0xBD00           // pop {..., pc}
+            || t == 0x46F7;                     // mov pc, lr
+    }
+    return (instr & 0x0FFFFFF0) == 0x012FFF10                                   // bx Rm
+        || ((instr & 0x0E108000) == 0x08108000 && ((instr >> 16) & 0xF) == 13)  // ldm sp, {..., pc}
+        || (instr & 0x0FFFFFFF) == 0x049DF004                                   // ldr pc, [sp], #4
+        || (instr & 0x0FFFFFFF) == 0x01A0F00E;                                  // mov pc, lr
+}
+
+u8 Recorder::AddEdge(u32 cpu, u32 callsite, u32 callee, u32 callerfunc, CallKind kind, bool thumb)
 {
     if (kind == CallKind::Call || kind == CallKind::TailCall)
     {
         KnownEntries[cpu & 1].insert(callee);
         NoteEntry(cpu, callee & ~1u, thumb || (callee & 1));
     }
-    CallEdgeKey k {callsite, callee};
+    // a call into overlay RAM whose owner is not settled yet (after a savestate): settle it now, as
+    // running the callee's first instruction would
+    if (OvlDirty[cpu & 1] && InOverlaySpan(cpu & 1, callee & ~1u)) VerifyOverlay(cpu & 1, callee & ~1u);
+    CallEdgeKey k = EdgeKey(callsite, callee);
     auto it = CallEdges[cpu].find(k);
     u32 frame = WB.Frame();
     if (it == CallEdges[cpu].end())
@@ -572,14 +618,15 @@ void Recorder::AddEdge(u32 cpu, u32 callsite, u32 callee, u32 callerfunc, CallKi
         e.count = 1;
         e.first_frame = frame;
         e.last_frame = frame;
+        e.site_overlay = k.SiteOv;
+        e.callee_overlay = k.CalleeOv;
         CallEdges[cpu].emplace(k, e);
+        return 0;
     }
-    else
-    {
-        it->second.count++;
-        it->second.last_frame = frame;
-        if (!it->second.caller_func) it->second.caller_func = callerfunc;
-    }
+    it->second.count++;
+    it->second.last_frame = frame;
+    if (!it->second.caller_func) it->second.caller_func = callerfunc;
+    return it->second.returns;
 }
 
 void Recorder::OnDiscontinuity(u32 cpu, ARM* arm, u32 pc)
@@ -642,6 +689,7 @@ void Recorder::OnPostExec(u32 cpu, ARM* arm, u32 pc, bool thumb, u32 instr)
     {
         if ((st[i].return_addr & ~1u) == npc)
         {
+            MarkReturns(cpu, (size_t)i, IsReturn(instr, thumb));
             st.resize(i);
             if (WB.Taint.Enabled()) WB.Taint.OnReturn(cpu);
             return;
@@ -664,8 +712,8 @@ void Recorder::OnPostExec(u32 cpu, ARM* arm, u32 pc, bool thumb, u32 instr)
         f.sp = arm->R[13];
         f.kind = (u8)kind;
         f.thumb = nowthumb ? 1 : 0;
+        f.edge_returns = AddEdge(cpu, callsite, npc, callerfunc, kind, nowthumb);
         PushFrame(cpu, f);
-        AddEdge(cpu, callsite, npc, callerfunc, kind, nowthumb);
         return;
     }
 
@@ -682,22 +730,32 @@ void Recorder::OnPostExec(u32 cpu, ARM* arm, u32 pc, bool thumb, u32 instr)
             u32 callerfunc = st.size() >= 2 ? st[st.size()-2].callee : 0;
             f.callee = npc;
             f.thumb = nowthumb ? 1 : 0;
-            AddEdge(cpu, f.call_site, npc, callerfunc, CallKind::Call, nowthumb);
+            // an exception vector is a branch as well, so the edge keeps the frame's kind. An
+            // interrupt's frame holds the interrupted address, which is not a call site
+            CallKind kind = (CallKind)f.kind;
+            if (kind == CallKind::Interrupt) f.edge_returns = AddEdge(cpu, 0, npc, 0, kind, nowthumb);
+            else f.edge_returns = AddEdge(cpu, f.call_site, npc, callerfunc, kind, nowthumb);
             return;
         }
     }
     // a tail call: an immediate B (conditional or not) to a known function entry hands this frame to
     // that function, which returns to our caller. Entries are known from observed calls and from the
-    // knowledge store
+    // knowledge store. A branch back to code between this frame's entry and the branch is inside the
+    // function that is running (a function's code is one piece), so it is not a tail call, even to an
+    // address something once reached with bl
     bool b = thumb ? ((instr & 0xF800) == 0xE000 || ((instr & 0xF000) == 0xD000 && ((instr >> 8) & 0xF) < 0xE))
                    : ((instr & 0x0F000000) == 0x0A000000 && (instr >> 28) != 0xF);
-    if (b && !st.empty() && (st.back().callee & ~1u) != npc && (KnownEntries[cpu].count(npc) || KbEntries[cpu].count(npc)))
+    bool inside = !st.empty() && npc > (st.back().callee & ~1u) && npc <= pc;
+    // an entry learned only from bl used as a jump is not a function entry
+    bool known = (KnownEntries[cpu].count(npc) && !LeftOnly[cpu].count(npc)) || KbEntries[cpu].count(npc);
+    if (b && !inside && !st.empty() && (st.back().callee & ~1u) != npc && known)
     {
         ShadowFrame& f = st.back();
         u32 callerfunc = f.callee;
         f.callee = npc;
         f.thumb = nowthumb ? 1 : 0;
         AddEdge(cpu, pc, npc, callerfunc, CallKind::TailCall, nowthumb);
+        f.edge_returns = EdgeNoEdge;     // the call that made this frame is not the one that returns now
     }
 }
 

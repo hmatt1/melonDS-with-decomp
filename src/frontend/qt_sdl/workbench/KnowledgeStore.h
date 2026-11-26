@@ -19,6 +19,7 @@
 #ifndef WB_KNOWLEDGESTORE_H
 #define WB_KNOWLEDGESTORE_H
 
+#include <set>
 #include <functional>
 #include <map>
 #include <vector>
@@ -153,6 +154,7 @@ struct Xref
 {
     u32 From = 0, To = 0;
     QString Kind, Source;
+    int FromOverlay = -1;       // overlay id of the module From is stored in, -1 = not an overlay
 };
 
 struct EvidenceRow
@@ -213,7 +215,13 @@ public:
     const DataObject* DataObjectAt(int cpu, u32 addr, int overlay = -1) const;  // containing addr
     const Type* TypeByName(const QString& name) const;
     QString NameAt(int cpu, u32 addr, int overlay = -1, bool withOffset = false) const;
-    bool LookupName(const QString& name, u32& addr, int& cpu) const;
+    // a function's name, or the one made from its address when it has none: func_02001234, or
+    // func_ov003_020ffe00 in an overlay (dsd's own placeholder names)
+    QString FunctionName(const Function& f) const;
+    static QString PlaceholderName(u32 addr, int overlay);
+    // names and placeholder names (func_02001234, func_ov003_020ffe00); overlay, when asked for, is
+    // the overlay the name says (-1: none, or not said)
+    bool LookupName(const QString& name, u32& addr, int& cpu, int* overlay = nullptr) const;
     const std::vector<Function>& Functions() const { return FunctionList; }
     const std::vector<Label>& Labels() const { return LabelList; }
     const std::vector<DataObject>& DataObjects() const { return DataList; }
@@ -241,7 +249,32 @@ public:
         Group& operator=(const Group&) = delete;
         KnowledgeStore& K;
     };
-    bool UpsertFunction(int cpu, u32 addr, u32 size, const QString& mode, const QString& name, int overlay, QString& error, qint64* idOut = nullptr);
+    // Many writes as one transaction, one undo group and one cache reload (an import). While one
+    // is open the lookups above see the store as it was before the batch.
+    struct Batch
+    {
+        explicit Batch(KnowledgeStore& k);
+        ~Batch();
+        Batch(const Batch&) = delete;
+        Batch& operator=(const Batch&) = delete;
+        KnowledgeStore& K;
+    };
+    // a function that already has this size, mode and name is left untouched (no change is logged)
+    // keepName: an existing function keeps its name (a new one gets none, and an automatic one loses
+    // its sub_ placeholder), and name is ignored
+    bool UpsertFunction(int cpu, u32 addr, u32 size, const QString& mode, const QString& name, int overlay, QString& error, qint64* idOut = nullptr,
+                        bool keepName = false);
+    // Deletes the automatic functions (system author), and those of importAuthor (an earlier import
+    // by the same tool), that start in [start, end) outside every overlay (overlay -1)
+    // or of one overlay, except those in keep. An import that covers a range calls this: there, its
+    // own list of functions is the whole truth. Logged like any delete. Returns how many were
+    // deleted, or -1 on error
+    int PruneAutoFunctions(int cpu, int overlay, u32 start, u32 end, const std::set<qint64>& keep, QString& error, qint64 importAuthor = 0);
+    // the same for labels: author's labels in the range that are not in keep
+    int PruneLabels(int cpu, int overlay, u32 start, u32 end, qint64 author, const std::set<qint64>& keep, QString& error);
+    // deletes the imported (static) references that start in the range; an import that covers it
+    // then adds its own. Returns how many were deleted, or -1 on error
+    int PruneStaticXrefs(int cpu, int overlay, u32 start, u32 end, QString& error);
     // Automatic functions (sub_XXXXXXXX). Inserted as the system author and not logged, so they
     // are not separate steps on the person's undo stack. Existing functions are left alone.
     struct AutoFunction
@@ -260,7 +293,8 @@ public:
     bool UpdateFunction(qint64 id, const QJsonObject& fields, QString& error);
     bool DeleteFunction(qint64 id, QString& error);
     bool Rename(int cpu, u32 addr, const QString& name, int overlay, QString& error);
-    bool SetLabel(int cpu, u32 addr, const QString& name, int overlay, QString& error);
+    // a label that already has this name is left untouched (no change is logged)
+    bool SetLabel(int cpu, u32 addr, const QString& name, int overlay, QString& error, qint64* idOut = nullptr);
     bool DeleteLabel(qint64 id, QString& error);
     bool DefineData(int cpu, u32 addr, u32 size, const QString& typeName, const QString& name, int overlay, QString& error);
     bool DeleteDataObject(qint64 id, QString& error);
@@ -274,7 +308,8 @@ public:
     bool AddBookmark(int cpu, u32 addr, const QString& name, QString& error, qint64* idOut = nullptr);
     bool DeleteBookmark(qint64 id, QString& error);
     bool RecordBuildResult(const BuildResult& r, QString& error);
-    bool AddXref(int cpu, u32 from, u32 to, const QString& kind, const QString& source, QString& error);
+    // fromOverlay / toOverlay: the overlay each end is in, for addresses several overlays share
+    bool AddXref(int cpu, u32 from, u32 to, const QString& kind, const QString& source, QString& error, int fromOverlay = -1, int toOverlay = -1);
     bool SetDecompiled(qint64 functionId, const QString& tool, const QString& text, QString& error);
     // decode [start, end) as arm, thumb or data; "clear" removes overrides there. Overlapping
     // overrides are trimmed; the whole change undoes as one
@@ -341,6 +376,8 @@ private:
     void EndGroup() { if (GroupDepth > 0) GroupDepth--; }
     int GroupDepth = 0;
     qint64 GroupId = 0;
+    int BatchDepth = 0;
+    bool BatchDirty = false;
     // logs the rows of `table` whose `column` is `id`, then deletes them (or clears the column)
     bool DetachRows(const QString& table, const QString& column, qint64 id, bool remove, QString& error);
     void LoadCaches();

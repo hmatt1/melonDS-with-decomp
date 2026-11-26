@@ -150,7 +150,12 @@ public:
 };
 
 // Imports a generic static-analysis export (functions, labels, xrefs, decompiler text).
-// Returns the number of imported entries, or -1 on error.
-int ImportAnalysisJson(WBKB::KnowledgeStore& kb, const QString& path, QString& error);
+// Returns the number of imported entries, or -1 when the file cannot be read. Entries that could
+// not be imported are counted in failedOut, and error then says how many and gives the first.
+// removedOut / removedLabelsOut: functions and labels deleted from the file's covered ranges
+// ("covers"): automatic functions, and what an earlier import from the same tool made, that the file
+// no longer lists.
+int ImportAnalysisJson(WBKB::KnowledgeStore& kb, const QString& path, QString& error, int* failedOut = nullptr, int* removedOut = nullptr,
+                       int* removedLabelsOut = nullptr);
 
 #endif

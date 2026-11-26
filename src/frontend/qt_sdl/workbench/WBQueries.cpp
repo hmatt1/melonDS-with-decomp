@@ -780,22 +780,28 @@ bool Coverage(Workbench& wb, const MergedSessions* all, const WBApi::CoveragePar
     return true;
 }
 
-static void AddEdges(const std::unordered_map<CallEdgeKey, CallEdge, CallEdgeKeyHash>& edges, u32 entry, u32 size,
-                     std::map<std::pair<u32, u32>, CallEdge>& callers, std::map<std::pair<u32, u32>, CallEdge>& callees)
+typedef std::tuple<u32, u32, u16, u16> EdgeId;      // call site, callee, their overlays
+
+// overlay: the overlay the function is in, AnyOverlay for every edge at these addresses. An edge end
+// with no overlay recorded (0: static code, or an older session) matches any overlay
+static void AddEdges(const std::unordered_map<CallEdgeKey, CallEdge, CallEdgeKeyHash>& edges, u32 entry, u32 size, int overlay,
+                     std::map<EdgeId, CallEdge>& callers, std::map<EdgeId, CallEdge>& callees)
 {
+    auto in = [overlay](u16 ov) { return overlay == AnyOverlay || ov == 0 || (overlay >= 0 && ov == (u16)(overlay + 1)); };
     for (const auto& kv : edges)
     {
         const CallEdge& e = kv.second;
-        if ((e.callee & ~1u) == entry)
+        EdgeId id {e.call_site, e.callee, e.site_overlay, e.callee_overlay};
+        if ((e.callee & ~1u) == entry && in(e.callee_overlay))
         {
-            auto& c = callers[{e.call_site, e.callee}];
-            if (!c.count) c = e; else { c.count += e.count; c.last_frame = std::max(c.last_frame, e.last_frame); }
+            auto& c = callers[id];
+            if (!c.count) c = e; else { c.count += e.count; c.last_frame = std::max(c.last_frame, e.last_frame); c.returns |= e.returns; }
         }
         bool inside = size ? (e.call_site >= entry && e.call_site < entry + size) : (e.caller_func & ~1u) == entry;
-        if (inside)
+        if (inside && in(e.site_overlay))
         {
-            auto& c = callees[{e.call_site, e.callee}];
-            if (!c.count) c = e; else { c.count += e.count; c.last_frame = std::max(c.last_frame, e.last_frame); }
+            auto& c = callees[id];
+            if (!c.count) c = e; else { c.count += e.count; c.last_frame = std::max(c.last_frame, e.last_frame); c.returns |= e.returns; }
         }
     }
 }
@@ -810,14 +816,18 @@ static WBApi::CallEdgeInfo EdgeInfo(const CallEdge& e)
     i.kind = CallKindName(e.kind);
     i.first_frame = e.first_frame;
     i.last_frame = e.last_frame;
+    // ARM9 overlay ids; an ARM7 overlay (bit 15) is reported as none
+    i.site_overlay = (e.site_overlay && !((e.site_overlay - 1) & 0x8000)) ? e.site_overlay - 1 : -1;
+    i.callee_overlay = (e.callee_overlay && !((e.callee_overlay - 1) & 0x8000)) ? e.callee_overlay - 1 : -1;
+    i.returned = (e.returns & EdgeReturned) ? "yes" : (e.returns & EdgeLeft) ? "no" : "";
     return i;
 }
 
-bool Calls(Workbench& wb, const MergedSessions* all, u32 cpu, u32 entry, u32 size, u32 limit, WBApi::CallsResult& out)
+bool Calls(Workbench& wb, const MergedSessions* all, u32 cpu, u32 entry, u32 size, u32 limit, WBApi::CallsResult& out, int overlay)
 {
-    std::map<std::pair<u32, u32>, CallEdge> callers, callees;
-    AddEdges(wb.Rec.Edges(cpu), entry, size, callers, callees);
-    if (all) AddEdges(all->Edges[cpu], entry, size, callers, callees);
+    std::map<EdgeId, CallEdge> callers, callees;
+    AddEdges(wb.Rec.Edges(cpu), entry, size, overlay, callers, callees);
+    if (all) AddEdges(all->Edges[cpu], entry, size, overlay, callers, callees);
     out.function = entry;
     std::vector<CallEdge> a, b;
     for (auto& kv : callers) a.push_back(kv.second);
@@ -1880,11 +1890,11 @@ bool OverlayImage(const NitroROM& rom, const OverlayInfo& ov, std::vector<u8>& o
     return true;
 }
 
-void RuntimeXrefs(Workbench& wb, const MergedSessions* all, u32 cpu, u32 addr, u32 fsize, std::vector<XrefRow>& rows)
+void RuntimeXrefs(Workbench& wb, const MergedSessions* all, u32 cpu, u32 addr, u32 fsize, std::vector<XrefRow>& rows, int overlay)
 {
     WBApi::CallsResult cr;
-    Calls(wb, all, cpu, addr, fsize, 500, cr);
-    for (const auto& e : cr.callers) rows.push_back({"call", e.call_site, "runtime", e.count});
+    Calls(wb, all, cpu, addr, fsize, 500, cr, overlay);
+    for (const auto& e : cr.callers) rows.push_back({"call", e.call_site, "runtime", e.count, e.site_overlay >= 0 ? e.site_overlay : -2});
     // writers: from write history, and the last writer the byte records keep
     std::map<u32, u64> writers;
     wb.Rec.ForEachHistory([&](const WriteHistoryEntry& e)

@@ -145,12 +145,23 @@ struct PageCache
     RecordPage* Page = nullptr;
 };
 
+// SiteOv / CalleeOv: CallEdge::site_overlay / callee_overlay, so two overlays loaded at one address
+// keep their edges apart
 struct CallEdgeKey
 {
     u32 CallSite, Callee;
-    bool operator==(const CallEdgeKey& o) const { return CallSite == o.CallSite && Callee == o.Callee; }
+    u16 SiteOv = 0, CalleeOv = 0;
+    bool operator==(const CallEdgeKey& o) const { return CallSite == o.CallSite && Callee == o.Callee && SiteOv == o.SiteOv && CalleeOv == o.CalleeOv; }
 };
-struct CallEdgeKeyHash { size_t operator()(const CallEdgeKey& k) const { return ((u64)k.CallSite << 32 | k.Callee) * 0x9E3779B97F4A7C15ULL >> 16; } };
+// CallEdge::returns bits, and ShadowFrame::edge_returns's mark for a frame with no edge to update
+enum : u8 { EdgeReturned = 1, EdgeLeft = 2, EdgeNoEdge = 0x80 };
+struct CallEdgeKeyHash
+{
+    size_t operator()(const CallEdgeKey& k) const
+    {
+        return (((u64)k.CallSite << 32 | k.Callee) ^ ((u64)k.SiteOv << 48 | (u64)k.CalleeOv << 16)) * 0x9E3779B97F4A7C15ULL >> 16;
+    }
+};
 
 struct DataSource
 {
@@ -631,7 +642,14 @@ private:
     void Touch(PhysAddr pa, u32 size, int kind);
     void AddProvenance(const ProvenanceEvent& ev);
     void PushFrame(u32 cpu, const ShadowFrame& f);
-    void AddEdge(u32 cpu, u32 callsite, u32 callee, u32 callerfunc, CallKind kind, bool thumb);
+    // adds or counts the edge; returns its returns bits (CallEdge::returns)
+    u8 AddEdge(u32 cpu, u32 callsite, u32 callee, u32 callerfunc, CallKind kind, bool thumb);
+    CallEdgeKey EdgeKey(u32 callsite, u32 callee) const;
+    // Control reached Stack[cpu][returned]'s return address, which ends that frame and the ones above
+    // it. realReturn: the instruction was a return (bx Rm, pop {pc}, ...), so that frame's call came
+    // back; otherwise (a branch, or a switch's jump table, that lands there) it was left, like those
+    // above it
+    void MarkReturns(u32 cpu, size_t returned, bool realReturn);
     void HandleCardWordStored(u32 cpu, u32 dst, u32 dstsize, PhysAddr pa, bool dma, u32 channel);
     void FlushTransfer(OpenTransfer& t);
 
@@ -669,6 +687,7 @@ private:
     u32 ExpectedPC[2] = {0xFFFFFFFF, 0xFFFFFFFF};
     std::unordered_map<u64, u32> FirstFunc;     // (cpu << 32 | pc) -> function entry, see FirstRunIn
     std::unordered_set<u32> KnownEntries[2];    // observed callees: a plain branch to one is a tail call
+    std::unordered_set<u32> LeftOnly[2];        // callees whose calls were only ever left, never returned from: bl used as a jump
     std::unordered_map<u32, u8> EntryMode[2];   // executed entries: addr -> 1 thumb, 0 arm
     u32 EntryGen = 0;
     u32 IdentifiedGen = 0;

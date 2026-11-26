@@ -638,7 +638,7 @@ QString GenerateContext(const WBKB::KnowledgeStore& kb, const std::vector<const 
     out += "\n";
     for (const WBKB::Function* f : funcs)
     {
-        QString name = f->Name.isEmpty() ? QString("sub_%1").arg(f->Addr, 8, 16, QChar('0')) : f->Name;
+        QString name = kb.FunctionName(*f);
         if (f->Signature.trimmed().isEmpty()) out += QString("/* %1: no signature in the knowledge store */\n").arg(name);
         else out += Terminated(f->Signature) + "\n";
     }
